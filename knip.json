@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/webpro-nl/knip/main/packages/knip/schema.json",
+  "project": ["src/**/*.ts", "test/**/*.ts"],
+  "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": ["@commitlint/cli", "dprint"]
+}
