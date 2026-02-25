@@ -1,0 +1,53 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+coverage
+*.lcov
+.nyc_output
+
+# Dependency directories
+node_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional caches
+.npm
+.eslintcache
+
+# Output of 'npm pack'
+*.tgz
+
+# dotenv files
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# VSCode (keep shared config)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Plans
+**/plans/

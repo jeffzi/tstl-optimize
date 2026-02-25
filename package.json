@@ -1,0 +1,52 @@
+{
+  "name": "tstl-optimize",
+  "version": "0.1.0",
+  "description": "TSTL plugin with configurable optimization rules for faster Lua output",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "check": "biome check .",
+    "check:fix": "biome check --fix .",
+    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules'",
+    "check:unused": "knip",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run check && npm run typecheck && npm run check:unused",
+    "prepare": "lefthook install"
+  },
+  "peerDependencies": {
+    "typescript-to-lua": ">=1.22.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.0",
+    "@commitlint/cli": "^20.4.0",
+    "@commitlint/config-conventional": "^20.4.0",
+    "@types/node": "^25.3.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "dprint": "^0.51.0",
+    "knip": "^5.85.0",
+    "lefthook": "^2.1.0",
+    "markdownlint-cli2": "^0.21.0",
+    "typescript": "^5.9.0",
+    "typescript-to-lua": "^1.33.0",
+    "vitest": "^4.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "tstl",
+    "typescript-to-lua",
+    "plugin",
+    "lua",
+    "optimization",
+    "performance"
+  ]
+}
