@@ -30,7 +30,7 @@
     "@commitlint/config-conventional": "^20.4.0",
     "@types/node": "^25.3.0",
     "@vitest/coverage-v8": "^4.0.0",
-    "dprint": "^0.51.0",
+    "dprint": "^0.52.0",
     "knip": "^5.85.0",
     "lefthook": "^2.1.0",
     "markdownlint-cli2": "^0.21.0",
