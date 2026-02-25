@@ -1,0 +1,4 @@
+remotes:
+  - git_url: git@github-personal:jeffzi/lefthook-configs.git
+    configs:
+      - lefthook-tstl.yml
