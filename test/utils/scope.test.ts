@@ -84,7 +84,7 @@ describe("countPropertyAccess", () => {
     const posX2 = makeAccess("positions", "x");
     const idx1 = tstl.createTableIndexExpression(posX1, tstl.createIdentifier("i"));
     const idx2 = tstl.createTableIndexExpression(posX2, tstl.createIdentifier("j"));
-    const add = tstl.createBinaryExpression(idx1, tstl.SyntaxKind.AdditionOperator, idx2);
+    const add = tstl.createBinaryExpression(idx1, idx2, tstl.SyntaxKind.AdditionOperator);
     const statements: tstl.Statement[] = [
       tstl.createAssignmentStatement(tstl.createIdentifier("x"), add),
     ];

@@ -2,15 +2,34 @@
 import * as tstl from "typescript-to-lua";
 import { OptimizePlugin } from "../src/index";
 
-export function compile(source: string, options?: Record<string, unknown>): string {
-  const plugin = new OptimizePlugin(options);
+export interface CompileOptions {
+  pluginOptions?: Record<string, unknown>;
+  luaTarget?: tstl.LuaTarget;
+}
+
+export function compile(
+  source: string,
+  optionsOrPlugin?: Record<string, unknown> | CompileOptions,
+): string {
+  let pluginOptions: Record<string, unknown> | undefined;
+  let luaTarget: tstl.LuaTarget = tstl.LuaTarget.Lua51;
+
+  if (optionsOrPlugin && ("pluginOptions" in optionsOrPlugin || "luaTarget" in optionsOrPlugin)) {
+    const opts = optionsOrPlugin as CompileOptions;
+    pluginOptions = opts.pluginOptions;
+    luaTarget = opts.luaTarget ?? tstl.LuaTarget.Lua51;
+  } else {
+    pluginOptions = optionsOrPlugin as Record<string, unknown> | undefined;
+  }
+
+  const plugin = new OptimizePlugin(pluginOptions);
   const result = tstl.transpileVirtualProject(
     { "main.ts": source },
     {
       noHeader: true,
       luaPlugins: [{ plugin }],
       noImplicitSelf: true,
-      luaTarget: tstl.LuaTarget.Lua51,
+      luaTarget,
       luaLibImport: tstl.LuaLibImportKind.None,
       strict: true,
     },

@@ -1,15 +1,14 @@
 import type ts from "typescript";
-import type * as tstl from "typescript-to-lua";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { isRuleEnabled, type PluginConfig, parseConfig, type RuleFactory } from "./config";
-import { createVisitors as constEnumVisitors } from "./rules/const-enum";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
 
-// Ordered: const-enum → math-intrinsics → loop-rebase → inline → localizer
+// Ordered: math-intrinsics → loop-rebase → inline → localizer
 const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
-  ["const-enum", constEnumVisitors],
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
@@ -25,8 +24,11 @@ class OptimizePlugin implements tstl.Plugin {
     this.config = parseConfig(options);
   }
 
-  beforeTransform(program: ts.Program, _options: tstl.CompilerOptions): void {
+  beforeTransform(program: ts.Program, options: tstl.CompilerOptions): void {
     this.checker = program.getTypeChecker();
+    if (!this.config.target) {
+      this.config.target = options.luaTarget === tstl.LuaTarget.LuaJIT ? "luajit" : "puc";
+    }
     this.buildVisitors();
   }
 

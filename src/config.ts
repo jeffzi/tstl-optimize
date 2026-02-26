@@ -10,15 +10,17 @@ export interface LocalizerConfig {
 }
 
 export interface RulesConfig {
-  "const-enum": boolean;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
   inline: boolean;
   localizer: boolean | LocalizerConfig;
 }
 
+export type InterpreterTarget = "puc" | "luajit";
+
 export interface PluginConfig {
   rules: RulesConfig;
+  target?: InterpreterTarget;
 }
 
 const DEFAULT_LOCALIZER: LocalizerConfig = {
@@ -28,7 +30,6 @@ const DEFAULT_LOCALIZER: LocalizerConfig = {
 };
 
 const DEFAULT_RULES: RulesConfig = {
-  "const-enum": true,
   "math-intrinsics": true,
   "loop-rebase": true,
   inline: true,
@@ -74,5 +75,13 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
     }
   }
 
-  return { rules };
+  const target = isInterpreterTarget(options?.target) ? options.target : undefined;
+
+  return { rules, target };
+}
+
+const INTERPRETER_TARGETS: ReadonlySet<string> = new Set(["puc", "luajit"]);
+
+function isInterpreterTarget(val: unknown): val is InterpreterTarget {
+  return typeof val === "string" && INTERPRETER_TARGETS.has(val);
 }
