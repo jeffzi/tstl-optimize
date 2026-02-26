@@ -1,0 +1,31 @@
+version: "3"
+
+dotenv: ['.env', '{{.ENV}}/.env', '{{.HOME}}/.env']
+
+tasks:
+  build:
+    cmds:
+      - npm run build
+      - npx tstl -p tsconfig.benchmark.json
+      - npx tstl -p tsconfig.benchmark-jit.json
+    sources:
+      - src/**/*.ts
+      - benchmark/**/*.ts
+
+  bench:
+    desc: Run benchmarks against all discovered interpreters
+    deps: [build]
+    cmds:
+      - node scripts/bench.mjs {{.CLI_ARGS}}
+
+  bench:luajit:
+    desc: Run benchmarks with LuaJIT (JIT enabled)
+    deps: [build]
+    cmds:
+      - node scripts/bench.mjs luajit
+
+  bench:luajit-nojit:
+    desc: Run benchmarks with LuaJIT (JIT disabled)
+    deps: [build]
+    cmds:
+      - node scripts/bench.mjs luajit-nojit
