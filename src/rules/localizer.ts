@@ -4,7 +4,7 @@ import * as tstl from "typescript-to-lua";
 import type { LocalizerConfig, RuleFactory } from "../config";
 import { resolveLocalizerConfig } from "../config";
 import { walkStatements } from "../lua-ast/lua-walker";
-import { buildChainExpression, collectChains, luaPropertyChain } from "../lua-ast/scope";
+import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../lua-ast/scope";
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
 function replaceChains(statements: tstl.Statement[], hoisted: Map<string, tstl.Identifier>): void {
@@ -35,26 +35,9 @@ function hoistScope(
   alreadyHoisted: ReadonlySet<string>,
   context: tstl.TransformationContext,
 ): Set<string> {
-  const chainCounts = collectChains(statements, shallow);
+  const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
   const toHoist = new Map<string, tstl.Identifier>();
   const decls: tstl.VariableDeclarationStatement[] = [];
-
-  // Chains whose base identifier is defined anywhere in this scope tree can't be
-  // hoisted above their definition — the base would be nil at the hoist point.
-  // Recurse into nested blocks (but not function bodies, which are separate scopes).
-  const scopeDefs = new Set<string>();
-  walkStatements(statements, {
-    expr: (_expr, _replace, control) => {
-      control.skip();
-    },
-    stmt: (stmt) => {
-      if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
-        for (const lhs of stmt.left) {
-          if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
-        }
-      }
-    },
-  });
 
   // Sort entries by chain string for deterministic output
   const sorted = [...chainCounts.entries()].sort(([a], [b]) => a.localeCompare(b));

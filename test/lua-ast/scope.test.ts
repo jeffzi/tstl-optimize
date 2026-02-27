@@ -2,7 +2,7 @@
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { walkStatements } from "../../src/lua-ast/lua-walker";
-import { buildChainExpression, collectChains, luaPropertyChain } from "../../src/lua-ast/scope";
+import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../src/lua-ast/scope";
 
 function countPropertyAccess(statements: tstl.Statement[], chain: string): number {
   let count = 0;
@@ -107,7 +107,7 @@ describe("countPropertyAccess", () => {
   });
 });
 
-describe("collectChains", () => {
+describe("collectScopeInfo", () => {
   it("collects chains with correct counts", () => {
     const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(
@@ -124,17 +124,18 @@ describe("collectChains", () => {
       ),
     ];
 
-    const result = collectChains(statements, false);
-    expect(result.get("math.cos")).toBe(2);
-    expect(result.get("math.sin")).toBe(1);
+    const { chainCounts } = collectScopeInfo(statements, false);
+    expect(chainCounts.get("math.cos")).toBe(2);
+    expect(chainCounts.get("math.sin")).toBe(1);
   });
 
-  it("returns empty map for empty statement list", () => {
-    expect(collectChains([], false).size).toBe(0);
+  it("returns empty results for empty statement list", () => {
+    const { chainCounts, scopeDefs } = collectScopeInfo([], false);
+    expect(chainCounts.size).toBe(0);
+    expect(scopeDefs.size).toBe(0);
   });
 
   it("does not double-count sub-chains", () => {
-    // math.floor should be counted, but not "math" as a separate sub-chain
     const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(
         tstl.createIdentifier("x"),
@@ -146,9 +147,9 @@ describe("collectChains", () => {
       ),
     ];
 
-    const result = collectChains(statements, false);
-    expect(result.get("math.floor")).toBe(2);
-    expect(result.has("math")).toBe(false);
+    const { chainCounts } = collectScopeInfo(statements, false);
+    expect(chainCounts.get("math.floor")).toBe(2);
+    expect(chainCounts.has("math")).toBe(false);
   });
 
   it("counts chains inside function bodies when shallow=false", () => {
@@ -163,8 +164,8 @@ describe("collectChains", () => {
       tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
     ];
 
-    const deep = collectChains(statements, false);
-    expect(deep.get("math.cos")).toBe(1);
+    const { chainCounts } = collectScopeInfo(statements, false);
+    expect(chainCounts.get("math.cos")).toBe(1);
   });
 
   it("skips function bodies when shallow=true", () => {
@@ -179,8 +180,68 @@ describe("collectChains", () => {
       tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
     ];
 
-    const shallow = collectChains(statements, true);
-    expect(shallow.has("math.cos")).toBe(false);
+    const { chainCounts } = collectScopeInfo(statements, true);
+    expect(chainCounts.has("math.cos")).toBe(false);
+  });
+
+  it("collects variable declaration LHS identifiers as scopeDefs", () => {
+    const statements: tstl.Statement[] = [
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("x"),
+        tstl.createNumericLiteral(1),
+      ),
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("y"),
+        tstl.createNumericLiteral(2),
+      ),
+    ];
+
+    const { scopeDefs } = collectScopeInfo(statements, false);
+    expect(scopeDefs).toStrictEqual(new Set(["x", "y"]));
+  });
+
+  it("collects assignment LHS identifiers as scopeDefs", () => {
+    const statements: tstl.Statement[] = [
+      tstl.createAssignmentStatement(tstl.createIdentifier("a"), tstl.createNumericLiteral(10)),
+    ];
+
+    const { scopeDefs } = collectScopeInfo(statements, false);
+    expect(scopeDefs).toStrictEqual(new Set(["a"]));
+  });
+
+  it("collects scopeDefs inside nested blocks when shallow=false", () => {
+    const innerStatements: tstl.Statement[] = [
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("inner"),
+        tstl.createNumericLiteral(1),
+      ),
+    ];
+    const statements: tstl.Statement[] = [
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("outer"),
+        tstl.createNumericLiteral(0),
+      ),
+      tstl.createDoStatement(innerStatements),
+    ];
+
+    const { scopeDefs } = collectScopeInfo(statements, false);
+    expect(scopeDefs).toStrictEqual(new Set(["outer", "inner"]));
+  });
+
+  it("skips scopeDefs inside function bodies when shallow=true", () => {
+    const funcBody = tstl.createBlock([
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("inner"),
+        tstl.createNumericLiteral(1),
+      ),
+    ]);
+    const funcExpr = tstl.createFunctionExpression(funcBody, []);
+    const statements: tstl.Statement[] = [
+      tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
+    ];
+
+    const { scopeDefs } = collectScopeInfo(statements, true);
+    expect(scopeDefs).toStrictEqual(new Set(["fn"]));
   });
 });
 
