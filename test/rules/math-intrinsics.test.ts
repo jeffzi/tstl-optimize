@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compile } from "./helpers";
+import { compile } from "../helpers";
 
 describe("math-intrinsics", () => {
   describe("Math.floor", () => {

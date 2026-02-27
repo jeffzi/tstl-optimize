@@ -2,7 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import type { RuleFactory } from "../config";
-import { hasSideEffects } from "../utils/ast";
+import { hasSideEffects } from "../lua-ast/ts-ast";
 
 function isMathMethodCall(node: ts.CallExpression, checker: ts.TypeChecker): string | undefined {
   const expr = node.expression;
@@ -19,66 +19,52 @@ function isMathMethodCall(node: ts.CallExpression, checker: ts.TypeChecker): str
 }
 
 /** Build `arg ^ 0.5` */
-function buildSqrt(arg: ts.Expression, context: tstl.TransformationContext): tstl.Expression {
+function buildSqrt(luaArg: tstl.Expression): tstl.Expression {
   return tstl.createBinaryExpression(
-    context.transformExpression(arg),
+    luaArg,
     tstl.createNumericLiteral(0.5),
     tstl.SyntaxKind.PowerOperator,
   );
 }
 
 /** Build `arg - arg % 1` */
-function buildFloor(arg: ts.Expression, context: tstl.TransformationContext): tstl.Expression {
-  const left = context.transformExpression(arg);
+function buildFloor(luaArg: tstl.Expression): tstl.Expression {
   const right = tstl.createBinaryExpression(
-    context.transformExpression(arg),
+    tstl.cloneNode(luaArg),
     tstl.createNumericLiteral(1),
     tstl.SyntaxKind.ModuloOperator,
   );
-  return tstl.createBinaryExpression(left, right, tstl.SyntaxKind.SubtractionOperator);
+  return tstl.createBinaryExpression(luaArg, right, tstl.SyntaxKind.SubtractionOperator);
 }
 
 /** Build `(arg < 0) and -arg or arg` */
-function buildAbs(arg: ts.Expression, context: tstl.TransformationContext): tstl.Expression {
+function buildAbs(luaArg: tstl.Expression): tstl.Expression {
   const condition = tstl.createBinaryExpression(
-    context.transformExpression(arg),
+    luaArg,
     tstl.createNumericLiteral(0),
     tstl.SyntaxKind.LessThanOperator,
   );
   const negated = tstl.createUnaryExpression(
-    context.transformExpression(arg),
+    tstl.cloneNode(luaArg),
     tstl.SyntaxKind.NegationOperator,
   );
   const andExpr = tstl.createBinaryExpression(condition, negated, tstl.SyntaxKind.AndOperator);
-  return tstl.createBinaryExpression(
-    andExpr,
-    context.transformExpression(arg),
-    tstl.SyntaxKind.OrOperator,
-  );
+  return tstl.createBinaryExpression(andExpr, tstl.cloneNode(luaArg), tstl.SyntaxKind.OrOperator);
 }
 
 /** Build `(a > b) and a or b` for max, `(a < b) and a or b` for min */
 function buildMinMax(
-  a: ts.Expression,
-  b: ts.Expression,
+  luaA: tstl.Expression,
+  luaB: tstl.Expression,
   op: tstl.SyntaxKind.GreaterThanOperator | tstl.SyntaxKind.LessThanOperator,
-  context: tstl.TransformationContext,
 ): tstl.Expression {
-  const condition = tstl.createBinaryExpression(
-    context.transformExpression(a),
-    context.transformExpression(b),
-    op,
-  );
+  const condition = tstl.createBinaryExpression(luaA, luaB, op);
   const andExpr = tstl.createBinaryExpression(
     condition,
-    context.transformExpression(a),
+    tstl.cloneNode(luaA),
     tstl.SyntaxKind.AndOperator,
   );
-  return tstl.createBinaryExpression(
-    andExpr,
-    context.transformExpression(b),
-    tstl.SyntaxKind.OrOperator,
-  );
+  return tstl.createBinaryExpression(andExpr, tstl.cloneNode(luaB), tstl.SyntaxKind.OrOperator);
 }
 
 function handleCallExpression(
@@ -94,27 +80,35 @@ function handleCallExpression(
   switch (method) {
     case "sqrt": {
       if (args.length !== 1) return undefined;
-      return buildSqrt(args[0], context);
+      return buildSqrt(context.transformExpression(args[0]));
     }
     case "floor": {
       if (args.length !== 1) return undefined;
       if (hasSideEffects(args[0])) return undefined;
-      return buildFloor(args[0], context);
+      return buildFloor(context.transformExpression(args[0]));
     }
     case "abs": {
       if (args.length !== 1) return undefined;
       if (hasSideEffects(args[0])) return undefined;
-      return buildAbs(args[0], context);
+      return buildAbs(context.transformExpression(args[0]));
     }
     case "max": {
       if (args.length !== 2) return undefined;
       if (hasSideEffects(args[0]) || hasSideEffects(args[1])) return undefined;
-      return buildMinMax(args[0], args[1], tstl.SyntaxKind.GreaterThanOperator, context);
+      return buildMinMax(
+        context.transformExpression(args[0]),
+        context.transformExpression(args[1]),
+        tstl.SyntaxKind.GreaterThanOperator,
+      );
     }
     case "min": {
       if (args.length !== 2) return undefined;
       if (hasSideEffects(args[0]) || hasSideEffects(args[1])) return undefined;
-      return buildMinMax(args[0], args[1], tstl.SyntaxKind.LessThanOperator, context);
+      return buildMinMax(
+        context.transformExpression(args[0]),
+        context.transformExpression(args[1]),
+        tstl.SyntaxKind.LessThanOperator,
+      );
     }
     default:
       return undefined;
