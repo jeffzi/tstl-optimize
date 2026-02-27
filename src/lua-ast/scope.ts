@@ -22,26 +22,41 @@ export function luaPropertyChain(node: tstl.TableIndexExpression): string | unde
   return undefined;
 }
 
+export interface ScopeInfo {
+  chainCounts: Map<string, number>;
+  scopeDefs: Set<string>;
+}
+
 /**
- * Walk a statement list, collecting all unique TableIndexExpression chains and their counts.
- * Skips sub-expressions of matched chains (avoids double-counting "math" when "math.floor" matches).
+ * Walk a statement list in a single pass, collecting both:
+ * - all unique TableIndexExpression chains and their counts (skips sub-expressions of matched chains)
+ * - all variable/assignment LHS identifiers defined in the scope
+ *
  * When `shallow` is true, skips FunctionExpression bodies.
  */
-export function collectChains(statements: tstl.Statement[], shallow: boolean): Map<string, number> {
-  const counts = new Map<string, number>();
+export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean): ScopeInfo {
+  const chainCounts = new Map<string, number>();
+  const scopeDefs = new Set<string>();
   walkStatements(statements, {
     shallow,
     expr: (expr, _replace, control) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
-          counts.set(chain, (counts.get(chain) ?? 0) + 1);
+          chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
           control.skip();
         }
       }
     },
+    stmt: (stmt) => {
+      if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
+        for (const lhs of stmt.left) {
+          if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
+        }
+      }
+    },
   });
-  return counts;
+  return { chainCounts, scopeDefs };
 }
 
 /** Reconstruct a TableIndexExpression from a dotted chain string (e.g. "math.floor"). */
