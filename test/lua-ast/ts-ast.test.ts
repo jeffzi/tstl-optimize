@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { hasSideEffects } from "../../src/utils/ast";
+import { hasSideEffects, SideEffectOptions } from "../../src/lua-ast/ts-ast";
 
 /** Parse a TS expression string into an AST node. */
 function parseExpr(code: string): ts.Expression {
@@ -14,11 +14,25 @@ function parseExpr(code: string): ts.Expression {
 
 describe("hasSideEffects", () => {
   describe("pure expressions", () => {
-    it("returns false for leaf expressions that fall through all checks", () => {
+    it("returns false for leaf expressions", () => {
       expect(hasSideEffects(parseExpr("42"))).toBe(false);
       expect(hasSideEffects(parseExpr('"hello"'))).toBe(false);
       expect(hasSideEffects(parseExpr("x"))).toBe(false);
+    });
+
+    it("returns false for void with pure operand", () => {
+      expect(hasSideEffects(parseExpr("void 0"))).toBe(false);
+    });
+
+    it("returns false for typeof with pure operand", () => {
+      expect(hasSideEffects(parseExpr("typeof x"))).toBe(false);
+    });
+
+    it("returns false for prefix unary non-increment with pure operand", () => {
       expect(hasSideEffects(parseExpr("-x"))).toBe(false);
+      expect(hasSideEffects(parseExpr("+x"))).toBe(false);
+      expect(hasSideEffects(parseExpr("~x"))).toBe(false);
+      expect(hasSideEffects(parseExpr("!x"))).toBe(false);
     });
 
     it("returns false for property access on identifier", () => {
@@ -55,6 +69,23 @@ describe("hasSideEffects", () => {
 
     it("returns false for object literal with pure properties", () => {
       expect(hasSideEffects(parseExpr("({ a: 1, b: 2 })"))).toBe(false);
+    });
+
+    it("returns false for object literal with pure computed key", () => {
+      expect(hasSideEffects(parseExpr('({ ["literal"]: 1 })'))).toBe(false);
+    });
+
+    it("returns false for object literal with shorthand property", () => {
+      expect(hasSideEffects(parseExpr("({ x })"))).toBe(false);
+    });
+
+    it("returns false for object literal with method declaration", () => {
+      expect(hasSideEffects(parseExpr("({ foo() {} })"))).toBe(false);
+    });
+
+    it("returns false for object literal with getter/setter", () => {
+      expect(hasSideEffects(parseExpr("({ get x() { return 1; } })"))).toBe(false);
+      expect(hasSideEffects(parseExpr("({ set x(v) {} })"))).toBe(false);
     });
 
     it("returns false for template expression with pure substitutions", () => {
@@ -102,6 +133,26 @@ describe("hasSideEffects", () => {
     it("returns true for delete expression", () => {
       expect(hasSideEffects(parseExpr("delete obj.x"))).toBe(true);
     });
+
+    it("returns true for void wrapping call", () => {
+      expect(hasSideEffects(parseExpr("void foo()"))).toBe(true);
+    });
+
+    it("returns true for typeof wrapping call", () => {
+      expect(hasSideEffects(parseExpr("typeof foo()"))).toBe(true);
+    });
+
+    it("returns true for prefix unary non-increment wrapping call", () => {
+      expect(hasSideEffects(parseExpr("+foo()"))).toBe(true);
+    });
+
+    it("returns true for object literal with side-effectful computed key", () => {
+      expect(hasSideEffects(parseExpr("({ [foo()]: 1 })"))).toBe(true);
+    });
+
+    it("returns true for method with side-effectful computed key", () => {
+      expect(hasSideEffects(parseExpr("({ [foo()]() {} })"))).toBe(true);
+    });
   });
 
   describe("recursive detection", () => {
@@ -148,6 +199,49 @@ describe("hasSideEffects", () => {
     it("detects call inside template expression substitution", () => {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: testing template parsing
       expect(hasSideEffects(parseExpr("`${foo()}`"))).toBe(true);
+    });
+
+    it("detects call inside spread assignment in object literal", () => {
+      expect(hasSideEffects(parseExpr("({ ...foo() })"))).toBe(true);
+    });
+  });
+
+  describe("SideEffectOptions", () => {
+    describe("AssumeConstructorPure", () => {
+      it("treats new as side-effectful by default", () => {
+        expect(hasSideEffects(parseExpr("new Foo()"))).toBe(true);
+      });
+
+      it("treats new as pure when AssumeConstructorPure is set", () => {
+        expect(
+          hasSideEffects(parseExpr("new Foo()"), SideEffectOptions.AssumeConstructorPure),
+        ).toBe(false);
+      });
+
+      it("still detects side effects in arguments when AssumeConstructorPure is set", () => {
+        expect(
+          hasSideEffects(parseExpr("new Foo(bar())"), SideEffectOptions.AssumeConstructorPure),
+        ).toBe(true);
+      });
+    });
+
+    describe("AssumeTaggedTemplatePure", () => {
+      it("treats tagged template as side-effectful by default", () => {
+        expect(hasSideEffects(parseExpr("tag`hello`"))).toBe(true);
+      });
+
+      it("treats tagged template as pure when AssumeTaggedTemplatePure is set", () => {
+        expect(
+          hasSideEffects(parseExpr("tag`hello`"), SideEffectOptions.AssumeTaggedTemplatePure),
+        ).toBe(false);
+      });
+
+      it("still detects side effects in substitutions when AssumeTaggedTemplatePure is set", () => {
+        expect(
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: testing template parsing
+          hasSideEffects(parseExpr("tag`${foo()}`"), SideEffectOptions.AssumeTaggedTemplatePure),
+        ).toBe(true);
+      });
     });
   });
 });

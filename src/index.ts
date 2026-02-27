@@ -7,7 +7,7 @@ import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
 
-// Ordered: math-intrinsics → loop-rebase → inline → localizer
+// Registration order — last entry wins when two rules share a SyntaxKind
 const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
@@ -51,9 +51,9 @@ class OptimizePlugin implements tstl.Plugin {
         const existing = merged[kind];
         if (existing) {
           merged[kind] = (node, context) => {
-            const result = existing(node, context);
-            if (result === undefined) return undefined;
-            return fn(node, context);
+            const fnResult = fn(node, context);
+            if (fnResult !== undefined) return fnResult;
+            return existing(node, context);
           };
         } else {
           merged[kind] = fn;
@@ -66,9 +66,9 @@ class OptimizePlugin implements tstl.Plugin {
   }
 }
 
-// Default export for tsconfig.json luaPlugins usage
-const plugin = new OptimizePlugin();
-export default plugin;
+// TSTL calls `typeof factory === "function" ? factory(pluginOption) : factory`
+// so the default export must be a function to receive tsconfig.json options.
+export default (options?: Record<string, unknown>): OptimizePlugin => new OptimizePlugin(options);
 
 // Named export for in-memory test usage
 export { OptimizePlugin };

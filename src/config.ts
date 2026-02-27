@@ -47,7 +47,7 @@ export function resolveLocalizerConfig(
 export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boolean {
   const value = config[rule];
   if (typeof value === "boolean") return value;
-  return value.enabled;
+  return value.enabled !== false;
 }
 
 export type RuleFactory = (checker: ts.TypeChecker, config: PluginConfig) => tstl.Visitors;

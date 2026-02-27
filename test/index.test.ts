@@ -2,7 +2,16 @@
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../src/config";
+import pluginFactory from "../src/index";
 import { compile } from "./helpers";
+
+describe("default export", () => {
+  it("is a factory function so TSTL passes plugin options from tsconfig", () => {
+    // TSTL checks `typeof factory === "function"` to decide whether to call
+    // factory(pluginOption). A pre-instantiated object bypasses options entirely.
+    expect(typeof pluginFactory).toBe("function");
+  });
+});
 
 describe("plugin infrastructure", () => {
   it("produces Lua output with default or empty config", () => {
@@ -12,7 +21,7 @@ describe("plugin infrastructure", () => {
 
   it("accepts rules config with disabled rule", () => {
     const lua = compile("const x = 1;", {
-      rules: { "math-intrinsics": false },
+      pluginOptions: { rules: { "math-intrinsics": false } },
     });
     expect(lua).toContain("x = 1");
   });
