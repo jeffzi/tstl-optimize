@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "biomejs.biome",
+    "DavidAnson.vscode-markdownlint",
+    "EditorConfig.EditorConfig",
+    "vitest.explorer",
+    "typescript-to-lua.vscode-typescript-to-lua",
+    "sumneko.lua"
+  ]
+}

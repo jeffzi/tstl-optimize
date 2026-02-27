@@ -1,0 +1,231 @@
+import { describe, expect, it } from "vitest";
+import { compile } from "../helpers";
+
+describe("inline", () => {
+  describe("positive: inlined", () => {
+    it("inlines function declaration with single return", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).toContain("a * 2");
+      expect(lua).not.toContain("= double(");
+    });
+
+    it("inlines arrow function with expression body", () => {
+      const lua = compile(`
+        /** @inline */
+        const double = (x: number) => x * 2;
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).toContain("a * 2");
+      expect(lua).not.toContain("double(");
+    });
+
+    it("inlines function expression with single return", () => {
+      const lua = compile(`
+        /** @inline */
+        const double = function(x: number) { return x * 2; };
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).toContain("a * 2");
+      expect(lua).not.toContain("double(");
+    });
+
+    it("inlines multiple parameters", () => {
+      const lua = compile(`
+        /** @inline */
+        function add(a: number, b: number) { return a + b; }
+        declare const x: number;
+        declare const y: number;
+        const r = add(x, y);
+      `);
+      expect(lua).toContain("x + y");
+      expect(lua).not.toContain("= add(");
+    });
+
+    it("inlines zero parameters", () => {
+      const lua = compile(`
+        /** @inline */
+        function pi() { return 3.14; }
+        const r = pi();
+      `);
+      expect(lua).toContain("3.14");
+      expect(lua).not.toContain("= pi(");
+    });
+
+    it("inlines when body references module-scope variable", () => {
+      const lua = compile(`
+        const factor = 10;
+        /** @inline */
+        function scale(x: number) { return x * factor; }
+        declare const a: number;
+        const r = scale(a);
+      `);
+      expect(lua).toContain("a * factor");
+      expect(lua).not.toContain("= scale(");
+    });
+
+    it("inlines when argument is an expression", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        const r = double(a + 1);
+      `);
+      expect(lua).toContain("(a + 1) * 2");
+      expect(lua).not.toContain("= double(");
+    });
+
+    it("wraps compound body in parentheses for operator precedence safety", () => {
+      const lua = compile(`
+        /** @inline */
+        function inc(x: number) { return x + 1; }
+        declare const a: number;
+        const r = inc(a) * 2;
+      `);
+      // inc(a) should become (a + 1) * 2, not a + 1 * 2
+      expect(lua).toContain("(a + 1) * 2");
+      expect(lua).not.toContain("= inc(");
+    });
+
+    it("inlines side-effecting arg when param used only once", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare function foo(): number;
+        const r = double(foo());
+      `);
+      expect(lua).toContain("foo() * 2");
+      expect(lua).not.toContain("= double(");
+    });
+  });
+
+  describe("negative: not inlined", () => {
+    it("does not inline without @inline tag", () => {
+      const lua = compile(`
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).toContain("double(");
+    });
+
+    it("does not inline multi-statement body", () => {
+      const lua = compile(`
+        /** @inline */
+        function compute(x: number) {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+        declare const a: number;
+        const r = compute(a);
+      `);
+      expect(lua).toContain("compute(");
+    });
+
+    it("does not inline when side-effecting arg is used multiple times", () => {
+      const lua = compile(`
+        /** @inline */
+        function square(x: number) { return x * x; }
+        declare function foo(): number;
+        const r = square(foo());
+      `);
+      expect(lua).toContain("square(");
+    });
+
+    it("does not inline rest parameters", () => {
+      const lua = compile(`
+        /** @inline */
+        function first(...args: number[]) { return args[0]; }
+        const r = first(1, 2, 3);
+      `);
+      expect(lua).toContain("first(");
+    });
+
+    it("does not inline optional parameters", () => {
+      const lua = compile(`
+        /** @inline */
+        function maybe(x?: number) { return x; }
+        const r = maybe(5);
+      `);
+      expect(lua).toContain("maybe(");
+    });
+
+    it("does not inline default parameters", () => {
+      const lua = compile(`
+        /** @inline */
+        function withDefault(x: number = 0) { return x; }
+        const r = withDefault(5);
+      `);
+      expect(lua).toContain("withDefault(");
+    });
+
+    it("does not inline closure capture from non-module scope", () => {
+      const lua = compile(`
+        function outer() {
+          const captured = 10;
+          /** @inline */
+          function inner(x: number) { return x + captured; }
+          return inner(5);
+        }
+      `);
+      expect(lua).toContain("inner(");
+    });
+
+    it("does not inline when parameter is written inside body", () => {
+      const lua = compile(`
+        /** @inline */
+        function f(x: number) { return (x = 1, x); }
+        const result = f(0);
+      `);
+      expect(lua).toContain("f(");
+    });
+
+    it("does not inline recursive function", () => {
+      const lua = compile(`
+        /** @inline */
+        function recurse(x: number): number { return recurse(x); }
+        const r = recurse(5);
+      `);
+      expect(lua).toContain("recurse(");
+    });
+  });
+
+  describe("edge cases", () => {
+    it("does not inline when rule is disabled", () => {
+      const lua = compile(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        const r = double(a);
+      `,
+        { pluginOptions: { rules: { inline: false } } },
+      );
+      expect(lua).toContain("double(");
+    });
+
+    it("math-intrinsics still works when inline is active", () => {
+      const lua = compile(`
+        declare const x: number;
+        const r = Math.floor(x);
+      `);
+      expect(lua).toContain("% 1");
+      expect(lua).not.toContain("math.floor");
+    });
+
+    it("handles arity mismatch gracefully", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        const r = (double as any)();
+      `);
+      expect(lua).toContain("double(");
+    });
+  });
+});

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "moduleResolution": "Node",
+    "strict": true,
+    "rootDir": ".",
+    "outDir": "benchmark/lua-jit",
+    "types": ["@typescript-to-lua/language-extensions", "lua-types/jit", "luamark-types"],
+    "composite": true
+  },
+  "tstl": {
+    "luaTarget": "JIT",
+    "noImplicitSelf": true,
+    "noImplicitGlobalVariables": true,
+    "noHeader": true,
+    "luaLibImport": "require-minimal",
+    "luaPlugins": [{ "name": "./dist/index.js" }],
+    "noResolvePaths": ["luamark"]
+  },
+  "include": ["benchmark/**/*.ts"]
+}

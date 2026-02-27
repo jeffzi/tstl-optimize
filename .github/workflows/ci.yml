@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint workflows
+        uses: reviewdog/action-actionlint@v1
+
+      - name: Check (lint + format)
+        run: npm run check
+
+      - name: Check markdown
+        run: npm run check:md
+
+      - name: Typecheck
+        run: |
+          if find src -name '*.ts' 2>/dev/null | grep -q .; then
+            npm run typecheck
+          fi
+
+      - name: Check unused
+        run: npm run check:unused
+
+      - name: Build
+        run: |
+          if find src -name '*.ts' 2>/dev/null | grep -q .; then
+            npm run build
+          fi
+
+      - name: Test
+        run: |
+          if find test -name '*.test.ts' 2>/dev/null | grep -q .; then
+            npm run test -- --coverage
+          fi

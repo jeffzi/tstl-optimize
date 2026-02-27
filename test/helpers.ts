@@ -1,0 +1,45 @@
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
+import { OptimizePlugin } from "../src/index";
+
+export interface CompileOptions {
+  pluginOptions?: Record<string, unknown>;
+  luaTarget?: tstl.LuaTarget;
+}
+
+export function compile(source: string, options?: CompileOptions): string {
+  const { pluginOptions, luaTarget = tstl.LuaTarget.Lua51 } = options ?? {};
+  const plugin = new OptimizePlugin(pluginOptions);
+  const result = tstl.transpileVirtualProject(
+    { "main.ts": source },
+    {
+      noHeader: true,
+      luaPlugins: [{ plugin }],
+      noImplicitSelf: true,
+      luaTarget,
+      luaLibImport: tstl.LuaLibImportKind.None,
+      strict: true,
+      // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
+      // which lets the type checker identify loop variables as `number` (not `any`)
+      // so TSTL correctly applies +1 to array index accesses.
+      target: ts.ScriptTarget.ESNext,
+      lib: ["lib.esnext.d.ts"],
+      types: ["@typescript-to-lua/language-extensions"],
+    },
+  );
+  const errors = result.diagnostics.filter(
+    (d) => d.category === 1 /* ts.DiagnosticCategory.Error */ && d.code >= 100_000,
+  );
+  if (errors.length > 0) {
+    const msgs = errors
+      .map((d) => (typeof d.messageText === "string" ? d.messageText : d.messageText.messageText))
+      .join("\n");
+    throw new Error(msgs);
+  }
+  const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
+  if (!file?.lua) {
+    throw new Error("No Lua output.");
+  }
+  return file.lua;
+}
