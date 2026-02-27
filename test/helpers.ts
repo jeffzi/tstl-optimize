@@ -1,3 +1,4 @@
+import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { OptimizePlugin } from "../src/index";
@@ -7,21 +8,8 @@ export interface CompileOptions {
   luaTarget?: tstl.LuaTarget;
 }
 
-export function compile(
-  source: string,
-  optionsOrPlugin?: Record<string, unknown> | CompileOptions,
-): string {
-  let pluginOptions: Record<string, unknown> | undefined;
-  let luaTarget: tstl.LuaTarget = tstl.LuaTarget.Lua51;
-
-  if (optionsOrPlugin && ("pluginOptions" in optionsOrPlugin || "luaTarget" in optionsOrPlugin)) {
-    const opts = optionsOrPlugin as CompileOptions;
-    pluginOptions = opts.pluginOptions;
-    luaTarget = opts.luaTarget ?? tstl.LuaTarget.Lua51;
-  } else {
-    pluginOptions = optionsOrPlugin as Record<string, unknown> | undefined;
-  }
-
+export function compile(source: string, options?: CompileOptions): string {
+  const { pluginOptions, luaTarget = tstl.LuaTarget.Lua51 } = options ?? {};
   const plugin = new OptimizePlugin(pluginOptions);
   const result = tstl.transpileVirtualProject(
     { "main.ts": source },
@@ -32,6 +20,12 @@ export function compile(
       luaTarget,
       luaLibImport: tstl.LuaLibImportKind.None,
       strict: true,
+      // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
+      // which lets the type checker identify loop variables as `number` (not `any`)
+      // so TSTL correctly applies +1 to array index accesses.
+      target: ts.ScriptTarget.ESNext,
+      lib: ["lib.esnext.d.ts"],
+      types: ["@typescript-to-lua/language-extensions"],
     },
   );
   const errors = result.diagnostics.filter(
