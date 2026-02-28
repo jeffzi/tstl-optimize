@@ -45,7 +45,7 @@ function buildAbs(luaArg: tstl.Expression): tstl.Expression {
     tstl.SyntaxKind.LessThanOperator,
   );
   const negated = tstl.createUnaryExpression(
-    tstl.cloneNode(luaArg),
+    tstl.createParenthesizedExpression(tstl.cloneNode(luaArg)),
     tstl.SyntaxKind.NegationOperator,
   );
   const andExpr = tstl.createBinaryExpression(condition, negated, tstl.SyntaxKind.AndOperator);
@@ -92,22 +92,16 @@ function handleCallExpression(
       if (hasSideEffects(args[0])) return undefined;
       return buildAbs(context.transformExpression(args[0]));
     }
-    case "max": {
-      if (args.length !== 2) return undefined;
-      if (hasSideEffects(args[0]) || hasSideEffects(args[1])) return undefined;
-      return buildMinMax(
-        context.transformExpression(args[0]),
-        context.transformExpression(args[1]),
-        tstl.SyntaxKind.GreaterThanOperator,
-      );
-    }
+    case "max":
     case "min": {
       if (args.length !== 2) return undefined;
       if (hasSideEffects(args[0]) || hasSideEffects(args[1])) return undefined;
+      const op =
+        method === "max" ? tstl.SyntaxKind.GreaterThanOperator : tstl.SyntaxKind.LessThanOperator;
       return buildMinMax(
         context.transformExpression(args[0]),
         context.transformExpression(args[1]),
-        tstl.SyntaxKind.LessThanOperator,
+        op,
       );
     }
     default:
@@ -139,9 +133,10 @@ export const createVisitors: RuleFactory = (checker, config) => ({
         node.right.text === "2" &&
         !hasSideEffects(node.left)
       ) {
+        const luaBase = context.transformExpression(node.left);
         return tstl.createBinaryExpression(
-          context.transformExpression(node.left),
-          context.transformExpression(node.left),
+          luaBase,
+          tstl.cloneNode(luaBase),
           tstl.SyntaxKind.MultiplicationOperator,
         );
       }
