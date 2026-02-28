@@ -1,6 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { walkStatements } from "./lua-walker";
+import { type TraversalControl, walkStatements } from "./lua-walker";
 
 /** Build a dotted chain string from a Lua TableIndexExpression. */
 export function luaPropertyChain(node: tstl.TableIndexExpression): string | undefined {
@@ -34,28 +34,55 @@ export interface ScopeInfo {
  *
  * When `shallow` is true, skips FunctionExpression bodies.
  */
-export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean): ScopeInfo {
+export function collectScopeInfo(
+  statements: tstl.Statement[],
+  shallow: boolean,
+  initialDefs?: Iterable<string>,
+): ScopeInfo {
   const chainCounts = new Map<string, number>();
-  const scopeDefs = new Set<string>();
-  walkStatements(statements, {
+  const scopeDefs = new Set<string>(initialDefs);
+  const hooks = {
     shallow,
-    expr: (expr, _replace, control) => {
+    guardDepth: 0,
+    expr: (
+      expr: tstl.Expression,
+      _replace: (n: tstl.Expression) => void,
+      control: TraversalControl,
+    ) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
-          chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
+          if (hooks.guardDepth === 0) {
+            chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
+          }
           control.skip();
         }
       }
+      if (!shallow && tstl.isFunctionExpression(expr) && expr.params) {
+        for (const param of expr.params) {
+          if (tstl.isIdentifier(param)) {
+            scopeDefs.add(param.text);
+          }
+        }
+      }
     },
-    stmt: (stmt) => {
+    stmt: (stmt: tstl.Statement) => {
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
         for (const lhs of stmt.left) {
           if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
         }
       }
+      if (tstl.isForInStatement(stmt)) {
+        for (const name of stmt.names) {
+          if (tstl.isIdentifier(name)) scopeDefs.add(name.text);
+        }
+      }
+      if (tstl.isForStatement(stmt) && tstl.isIdentifier(stmt.controlVariable)) {
+        scopeDefs.add(stmt.controlVariable.text);
+      }
     },
-  });
+  };
+  walkStatements(statements, hooks);
   return { chainCounts, scopeDefs };
 }
 

@@ -36,6 +36,35 @@ describe("localizer", () => {
       expect(lua).toContain("ceil(x)");
     });
 
+    it("hoists chain inside for-in loop body with scope: function", () => {
+      const lua = compile(
+        [
+          "function process(items: Array<{x: {y: number}}>) {",
+          "  for (const item of items) {",
+          "    const a = item.x.y;",
+          "    const b = item.x.y;",
+          "  }",
+          "}",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "function" } } } },
+      );
+      expect(lua).toContain("local y = item.x.y");
+    });
+
+    it("hoists parameter-based chain inside function body with scope: function", () => {
+      const lua = compile(
+        [
+          "function process(obj: { x: { y: number } }) {",
+          "  const a = obj.x.y;",
+          "  const b = obj.x.y;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "function" } } } },
+      );
+      expect(lua).toContain("local y = obj.x.y");
+    });
+
     it("scope: all hoists at module level, no redundant function-level hoist", () => {
       const lua = compile(
         [
@@ -95,6 +124,24 @@ describe("localizer", () => {
       expect(lua).toContain("math.ceil");
     });
 
+    it("does not hoist chain whose last segment shadows an existing local", () => {
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "const floor = 42;",
+          "const a = Math.floor(x);",
+          "const b = Math.floor(x);",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "module" } } },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      // "floor" is already a local — hoisting "local floor = math.floor"
+      // would shadow the user's variable
+      expect(lua).not.toContain("local floor = math.floor");
+    });
+
     it("does not hoist chain whose base is locally defined in the same scope", () => {
       const lua = compile(
         [
@@ -108,6 +155,81 @@ describe("localizer", () => {
       // config's definition would make config nil at that point
       expect(lua).not.toContain("local width");
       expect(lua).toContain("config.graphics.width");
+    });
+
+    it("does not hoist chain whose last segment collides with a function parameter", () => {
+      const lua = compile(
+        [
+          "function process(y: number, obj: { x: { y: number } }) {",
+          "  const a = obj.x.y;",
+          "  const b = obj.x.y;",
+          "  return a + b + y;",
+          "}",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "function" } } } },
+      );
+      // "local y = obj.x.y" would shadow the parameter y
+      expect(lua).not.toContain("local y = obj.x.y");
+    });
+
+    it("does not hoist chain whose last segment collides with a loop variable", () => {
+      const lua = compile(
+        [
+          "declare const items: number[];",
+          "declare const obj: { x: number };",
+          "function process() {",
+          "  for (const x of items) {",
+          "    const a = obj.x + obj.x + x;",
+          "  }",
+          "}",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "function" } } } },
+      );
+      // "local x = obj.x" would shadow the loop variable x
+      expect(lua).not.toContain("local x = obj.x");
+    });
+
+    it("does not hoist chain whose base is a function parameter to module level", () => {
+      const lua = compile(
+        [
+          "function process(obj: { x: { y: number } }) {",
+          "  const a = obj.x.y;",
+          "  const b = obj.x.y;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" } } } },
+      );
+      expect(lua).not.toContain("local y = obj.x.y");
+    });
+
+    it("does not hoist chain whose base is a for-in loop variable to module level", () => {
+      const lua = compile(
+        [
+          "function process(items: Array<{x: {y: number}}>) {",
+          "  for (const item of items) {",
+          "    const a = item.x.y;",
+          "    const b = item.x.y;",
+          "  }",
+          "}",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" } } } },
+      );
+      expect(lua).not.toContain("local y = item.x.y");
+    });
+
+    it("does not hoist chain appearing only in and/or short-circuit RHS", () => {
+      const lua = compile(
+        [
+          "declare const obj: { name: string } | undefined;",
+          "const a = obj && obj.name;",
+          "const b = obj && obj.name;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" } } } },
+      );
+      // obj.name is inside `obj and obj.name` — conditionally evaluated.
+      // Hoisting would make it unconditional, crashing when obj is nil.
+      expect(lua).not.toContain("local name = obj.name");
     });
 
     it("does nothing when rule is disabled", () => {

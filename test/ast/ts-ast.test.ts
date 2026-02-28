@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { hasSideEffects, SideEffectOptions } from "../../src/lua-ast/ts-ast";
+import { hasSideEffects, SideEffectOptions } from "../../src/ast/ts-ast";
 
 /** Parse a TS expression string into an AST node. */
 function parseExpr(code: string): ts.Expression {
@@ -57,6 +57,10 @@ describe("hasSideEffects", () => {
 
     it("returns false for non-null assertion on pure expr", () => {
       expect(hasSideEffects(parseExpr("x!"))).toBe(false);
+    });
+
+    it("returns false for satisfies expression wrapping pure expr", () => {
+      expect(hasSideEffects(parseExpr("x satisfies number"))).toBe(false);
     });
 
     it("returns false for element access with pure index", () => {
@@ -181,6 +185,10 @@ describe("hasSideEffects", () => {
 
     it("detects call inside non-null assertion", () => {
       expect(hasSideEffects(parseExpr("foo()!"))).toBe(true);
+    });
+
+    it("detects call inside satisfies expression", () => {
+      expect(hasSideEffects(parseExpr("foo() satisfies number"))).toBe(true);
     });
 
     it("detects call in either operand of binary expression", () => {

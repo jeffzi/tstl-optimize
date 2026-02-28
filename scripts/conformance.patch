@@ -1,0 +1,58 @@
+diff --git a/test/util.ts b/test/util.ts
+index 501b24b..2b98a0d 100644
+--- a/test/util.ts
++++ b/test/util.ts
+@@ -22,6 +22,15 @@ function jsonLib(target: tstl.LuaTarget): string {
+     return fs.readFileSync(path.join(__dirname, fileName), "utf8");
+ }
+ 
++// tstl-optimize conformance: load plugin from env var when set
++function loadOptimizePlugin(): object | undefined {
++    const pluginPath = process.env.TSTL_OPTIMIZE_PLUGIN;
++    if (!pluginPath) return undefined;
++    const createPlugin = require(pluginPath).default;
++    return createPlugin();
++}
++const optimizePlugin = loadOptimizePlugin();
++
+ // Using `test` directly makes eslint-plugin-jest consider this file as a test
+ const defineTest = test;
+ 
+@@ -61,7 +70,10 @@ export function testEachVersion<T extends TestBuilder>(
+     common: () => T,
+     special?: Record<tstl.LuaTarget, ((builder: T) => void) | boolean>
+ ): void {
+-    for (const version of Object.values(tstl.LuaTarget) as tstl.LuaTarget[]) {
++    const versions = optimizePlugin
++        ? [tstl.LuaTarget.Lua51]
++        : Object.values(tstl.LuaTarget) as tstl.LuaTarget[];
++    for (const version of versions) {
+         const specialBuilder = special?.[version];
+         if (specialBuilder === false) continue;
+ 
+@@ -165,6 +177,7 @@ export abstract class TestBuilder {
+         moduleResolution: ts.ModuleResolutionKind.Node10,
+         resolveJsonModule: true,
+         sourceMap: true,
++        ...(optimizePlugin ? { luaPlugins: [{ plugin: optimizePlugin }] } : {}),
+     };
+     public setOptions(options: tstl.CompilerOptions = {}): this {
+         this.throwIfProgramExists("setOptions");
+@@ -414,12 +427,17 @@ export abstract class TestBuilder {
+     }
+ 
+     public expectLuaToMatchSnapshot(): this {
++        if (optimizePlugin) return this;
+         this.expectToHaveNoDiagnostics();
+         expect(this.getMainLuaCodeChunk()).toMatchSnapshot();
+         return this;
+     }
+ 
+     public expectDiagnosticsToMatchSnapshot(expected?: number[], diagnosticsOnly = false): this {
++        if (optimizePlugin) {
++            this.expectToHaveDiagnostics(expected);
++            return this;
++        }
+         this.expectToHaveDiagnostics(expected);
+ 
+         const diagnosticMessages = ts.formatDiagnostics(

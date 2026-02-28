@@ -38,6 +38,7 @@ export function hasSideEffects(
       // --- Transparent wrappers: unwrap .expression and continue ---
       case ts.SyntaxKind.TypeAssertionExpression:
       case ts.SyntaxKind.AsExpression:
+      case ts.SyntaxKind.SatisfiesExpression:
       case ts.SyntaxKind.ParenthesizedExpression:
       case ts.SyntaxKind.NonNullExpression:
       case ts.SyntaxKind.VoidExpression:
@@ -47,6 +48,7 @@ export function hasSideEffects(
         current = (
           current as
             | ts.AssertionExpression
+            | ts.SatisfiesExpression
             | ts.ParenthesizedExpression
             | ts.NonNullExpression
             | ts.VoidExpression
