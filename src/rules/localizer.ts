@@ -34,8 +34,10 @@ function hoistScope(
   shallow: boolean,
   alreadyHoisted: ReadonlySet<string>,
   context: tstl.TransformationContext,
+  initialDefs?: Iterable<string>,
+  reservedNames?: ReadonlySet<string>,
 ): Set<string> {
-  const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
+  const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow, initialDefs);
   const toHoist = new Map<string, tstl.Identifier>();
   const decls: tstl.VariableDeclarationStatement[] = [];
 
@@ -45,10 +47,12 @@ function hoistScope(
   for (const [chain, count] of sorted) {
     if (count < threshold || alreadyHoisted.has(chain)) continue;
     const parts = chain.split(".");
-    if (scopeDefs.has(parts[0])) continue;
     const lastSegment = parts[parts.length - 1];
+    if (scopeDefs.has(parts[0]) || scopeDefs.has(lastSegment) || reservedNames?.has(lastSegment))
+      continue;
     const ident = tstl.createIdentifier(lastSegment, undefined, context.nextSymbolId());
     toHoist.set(chain, ident);
+    scopeDefs.add(lastSegment);
     decls.push(tstl.createVariableDeclarationStatement(ident, buildChainExpression(chain)));
   }
 
@@ -89,7 +93,18 @@ function processFunctionBodies(
       (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) &&
       tstl.isFunctionDefinition(stmt)
     ) {
-      hoistScope(stmt.right[0].body.statements, threshold, true, alreadyHoisted, context);
+      const fn = stmt.right[0];
+      const paramNames = new Set(fn.params?.filter(tstl.isIdentifier).map((p) => p.text));
+      hoistScope(
+        fn.body.statements,
+        threshold,
+        true,
+        alreadyHoisted,
+        context,
+        undefined,
+        paramNames,
+      );
+      processFunctionBodies(fn.body.statements, threshold, alreadyHoisted, context);
     } else if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, threshold, alreadyHoisted, context);
     } else if (tstl.isIfStatement(stmt)) {
@@ -101,12 +116,21 @@ function processFunctionBodies(
           processFunctionBodies(stmt.elseBlock.statements, threshold, alreadyHoisted, context);
         }
       }
-    } else if (
-      tstl.isWhileStatement(stmt) ||
-      tstl.isRepeatStatement(stmt) ||
-      tstl.isForStatement(stmt) ||
-      tstl.isForInStatement(stmt)
-    ) {
+    } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
+      const loopNames = tstl.isForInStatement(stmt)
+        ? new Set(stmt.names.filter(tstl.isIdentifier).map((n) => n.text))
+        : new Set([stmt.controlVariable.text]);
+      hoistScope(
+        stmt.body.statements,
+        threshold,
+        true,
+        alreadyHoisted,
+        context,
+        undefined,
+        loopNames,
+      );
+      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context);
+    } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
       processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context);
     }
   }
