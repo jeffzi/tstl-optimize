@@ -59,6 +59,10 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("x!"))).toBe(false);
     });
 
+    it("returns false for satisfies expression wrapping pure expr", () => {
+      expect(hasSideEffects(parseExpr("x satisfies number"))).toBe(false);
+    });
+
     it("returns false for element access with pure index", () => {
       expect(hasSideEffects(parseExpr("arr[0]"))).toBe(false);
     });
@@ -181,6 +185,10 @@ describe("hasSideEffects", () => {
 
     it("detects call inside non-null assertion", () => {
       expect(hasSideEffects(parseExpr("foo()!"))).toBe(true);
+    });
+
+    it("detects call inside satisfies expression", () => {
+      expect(hasSideEffects(parseExpr("foo() satisfies number"))).toBe(true);
     });
 
     it("detects call in either operand of binary expression", () => {
