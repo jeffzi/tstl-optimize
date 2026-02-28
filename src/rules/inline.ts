@@ -9,6 +9,7 @@ interface InlineTarget {
   bodyExpr: ts.Expression;
   params: readonly ts.ParameterDeclaration[];
   declaration: ts.Node;
+  resolvedSymbol: ts.Symbol;
 }
 
 function hasInlineTag(node: ts.Node): boolean {
@@ -44,7 +45,7 @@ function getInlineTarget(
       if (!hasInlineTag(decl)) continue;
       const bodyExpr = getBodyExpression(decl);
       if (!bodyExpr) continue;
-      return { bodyExpr, params: decl.parameters, declaration: decl };
+      return { bodyExpr, params: decl.parameters, declaration: decl, resolvedSymbol: resolved };
     }
 
     if (ts.isVariableDeclaration(decl) && decl.initializer) {
@@ -56,7 +57,7 @@ function getInlineTarget(
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
         const bodyExpr = getBodyExpression(init);
         if (!bodyExpr) continue;
-        return { bodyExpr, params: init.parameters, declaration: decl };
+        return { bodyExpr, params: init.parameters, declaration: decl, resolvedSymbol: resolved };
       }
     }
   }
@@ -116,7 +117,7 @@ function canInline(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
 ): boolean {
-  const { bodyExpr, params, declaration } = target;
+  const { bodyExpr, params, declaration, resolvedSymbol } = target;
 
   if (callNode.arguments.length !== params.length) return false;
 
@@ -127,12 +128,7 @@ function canInline(
   if (!isModuleScopeDeclaration(declaration)) return false;
 
   // Reject recursion: body references the function itself
-  const funcSymbol = checker.getSymbolAtLocation(callNode.expression);
-  if (funcSymbol) {
-    const resolved =
-      funcSymbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(funcSymbol) : funcSymbol;
-    if (countReferences(bodyExpr, resolved, checker) > 0) return false;
-  }
+  if (countReferences(bodyExpr, resolvedSymbol, checker) > 0) return false;
 
   for (let i = 0; i < params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);

@@ -18,6 +18,9 @@ interface WalkerHooks {
   expr: ExprVisitor;
   stmt?: StmtVisitor;
   shallow?: boolean;
+  /** When set, the walker increments this around guarded contexts (and/or RHS,
+   *  if-branches, conditional expression branches) so callers can skip counting. */
+  guardDepth?: number;
 }
 
 /** Walk a Lua statement list, calling hooks for each expression and statement. */
@@ -48,9 +51,14 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
         expr.left = n;
       });
       if (stopped) return;
+      const isGuardOp =
+        expr.operator === tstl.SyntaxKind.AndOperator ||
+        expr.operator === tstl.SyntaxKind.OrOperator;
+      if (isGuardOp && hooks.guardDepth !== undefined) hooks.guardDepth++;
       visitExpr(expr.right, (n) => {
         expr.right = n;
       });
+      if (isGuardOp && hooks.guardDepth !== undefined) hooks.guardDepth--;
     } else if (tstl.isUnaryExpression(expr)) {
       visitExpr(expr.operand, (n) => {
         expr.operand = n;
@@ -106,13 +114,18 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
         expr.condition = n;
       });
       if (stopped) return;
+      if (hooks.guardDepth !== undefined) hooks.guardDepth++;
       visitExpr(expr.whenTrue, (n) => {
         expr.whenTrue = n;
       });
-      if (stopped) return;
+      if (stopped) {
+        if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+        return;
+      }
       visitExpr(expr.whenFalse, (n) => {
         expr.whenFalse = n;
       });
+      if (hooks.guardDepth !== undefined) hooks.guardDepth--;
     }
   }
 
@@ -157,8 +170,12 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
         stmt.condition = n;
       });
       if (stopped) return;
+      if (hooks.guardDepth !== undefined) hooks.guardDepth++;
       walkStmts(stmt.ifBlock.statements);
-      if (stopped) return;
+      if (stopped) {
+        if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+        return;
+      }
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
           walkStmt(stmt.elseBlock);
@@ -166,6 +183,7 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
           walkStmts(stmt.elseBlock.statements);
         }
       }
+      if (hooks.guardDepth !== undefined) hooks.guardDepth--;
     } else if (tstl.isWhileStatement(stmt)) {
       visitExpr(stmt.condition, (n) => {
         stmt.condition = n;
