@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { hasSideEffects, SideEffectOptions } from "../../src/lua-ast/ts-ast";
+import { hasSideEffects, SideEffectOptions } from "../../src/ast/ts-ast";
 
 /** Parse a TS expression string into an AST node. */
 function parseExpr(code: string): ts.Expression {

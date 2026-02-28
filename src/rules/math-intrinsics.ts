@@ -1,8 +1,8 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
-import { hasSideEffects } from "../lua-ast/ts-ast";
 
 function isMathMethodCall(node: ts.CallExpression, checker: ts.TypeChecker): string | undefined {
   const expr = node.expression;

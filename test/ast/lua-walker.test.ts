@@ -1,7 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { walkStatements } from "../../src/lua-ast/lua-walker";
+import { walkStatements } from "../../src/ast/lua-walker";
 
 function id(name: string): tstl.Identifier {
   return tstl.createIdentifier(name);

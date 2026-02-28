@@ -1,8 +1,8 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { walkStatements } from "../../src/lua-ast/lua-walker";
-import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../src/lua-ast/scope";
+import { walkStatements } from "../../src/ast/lua-walker";
+import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../src/ast/scope";
 
 function countPropertyAccess(statements: tstl.Statement[], chain: string): number {
   let count = 0;
