@@ -61,3 +61,6 @@ Thumbs.db
 
 # Research repos
 research/
+
+# Conformance test TSTL clone
+.conformance/
