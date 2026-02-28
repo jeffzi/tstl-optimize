@@ -51,3 +51,12 @@ jobs:
           if find test -name '*.test.ts' 2>/dev/null | grep -q .; then
             npm run test -- --coverage
           fi
+
+      - name: Cache TSTL conformance clone
+        uses: actions/cache@v4
+        with:
+          path: .conformance
+          key: conformance-${{ hashFiles('scripts/conformance.mjs', 'scripts/conformance.patch') }}
+
+      - name: Conformance tests
+        run: npm run test:conformance
