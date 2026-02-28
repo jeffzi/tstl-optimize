@@ -146,6 +146,26 @@ describe("loop-rebase", () => {
       expect(lua).toContain("for i = 1, n do");
     });
 
+    it("blocks when variable declaration shadows control variable", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "let sum = 0;",
+          "for (const i of $range(0, n - 1)) {",
+          "  if (n > 0) {",
+          "    let i = 99;",
+          "    sum += arr[i];",
+          "  }",
+          "  sum += arr[i];",
+          "}",
+        ].join("\n"),
+      );
+      // `let i = 99` shadows the control variable inside the if-block;
+      // rebase must be blocked to avoid replacing the shadowed i + 1
+      expect(lua).toContain("for i = 0, n - 1 do");
+    });
+
     it("handles limit that is an arbitrary expression", () => {
       const lua = compile(
         [

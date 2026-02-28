@@ -55,8 +55,8 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
         return;
       }
 
-      // Assignment to the variable itself → blocks rebase
-      if (tstl.isAssignmentStatement(stmt)) {
+      // Assignment or local declaration targeting the control variable → blocks rebase
+      if (tstl.isAssignmentStatement(stmt) || tstl.isVariableDeclarationStatement(stmt)) {
         for (const lhs of stmt.left) {
           if (tstl.isIdentifier(lhs) && lhs.text === varName) {
             blocked = true;
