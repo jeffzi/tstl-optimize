@@ -29,9 +29,7 @@ process.stdout.write("==> Building tstl-optimize plugin...\n");
 run("npm", ["run", "build"], { cwd: projectRoot });
 
 // 2. Clone + setup TSTL if needed
-const cachedTag = existsSync(readyMarker)
-  ? readFileSync(readyMarker, "utf8").trim()
-  : "";
+const cachedTag = existsSync(readyMarker) ? readFileSync(readyMarker, "utf8").trim() : "";
 if (cachedTag !== TSTL_TAG) {
   // Clean up stale or incomplete setup
   if (existsSync(conformanceDir)) {
@@ -40,15 +38,7 @@ if (cachedTag !== TSTL_TAG) {
   }
 
   process.stdout.write(`==> Cloning TSTL ${TSTL_TAG}...\n`);
-  run("git", [
-    "clone",
-    "--depth",
-    "1",
-    "--branch",
-    TSTL_TAG,
-    TSTL_REPO,
-    conformanceDir,
-  ]);
+  run("git", ["clone", "--depth", "1", "--branch", TSTL_TAG, TSTL_REPO, conformanceDir]);
 
   process.stdout.write("==> Installing TSTL dependencies...\n");
   run("npm", ["install"], { cwd: conformanceDir });
