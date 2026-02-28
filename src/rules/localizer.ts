@@ -1,10 +1,10 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { walkStatements } from "../ast/lua-walker";
+import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../ast/scope";
 import type { LocalizerConfig, RuleFactory } from "../config";
 import { resolveLocalizerConfig } from "../config";
-import { walkStatements } from "../lua-ast/lua-walker";
-import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../lua-ast/scope";
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
 function replaceChains(statements: tstl.Statement[], hoisted: Map<string, tstl.Identifier>): void {

@@ -2,8 +2,8 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
-import { hasSideEffects } from "../lua-ast/ts-ast";
 
 interface InlineTarget {
   bodyExpr: ts.Expression;
