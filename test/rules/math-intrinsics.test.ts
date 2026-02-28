@@ -36,6 +36,12 @@ describe("math-intrinsics", () => {
       expect(lua).toContain("x < 0");
     });
 
+    it("parenthesizes negation to avoid Lua comment syntax", () => {
+      const lua = compile("const r = Math.abs(-42);");
+      expect(lua).not.toContain("--42");
+      expect(lua).toContain("-(-42)");
+    });
+
     it("keeps math.abs when argument has side effects", () => {
       const lua = compile("declare function foo(): number; const a = Math.abs(foo());");
       expect(lua).toContain("math.abs");
