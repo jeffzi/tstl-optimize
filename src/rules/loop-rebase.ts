@@ -19,11 +19,6 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
 
   walkStatements(body.statements, {
     expr: (expr, replace, control) => {
-      if (blocked) {
-        control.stop();
-        return;
-      }
-
       // var + 1 or 1 + var → rebaseable
       if (tstl.isBinaryExpression(expr) && expr.operator === tstl.SyntaxKind.AdditionOperator) {
         const lIsVar = tstl.isIdentifier(expr.left) && expr.left.text === varName;
@@ -50,11 +45,6 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
       }
     },
     stmt: (stmt, control) => {
-      if (blocked) {
-        control.stop();
-        return;
-      }
-
       // Assignment or local declaration targeting the control variable → blocks rebase
       if (tstl.isAssignmentStatement(stmt) || tstl.isVariableDeclarationStatement(stmt)) {
         for (const lhs of stmt.left) {
