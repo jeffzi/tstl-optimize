@@ -178,5 +178,67 @@ describe("loop-rebase", () => {
       // limit was `len() - 1`, after increment becomes `len()`
       expect(lua).toContain("for i = 1, len() do");
     });
+
+    it("handles limit that is neither literal nor n-1 pattern", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare function len(): number;",
+          "let sum = 0;",
+          "for (const i of $range(0, len())) { sum += arr[i]; }",
+        ].join("\n"),
+      );
+      // limit is len() — not a literal and not n-1; fallback adds +1
+      expect(lua).toContain("for i = 1, len() + 1 do");
+    });
+
+    it("blocks rebase when step is not 1", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "let sum = 0;",
+          "for (const i of $range(0, n - 1, 2)) { sum += arr[i]; }",
+        ].join("\n"),
+      );
+      // step=2 blocks rebase — original loop preserved
+      expect(lua).toContain("for i = 0, n - 1, 2 do");
+    });
+
+    it("rebases when closure param shadows control variable", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare function consume(f: (i: number) => number): void;",
+          "let sum = 0;",
+          "for (const i of $range(0, n - 1)) {",
+          "  consume((i: number) => i * 2);",
+          "  sum += arr[i];",
+          "}",
+        ].join("\n"),
+      );
+      // Arrow param `i` shadows control var — its body is skipped
+      // Outer `arr[i]` still rebases
+      expect(lua).toContain("for i = 1, n do");
+    });
+
+    it("skips nested for-in that shadows control variable", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare const obj: Record<string, number>;",
+          "let sum = 0;",
+          "for (const i of $range(0, n - 1)) {",
+          "  for (const i in obj) {}",
+          "  sum += arr[i];",
+          "}",
+        ].join("\n"),
+      );
+      // Inner for-in shadows `i` — its body is skipped
+      // Outer `arr[i]` still rebases
+      expect(lua).toContain("for i = 1, n do");
+    });
   });
 });

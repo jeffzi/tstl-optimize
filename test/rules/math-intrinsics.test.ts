@@ -127,41 +127,42 @@ describe("math-intrinsics", () => {
   describe("luajit target", () => {
     const jit = { pluginOptions: { target: "luajit" as const } };
 
-    it("skips floor transform on LuaJIT", () => {
-      const lua = compile("declare const x: number; const a = Math.floor(x);", jit);
-      expect(lua).toContain("math.floor");
-    });
-
-    it("skips sqrt transform on LuaJIT", () => {
-      const lua = compile("declare const x: number; const a = Math.sqrt(x);", jit);
-      expect(lua).toContain("math.sqrt");
-    });
-
-    it("skips abs transform on LuaJIT", () => {
-      const lua = compile("declare const x: number; const a = Math.abs(x);", jit);
-      expect(lua).toContain("math.abs");
-    });
-
-    it("skips max transform on LuaJIT", () => {
-      const lua = compile(
-        "declare const a: number; declare const b: number; const c = Math.max(a, b);",
-        jit,
-      );
-      expect(lua).toContain("math.max");
-    });
-
-    it("skips min transform on LuaJIT", () => {
-      const lua = compile(
-        "declare const a: number; declare const b: number; const c = Math.min(a, b);",
-        jit,
-      );
-      expect(lua).toContain("math.min");
-    });
-
-    it("still applies x ** 2 → x * x on LuaJIT", () => {
-      const lua = compile("declare const x: number; const a = x ** 2;", jit);
-      expect(lua).toContain("x * x");
-      expect(lua).not.toContain("^");
+    it.each([
+      {
+        name: "skips floor transform",
+        source: "declare const x: number; const a = Math.floor(x);",
+        contains: ["math.floor"],
+      },
+      {
+        name: "skips sqrt transform",
+        source: "declare const x: number; const a = Math.sqrt(x);",
+        contains: ["math.sqrt"],
+      },
+      {
+        name: "skips abs transform",
+        source: "declare const x: number; const a = Math.abs(x);",
+        contains: ["math.abs"],
+      },
+      {
+        name: "skips max transform",
+        source: "declare const a: number; declare const b: number; const c = Math.max(a, b);",
+        contains: ["math.max"],
+      },
+      {
+        name: "skips min transform",
+        source: "declare const a: number; declare const b: number; const c = Math.min(a, b);",
+        contains: ["math.min"],
+      },
+      {
+        name: "still applies x ** 2 → x * x",
+        source: "declare const x: number; const a = x ** 2;",
+        contains: ["x * x"],
+        excludes: ["^"],
+      },
+    ])("$name on LuaJIT", ({ source, contains, excludes }) => {
+      const lua = compile(source, jit);
+      for (const s of contains) expect(lua).toContain(s);
+      for (const s of excludes ?? []) expect(lua).not.toContain(s);
     });
   });
 });
