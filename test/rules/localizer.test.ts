@@ -489,6 +489,55 @@ describe("localizer", () => {
     });
   });
 
+  describe("lualib interaction", () => {
+    it("does not hoist class prototype chains when class is locally defined", () => {
+      const lua = compile(
+        [
+          "class Animal {",
+          "  name: string;",
+          "  constructor(name: string) { this.name = name; }",
+          "  speak(): string { return this.name; }",
+          "  greet(): string { return this.name; }",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "module" } } },
+          luaLibImport: tstl.LuaLibImportKind.Inline,
+        },
+      );
+      // Animal is locally assigned (Animal = __TS__Class()), so Animal.prototype
+      // chains must NOT be hoisted — hoisting above the assignment would read nil.
+      expect(lua).not.toContain("local ____Animal_prototype");
+      expect(lua).toContain("Animal.prototype");
+    });
+
+    it("does not hoist chains on inherited class with lualib", () => {
+      const lua = compile(
+        [
+          "class Animal {",
+          "  name: string;",
+          "  constructor(name: string) { this.name = name; }",
+          "  speak(): string { return this.name; }",
+          "}",
+          "class Dog extends Animal {",
+          "  breed: string;",
+          "  constructor(name: string, breed: string) { super(name); this.breed = breed; }",
+          "  speak(): string { return this.name + ' barks'; }",
+          "  greet(): string { return this.name + ' wags'; }",
+          "}",
+          "const d = new Dog('Rex', 'Lab');",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "module" } } },
+          luaLibImport: tstl.LuaLibImportKind.Inline,
+        },
+      );
+      // Both classes are locally assigned — no hoisting of their chains
+      expect(lua).not.toContain("local ____Animal_prototype");
+      expect(lua).not.toContain("local ____Dog_prototype");
+    });
+  });
+
   describe("interaction with other rules", () => {
     it("math-intrinsics transforms Math.floor to inline on PUC — nothing for localizer to hoist", () => {
       const lua = compile(

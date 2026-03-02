@@ -6,6 +6,7 @@ import { OptimizePlugin } from "../src/index";
 export interface CompileOptions {
   pluginOptions?: Record<string, unknown>;
   luaTarget?: tstl.LuaTarget;
+  luaLibImport?: tstl.LuaLibImportKind;
 }
 
 export interface CompileResult {
@@ -14,7 +15,11 @@ export interface CompileResult {
 }
 
 function transpile(source: string, options?: CompileOptions): tstl.TranspileVirtualProjectResult {
-  const { pluginOptions, luaTarget = tstl.LuaTarget.Lua51 } = options ?? {};
+  const {
+    pluginOptions,
+    luaTarget = tstl.LuaTarget.Lua51,
+    luaLibImport = tstl.LuaLibImportKind.None,
+  } = options ?? {};
   const plugin = new OptimizePlugin(pluginOptions);
   return tstl.transpileVirtualProject(
     { "main.ts": source },
@@ -23,7 +28,7 @@ function transpile(source: string, options?: CompileOptions): tstl.TranspileVirt
       luaPlugins: [{ plugin }],
       noImplicitSelf: true,
       luaTarget,
-      luaLibImport: tstl.LuaLibImportKind.None,
+      luaLibImport,
       strict: true,
       // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
       // which lets the type checker identify loop variables as `number` (not `any`)
