@@ -1,6 +1,12 @@
 import type ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 
+export interface DebugStripConfig {
+  enabled: boolean;
+  functions: string[];
+  namespaces: string[];
+}
+
 export type LocalizerScope = "module" | "function" | "all";
 
 export interface LocalizerConfig {
@@ -14,6 +20,7 @@ export interface RulesConfig {
   "loop-rebase": boolean;
   inline: boolean;
   localizer: boolean | LocalizerConfig;
+  "debug-strip": boolean | DebugStripConfig;
 }
 
 export type InterpreterTarget = "puc" | "luajit";
@@ -22,6 +29,12 @@ export interface PluginConfig {
   rules: RulesConfig;
   target?: InterpreterTarget;
 }
+
+const DEFAULT_DEBUG_STRIP: DebugStripConfig = {
+  enabled: true,
+  functions: ["print", "assert"],
+  namespaces: ["debug"],
+};
 
 const DEFAULT_LOCALIZER: LocalizerConfig = {
   enabled: true,
@@ -34,7 +47,16 @@ const DEFAULT_RULES: RulesConfig = {
   "loop-rebase": true,
   inline: true,
   localizer: true,
+  "debug-strip": false,
 };
+
+export function resolveDebugStripConfig(
+  value: boolean | DebugStripConfig | undefined,
+): DebugStripConfig | false {
+  if (value === false) return false;
+  if (value === undefined || value === true) return { ...DEFAULT_DEBUG_STRIP };
+  return { ...DEFAULT_DEBUG_STRIP, ...value };
+}
 
 export function resolveLocalizerConfig(
   value: boolean | LocalizerConfig | undefined,
@@ -68,6 +90,10 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
         if (typeof val === "boolean" || isRecord(val)) {
           // Safe after guard: val is boolean or a config object from tsconfig.json
           rules.localizer = val as boolean | LocalizerConfig;
+        }
+      } else if (key === "debug-strip") {
+        if (typeof val === "boolean" || isRecord(val)) {
+          rules["debug-strip"] = val as boolean | DebugStripConfig;
         }
       } else if (typeof val === "boolean") {
         rules[key] = val;

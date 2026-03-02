@@ -2,6 +2,7 @@ import type ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { isRuleEnabled, type PluginConfig, parseConfig, type RuleFactory } from "./config";
+import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
@@ -13,6 +14,7 @@ const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
   ["localizer", localizerVisitors],
+  ["debug-strip", debugStripVisitors],
 ];
 
 class OptimizePlugin implements tstl.Plugin {
