@@ -29,10 +29,9 @@ function getBodyExpression(
   return stmt.expression;
 }
 
-function getInlineTarget(
-  node: ts.CallExpression,
-  checker: ts.TypeChecker,
-): InlineTarget | undefined {
+type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
+
+function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): InlineTargetResult {
   const symbol = checker.getSymbolAtLocation(node.expression);
   if (!symbol) return undefined;
 
@@ -44,8 +43,16 @@ function getInlineTarget(
     if (ts.isFunctionDeclaration(decl)) {
       if (!hasInlineTag(decl)) continue;
       const bodyExpr = getBodyExpression(decl);
-      if (!bodyExpr) continue;
-      return { bodyExpr, params: decl.parameters, declaration: decl, resolvedSymbol: resolved };
+      if (!bodyExpr)
+        return { reason: "body must be a single return statement or arrow expression" };
+      return {
+        target: {
+          bodyExpr,
+          params: decl.parameters,
+          declaration: decl,
+          resolvedSymbol: resolved,
+        },
+      };
     }
 
     if (ts.isVariableDeclaration(decl) && decl.initializer) {
@@ -56,8 +63,16 @@ function getInlineTarget(
       const init = decl.initializer;
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
         const bodyExpr = getBodyExpression(init);
-        if (!bodyExpr) continue;
-        return { bodyExpr, params: init.parameters, declaration: decl, resolvedSymbol: resolved };
+        if (!bodyExpr)
+          return { reason: "body must be a single return statement or arrow expression" };
+        return {
+          target: {
+            bodyExpr,
+            params: init.parameters,
+            declaration: decl,
+            resolvedSymbol: resolved,
+          },
+        };
       }
     }
   }
@@ -116,28 +131,33 @@ function canInline(
   target: InlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
-): boolean {
+): true | string {
   const { bodyExpr, params, declaration, resolvedSymbol } = target;
 
-  if (callNode.arguments.length !== params.length) return false;
-
   for (const param of params) {
-    if (param.dotDotDotToken || param.questionToken || param.initializer) return false;
+    if (param.dotDotDotToken) return "rest parameters are not supported";
+    if (param.questionToken) return "optional parameters are not supported";
+    if (param.initializer) return "default parameters are not supported";
   }
 
-  if (!isModuleScopeDeclaration(declaration)) return false;
+  if (callNode.arguments.length !== params.length)
+    return "argument count does not match parameter count";
+
+  if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
 
   // Reject recursion: body references the function itself
-  if (countReferences(bodyExpr, resolvedSymbol, checker) > 0) return false;
+  if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
+    return "recursive functions cannot be inlined";
 
   for (let i = 0; i < params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return false;
+    if (!paramSymbol) return "parameter symbol could not be resolved";
     // Reject if any reference to this param is a write (assignment inside body)
-    if (isParamWritten(bodyExpr, paramSymbol, checker)) return false;
+    if (isParamWritten(bodyExpr, paramSymbol, checker)) return "parameter is written inside body";
     // Reject side-effect duplication: param used >1 times with side-effecting arg
     const usageCount = countReferences(bodyExpr, paramSymbol, checker);
-    if (usageCount > 1 && hasSideEffects(callNode.arguments[i])) return false;
+    if (usageCount > 1 && hasSideEffects(callNode.arguments[i]))
+      return "argument with side effects is used multiple times";
   }
 
   return true;
@@ -226,14 +246,35 @@ function needsParentheses(node: tstl.Expression): boolean {
   );
 }
 
+function createInlineWarning(node: ts.CallExpression, reason: string): ts.Diagnostic {
+  return {
+    file: node.getSourceFile(),
+    start: node.getStart(),
+    length: node.getWidth(),
+    messageText: `@inline ignored: ${reason}`,
+    category: ts.DiagnosticCategory.Warning,
+    code: 90001,
+    source: "tstl-optimize",
+  };
+}
+
 function handleCallExpression(
   node: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
 ): tstl.Expression | undefined {
-  const target = getInlineTarget(node, checker);
-  if (!target) return undefined;
-  if (!canInline(target, node, checker)) return undefined;
+  const result = getInlineTarget(node, checker);
+  if (!result) return undefined;
+  if ("reason" in result) {
+    context.diagnostics.push(createInlineWarning(node, result.reason));
+    return undefined;
+  }
+  const { target } = result;
+  const canInlineResult = canInline(target, node, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(node, canInlineResult));
+    return undefined;
+  }
 
   const luaBody = context.transformExpression(target.bodyExpr);
 
