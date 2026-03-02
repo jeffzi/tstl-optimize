@@ -22,10 +22,6 @@ function isStrippedCall(
     const root = rootIdentifier(callee);
     if (root) return namespaces.has(root.text);
   }
-  if (tstl.isMethodCallExpression(expr)) {
-    const root = rootIdentifier(expr.prefixExpression);
-    if (root) return namespaces.has(root.text);
-  }
   return false;
 }
 

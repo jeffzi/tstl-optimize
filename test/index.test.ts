@@ -1,7 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { parseConfig } from "../src/config";
+import { isRuleEnabled, parseConfig } from "../src/config";
 import pluginFactory from "../src/index";
 import { compile } from "./helpers";
 
@@ -33,18 +33,75 @@ describe("parseConfig target", () => {
     expect(parseConfig({}).target).toBeUndefined();
   });
 
-  it("accepts 'puc' as target", () => {
-    expect(parseConfig({ target: "puc" }).target).toBe("puc");
-  });
-
-  it("accepts 'luajit' as target", () => {
-    expect(parseConfig({ target: "luajit" }).target).toBe("luajit");
+  it.each(["puc", "luajit"] as const)("accepts '%s' as target", (target) => {
+    expect(parseConfig({ target }).target).toBe(target);
   });
 
   it("ignores invalid target values", () => {
     expect(parseConfig({ target: "v8" }).target).toBeUndefined();
     expect(parseConfig({ target: 42 }).target).toBeUndefined();
     expect(parseConfig({ target: true }).target).toBeUndefined();
+  });
+});
+
+describe("isRuleEnabled", () => {
+  it("returns true for boolean true", () => {
+    const config = parseConfig({ rules: { "math-intrinsics": true } });
+    expect(isRuleEnabled(config.rules, "math-intrinsics")).toBe(true);
+  });
+
+  it("returns false for boolean false", () => {
+    const config = parseConfig({ rules: { "math-intrinsics": false } });
+    expect(isRuleEnabled(config.rules, "math-intrinsics")).toBe(false);
+  });
+
+  it("returns true for object config with enabled: true", () => {
+    const config = parseConfig({ rules: { localizer: { enabled: true, threshold: 5 } } });
+    expect(isRuleEnabled(config.rules, "localizer")).toBe(true);
+  });
+
+  it("returns false for object config with enabled: false", () => {
+    const config = parseConfig({ rules: { localizer: { enabled: false } } });
+    expect(isRuleEnabled(config.rules, "localizer")).toBe(false);
+  });
+
+  it("returns true for object config without enabled field", () => {
+    const config = parseConfig({ rules: { localizer: { threshold: 3 } } });
+    expect(isRuleEnabled(config.rules, "localizer")).toBe(true);
+  });
+});
+
+describe("parseConfig rules edge cases", () => {
+  it("ignores non-boolean non-object localizer value", () => {
+    const config = parseConfig({ rules: { localizer: "invalid" } });
+    // Invalid value ignored — default (true) preserved
+    expect(config.rules.localizer).toBe(true);
+  });
+
+  it("ignores non-boolean non-object debug-strip value", () => {
+    const config = parseConfig({ rules: { "debug-strip": "invalid" } });
+    expect(config.rules["debug-strip"]).toBe(false);
+  });
+
+  it("ignores non-boolean value for simple boolean rules", () => {
+    const config = parseConfig({ rules: { "math-intrinsics": "invalid" } });
+    expect(config.rules["math-intrinsics"]).toBe(true);
+  });
+
+  it("ignores rules when not an object", () => {
+    const config = parseConfig({ rules: "bad" });
+    expect(config.rules["math-intrinsics"]).toBe(true);
+    expect(config.rules.localizer).toBe(true);
+  });
+
+  it("accepts localizer object config", () => {
+    const config = parseConfig({ rules: { localizer: { threshold: 5 } } });
+    expect(config.rules.localizer).toStrictEqual({ threshold: 5 });
+  });
+
+  it("accepts debug-strip object config", () => {
+    const config = parseConfig({ rules: { "debug-strip": { functions: ["myFn"] } } });
+    expect(config.rules["debug-strip"]).toStrictEqual({ functions: ["myFn"] });
   });
 });
 

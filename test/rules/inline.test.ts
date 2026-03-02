@@ -103,6 +103,51 @@ describe("inline", () => {
       expect(lua).toContain("foo() * 2");
       expect(lua).not.toContain("= double(");
     });
+
+    it("inlines function returning object literal", () => {
+      const lua = compile(`
+        /** @inline */
+        function wrap(x: number) { return { value: x }; }
+        declare const a: number;
+        const r = wrap(a);
+      `);
+      expect(lua).toContain("value = a");
+      expect(lua).not.toContain("= wrap(");
+    });
+
+    it("inlines function with property access on parameter", () => {
+      const lua = compile(`
+        /** @inline */
+        function getX(obj: { x: number }) { return obj.x; }
+        declare const t: { x: number };
+        const r = getX(t);
+      `);
+      expect(lua).toContain("t.x");
+      expect(lua).not.toContain("= getX(");
+    });
+
+    it("inlines function with negated parameter", () => {
+      const lua = compile(`
+        /** @inline */
+        function neg(x: number) { return -x; }
+        declare const a: number;
+        const r = neg(a);
+      `);
+      expect(lua).toContain("-a");
+      expect(lua).not.toContain("= neg(");
+    });
+
+    it("inlines function with call expression in body", () => {
+      const lua = compile(`
+        declare function process(x: number): number;
+        /** @inline */
+        function wrap(x: number) { return process(x); }
+        declare const a: number;
+        const r = wrap(a);
+      `);
+      expect(lua).toContain("process(a)");
+      expect(lua).not.toContain("= wrap(");
+    });
   });
 
   describe("negative: not inlined", () => {

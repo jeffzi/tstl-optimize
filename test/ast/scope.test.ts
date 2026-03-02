@@ -259,8 +259,12 @@ describe("buildChainExpression", () => {
   });
 
   it("round-trips with luaPropertyChain", () => {
-    for (const chain of ["math.cos", "a.b.c.d", "os.clock"]) {
-      expect(luaPropertyChain(buildChainExpression(chain))).toBe(chain);
-    }
+    expect(luaPropertyChain(buildChainExpression("math.cos"))).toBe("math.cos");
+    expect(luaPropertyChain(buildChainExpression("a.b.c.d"))).toBe("a.b.c.d");
+    expect(luaPropertyChain(buildChainExpression("os.clock"))).toBe("os.clock");
+  });
+
+  it("throws for single-segment chain", () => {
+    expect(() => buildChainExpression("math")).toThrow("dotted chain");
   });
 });
