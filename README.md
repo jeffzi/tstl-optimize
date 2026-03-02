@@ -5,7 +5,7 @@
 
 A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that generates faster Lua
 code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. Every
-rule is on by default; toggle each one individually.
+rule defaults to on except `debug-strip`, which removes code. Toggle each rule individually.
 
 ## Installation
 
@@ -39,7 +39,8 @@ To customize rules:
           "math-intrinsics": true,
           "loop-rebase": true,
           "inline": true,
-          "localizer": { "threshold": 3, "scope": "function" }
+          "localizer": { "threshold": 3, "scope": "function" },
+          "debug-strip": { "functions": ["print", "assert"], "namespaces": ["debug"] }
         },
         // Optional: auto-detected from luaTarget when omitted
         "target": "puc" // or "luajit"
@@ -54,7 +55,7 @@ To customize rules:
 ### `math-intrinsics`
 
 Replaces `Math.*` calls with inline Lua expressions, eliminating the overhead of a C function call
-through the `math` table. Skipped for `"luajit"` because LuaJIT already dispatches C calls fast.
+through the `math` table. Skipped on LuaJIT, which already dispatches C calls fast.
 
 | Source | Lua output | Notes |
 | --- | --- | --- |
@@ -66,7 +67,7 @@ through the `math` table. Skipped for `"luajit"` because LuaJIT already dispatch
 | `x ** 2` | `x * x` | Lossless. Literal `2` exponent only |
 
 The rule applies `abs`, `max`, and `min` only to side-effect-free arguments, so duplicating them in
-the output stays safe.
+the output is safe.
 
 > **Edge cases:** The `-0` and `NaN` deviations are deliberate trade-offs. Typical Lua 5.1 game
 > code never observes these values. If your code relies on IEEE 754 `NaN` propagation or `-0`
@@ -74,7 +75,7 @@ the output stays safe.
 
 ### `loop-rebase`
 
-Converts 0-based `$range` for-of loops into 1-based Lua for loops when the body references the loop
+Converts 0-based `$range` for-of loops into 1-based Lua for loops when the body uses the loop
 variable only as `i + 1`.
 
 ```typescript
@@ -89,8 +90,8 @@ for (const i of $range(0, n - 1)) {
 -- After:  for i = 1, n do arr[i] = value end
 ```
 
-The rule bails out when the body assigns the control variable, references it without `+ 1`, or
-shadows it in a nested declaration.
+The rule bails out when the body assigns the control variable, uses it without `+ 1`, or shadows it
+in a nested declaration.
 
 ### `inline`
 
@@ -117,8 +118,8 @@ A function qualifies for inlining when it meets all these conditions:
 ### `localizer`
 
 Hoists repeated table-index chains (e.g., `math.floor`, `game.players.count`) into local variables
-at the top of the scope. Inside loop bodies, repeated `arr[i]` accesses (where `i` is the loop
-control variable) are also localized; a write-back is appended when the element is assigned.
+at the top of the scope. Inside loop bodies, the rule also localizes repeated `arr[i]` accesses
+(where `i` is the loop control variable) and appends a write-back when the element is assigned.
 
 ```lua
 -- Static chain hoisting
@@ -138,9 +139,9 @@ end                                    pos[i] = pos[i] + ____vel * dt
 ```
 
 Array element localization handles only the simple case: the base must be a plain identifier, the
-index must be exactly a loop control variable, loops with function calls are skipped entirely (a call could
-modify the array through a reference, making the cached local stale), and loops with early exits
-(`break`/`return`) skip write-back candidates.
+index must be exactly a loop control variable, the rule skips loops containing function calls (a call
+could modify the array through a reference, making the cached local stale), and skips write-back
+candidates in loops with early exits (`break`/`return`).
 
 Options:
 
@@ -148,6 +149,39 @@ Options:
 | --- | --- | --- | --- |
 | `threshold` | `number` | `2` | Minimum read-count before hoisting |
 | `scope` | `"module" \| "function" \| "all"` | `"all"` | Where hoisting is applied |
+
+### `debug-strip`
+
+Strips debug and profiling calls from the Lua output. **Off by default** — enable it explicitly,
+since it removes code rather than optimizing it. Set `"debug-strip": true` to enable with defaults,
+or pass an object to customize which calls are stripped.
+
+```lua
+-- Before                          -- After (with debug-strip enabled)
+print("player health:", hp)        -- (removed)
+debug.traceback()                  -- (removed)
+assert(hp > 0)                     -- (removed)
+local x = compute()               local x = compute()
+```
+
+The rule strips only calls in **statement position**. It preserves calls whose return value is used
+(variable initializers, return values, function arguments).
+
+Options:
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `functions` | `string[]` | `["print", "assert"]` | Bare function names to strip |
+| `namespaces` | `string[]` | `["debug"]` | Namespace prefixes to strip (`debug.*()`) |
+
+**Limitations:**
+
+- **Name-based matching** — matches Lua-level identifier text, not TS types. A local variable named
+  `print` that shadows the global will also be stripped.
+- **`assert` removal is semantic** — strips the runtime error-on-falsy check, not just output.
+  Understand this tradeoff before enabling the rule.
+- **Custom config replaces defaults** — `functions: ["myDebug"]` replaces the default list; it does
+  not extend it. Include defaults explicitly to keep both.
 
 ## Configuration reference
 
@@ -157,6 +191,7 @@ Options:
 | `rules.loop-rebase` | `boolean` | `true` | Enable 0-to-1-based loop conversion |
 | `rules.inline` | `boolean` | `true` | Enable `@inline` function inlining |
 | `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Enable table-chain hoisting |
+| `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |
 
 ## Examples

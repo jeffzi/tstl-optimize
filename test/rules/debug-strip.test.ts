@@ -1,0 +1,231 @@
+import { describe, expect, it } from "vitest";
+import { compile } from "../helpers";
+
+const enabled = { pluginOptions: { rules: { "debug-strip": true } } };
+
+/** Collapse whitespace so assertions catch any leftover fragments. */
+function normalize(lua: string): string {
+  return lua
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+describe("debug-strip", () => {
+  describe("functions (bare function stripping)", () => {
+    it("strips print() in statement position", () => {
+      const lua = compile('print("hello"); const x = 1;', enabled);
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("strips assert() in statement position", () => {
+      const lua = compile("declare const cond: boolean; assert(cond); const x = 1;", enabled);
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("strips call with multiple arguments", () => {
+      const lua = compile('print("x", "y", "z"); const x = 1;', enabled);
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("does not strip unlisted functions", () => {
+      const lua = compile("declare function foo(): void; foo();", enabled);
+      expect(normalize(lua)).toBe("foo()");
+    });
+  });
+
+  describe("namespaces (namespace method stripping)", () => {
+    it("strips debug.traceback()", () => {
+      const lua = compile(
+        "declare namespace debug { function traceback(): string; } debug.traceback(); const x = 1;",
+        enabled,
+      );
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("strips namespace call with arguments", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function sethook(fn: () => void, mask: string, count: number): void; }",
+          'debug.sethook(() => {}, "c", 0);',
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("strips nested namespace calls (debug.profiler.start())", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { namespace profiler { function start(): void; } }",
+          "debug.profiler.start();",
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("x = 1");
+    });
+  });
+
+  describe("preserves (return value used — must NOT strip)", () => {
+    it("keeps print() used as variable initializer", () => {
+      const lua = compile(
+        'declare function print(msg: string): string; const x = print("x");',
+        enabled,
+      );
+      expect(normalize(lua)).toBe('x = print("x")');
+    });
+
+    it("keeps assert() used as return value", () => {
+      const lua = compile(
+        [
+          "declare function assert<T>(v: T): T;",
+          "function check(v: number): number { return assert(v); }",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("function check(v)\nreturn assert(v)\nend");
+    });
+
+    it("keeps print() used as argument", () => {
+      const lua = compile(
+        [
+          "declare function print(msg: string): string;",
+          "declare function foo(s: string): void;",
+          'foo(print("x"));',
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe('foo(print("x"))');
+    });
+  });
+
+  describe("config", () => {
+    it("custom functions list replaces defaults", () => {
+      const lua = compile(
+        'declare function myDebug(msg: string): void; print("a"); myDebug("b");',
+        { pluginOptions: { rules: { "debug-strip": { functions: ["myDebug"] } } } },
+      );
+      expect(normalize(lua)).toBe('print("a")');
+    });
+
+    it("custom namespaces list replaces defaults", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function traceback(): string; }",
+          "declare namespace profiler { function start(): void; }",
+          "debug.traceback();",
+          "profiler.start();",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["profiler"] } } } },
+      );
+      expect(normalize(lua)).toBe("debug.traceback()");
+    });
+
+    it('"debug-strip": false disables the rule', () => {
+      const lua = compile('print("hello");', {
+        pluginOptions: { rules: { "debug-strip": false } },
+      });
+      expect(normalize(lua)).toBe('print("hello")');
+    });
+
+    it('"debug-strip": { enabled: false } disables the rule', () => {
+      const lua = compile('print("hello");', {
+        pluginOptions: { rules: { "debug-strip": { enabled: false } } },
+      });
+      expect(normalize(lua)).toBe('print("hello")');
+    });
+  });
+
+  describe("multi-line (mixed stripped and kept statements)", () => {
+    it("strips only targeted calls among multiple statements", () => {
+      const lua = compile(
+        [
+          "declare const hp: number;",
+          "declare function heal(n: number): void;",
+          'print("player health:", hp);',
+          "assert(hp > 0);",
+          "heal(10);",
+          'print("healed");',
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("heal(10)");
+    });
+
+    it("strips multiple namespace calls interspersed with other code", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function traceback(): string; function sethook(): void; }",
+          "declare const x: number;",
+          "debug.traceback();",
+          "const a = x + 1;",
+          "debug.sethook();",
+          "const b = x + 2;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("a = x + 1\nb = x + 2");
+    });
+
+    it("strips a call whose arguments span multiple lines", () => {
+      const lua = compile(
+        [
+          "declare const hp: number;",
+          "declare const mp: number;",
+          "print(",
+          '  "stats:",',
+          "  hp,",
+          "  mp",
+          ");",
+          "const x = hp + mp;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("x = hp + mp");
+    });
+
+    it("strips a namespace call whose arguments span multiple lines", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function sethook(fn: () => void, mask: string, count: number): void; }",
+          "debug.sethook(",
+          "  () => {},",
+          '  "c",',
+          "  0",
+          ");",
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("strips mixed function and namespace calls in one block", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function traceback(): string; }",
+          "declare const n: number;",
+          'print("start");',
+          "debug.traceback();",
+          "const result = n * 2;",
+          "assert(n > 0);",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("result = n * 2");
+    });
+  });
+
+  describe("interaction", () => {
+    it("coexists with other rules (different SyntaxKinds)", () => {
+      const lua = compile(
+        ["declare const x: number;", "const a = Math.floor(x);", 'print("debug");'].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": true } } },
+      );
+      expect(normalize(lua)).toBe("a = x - x % 1");
+    });
+  });
+});
