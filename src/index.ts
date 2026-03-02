@@ -1,21 +1,36 @@
-import type ts from "typescript";
+import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { isRuleEnabled, type PluginConfig, parseConfig, type RuleFactory } from "./config";
+import { createVisitors as conditionalCompilationVisitors } from "./rules/conditional-compilation";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
 
-// Registration order — last entry wins when two rules share a SyntaxKind
+// Registration order — later entries have higher priority when two rules
+// share a SyntaxKind. conditional-compilation is first (lowest priority)
+// so dead branches are stripped before other rules process surviving code.
 const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
+  ["conditional-compilation", conditionalCompilationVisitors],
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
   ["localizer", localizerVisitors],
   ["debug-strip", debugStripVisitors],
 ];
+
+// Expression SyntaxKinds registered by our rules. When multiple rules share
+// an expression kind, the merge wrapper needs a superTransformExpression
+// fallback for the case where all chained visitors return undefined.
+const EXPRESSION_KINDS: ReadonlySet<number> = new Set([
+  ts.SyntaxKind.Identifier,
+  ts.SyntaxKind.BinaryExpression,
+  ts.SyntaxKind.PrefixUnaryExpression,
+  ts.SyntaxKind.ConditionalExpression,
+  ts.SyntaxKind.CallExpression,
+]);
 
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;
@@ -52,10 +67,29 @@ class OptimizePlugin implements tstl.Plugin {
         const fn: AnyVisitor = typeof visitor === "function" ? visitor : visitor.transform;
         const existing = merged[kind];
         if (existing) {
+          // Multiple rules registered for the same SyntaxKind.
+          // Chain: higher-priority visitor (fn) runs first; returning
+          // undefined signals "not handled" and falls through to the
+          // lower-priority visitor (existing). If ALL visitors return
+          // undefined, the wrapper calls TSTL's default transformation
+          // for expression kinds; for statement kinds undefined means
+          // "erase" which is the intended semantics.
+          const isExpr = EXPRESSION_KINDS.has(kind);
           merged[kind] = (node, context) => {
             const fnResult = fn(node, context);
             if (fnResult !== undefined) return fnResult;
-            return existing(node, context);
+            const existingResult = existing(node, context);
+            if (existingResult !== undefined) return existingResult;
+            if (isExpr) return context.superTransformExpression(node as ts.Expression);
+            return undefined;
+          };
+        } else if (EXPRESSION_KINDS.has(kind)) {
+          // Wrap sole expression visitors with a superTransformExpression
+          // fallback so they can return undefined to signal "not handled"
+          merged[kind] = (node, context) => {
+            const result = fn(node, context);
+            if (result !== undefined) return result;
+            return context.superTransformExpression(node as ts.Expression);
           };
         } else {
           merged[kind] = fn;

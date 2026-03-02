@@ -109,38 +109,39 @@ function handleCallExpression(
   }
 }
 
-export const createVisitors: RuleFactory = (checker, config) => ({
-  [ts.SyntaxKind.CallExpression]: (
-    node: ts.CallExpression,
-    context: tstl.TransformationContext,
-  ) => {
-    // LuaJIT's C function dispatch is faster than inline Lua expressions
-    if (config.target !== "luajit") {
-      const result = handleCallExpression(node, checker, context);
-      if (result) return result;
-    }
-    return context.superTransformExpression(node);
-  },
-
-  [ts.SyntaxKind.BinaryExpression]: (
-    node: ts.BinaryExpression,
-    context: tstl.TransformationContext,
-  ) => {
-    // x ** 2 → x * x
-    if (node.operatorToken.kind === ts.SyntaxKind.AsteriskAsteriskToken) {
-      if (
-        ts.isNumericLiteral(node.right) &&
-        node.right.text === "2" &&
-        !hasSideEffects(node.left)
-      ) {
-        const luaBase = context.transformExpression(node.left);
-        return tstl.createBinaryExpression(
-          luaBase,
-          tstl.cloneNode(luaBase),
-          tstl.SyntaxKind.MultiplicationOperator,
-        );
+export const createVisitors: RuleFactory = (checker, config) => {
+  // Returns undefined to signal "not handled" to the merge wrapper in index.ts;
+  // the strict tstl.Visitors type doesn't model this protocol, so we cast here
+  type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
+  const visitors: Record<number, LooseVisitor> = {
+    [ts.SyntaxKind.CallExpression]: (node, context) => {
+      // LuaJIT's C function dispatch is faster than inline Lua expressions
+      if (config.target !== "luajit") {
+        const result = handleCallExpression(node as ts.CallExpression, checker, context);
+        if (result) return result;
       }
-    }
-    return context.superTransformExpression(node);
-  },
-});
+      return undefined;
+    },
+
+    [ts.SyntaxKind.BinaryExpression]: (node, context) => {
+      const binNode = node as ts.BinaryExpression;
+      // x ** 2 → x * x
+      if (binNode.operatorToken.kind === ts.SyntaxKind.AsteriskAsteriskToken) {
+        if (
+          ts.isNumericLiteral(binNode.right) &&
+          binNode.right.text === "2" &&
+          !hasSideEffects(binNode.left)
+        ) {
+          const luaBase = context.transformExpression(binNode.left);
+          return tstl.createBinaryExpression(
+            luaBase,
+            tstl.cloneNode(luaBase),
+            tstl.SyntaxKind.MultiplicationOperator,
+          );
+        }
+      }
+      return undefined;
+    },
+  };
+  return visitors as tstl.Visitors;
+};
