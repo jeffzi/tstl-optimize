@@ -45,7 +45,7 @@ const PROBES = {
   "luajit-nojit": { cmd: env.LUA_JIT || "luajit", args: ["-joff"] },
 };
 
-const ALL_LABELS = ["lua5.1", "luajit", "luajit-nojit"];
+const ALL_LABELS = Object.keys(PROBES);
 
 // --- CLI args: filter to requested labels, or run all ---
 
@@ -95,8 +95,7 @@ for (const label of labels) {
       .filter((f) => f.endsWith(".lua"))
       .sort();
   } catch {
-    process.stderr.write(`Warning: no benchmark files found in ${benchDir}\n`);
-    continue;
+    files = [];
   }
 
   if (files.length === 0) {
