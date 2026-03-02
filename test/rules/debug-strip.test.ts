@@ -56,11 +56,23 @@ describe("debug-strip", () => {
       expect(normalize(lua)).toBe("x = 1");
     });
 
-    it("strips nested namespace calls (debug.profiler.start())", () => {
+    it("strips two-level nested namespace call (debug.profiler.start())", () => {
       const lua = compile(
         [
           "declare namespace debug { namespace profiler { function start(): void; } }",
           "debug.profiler.start();",
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalize(lua)).toBe("x = 1");
+    });
+
+    it("strips three-level nested namespace call (debug.profiler.hooks.begin())", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { namespace profiler { namespace hooks { function begin(): void; } } }",
+          "debug.profiler.hooks.begin();",
           "const x = 1;",
         ].join("\n"),
         enabled,
