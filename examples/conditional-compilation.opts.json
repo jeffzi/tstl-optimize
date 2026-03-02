@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "conditional-compilation": {
+      "constants": {
+        "DEBUG": { "env": "BUILD_DEBUG", "default": false },
+        "PLATFORM": { "env": "BUILD_PLATFORM", "default": "desktop" },
+        "LOG_LEVEL": { "env": "LOG_LEVEL", "default": 0 },
+        "VERBOSE": { "env": "BUILD_VERBOSE", "default": false }
+      }
+    }
+  }
+}
