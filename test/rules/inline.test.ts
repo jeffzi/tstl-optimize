@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import { compile, compileWithDiagnostics } from "../helpers";
 
 describe("inline", () => {
   describe("positive: inlined", () => {
@@ -196,6 +196,28 @@ describe("inline", () => {
     });
   });
 
+  describe("comment cleanup", () => {
+    it("strips @inline JSDoc comment from function declaration", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).not.toContain("@inline");
+    });
+
+    it("strips @inline JSDoc comment from arrow function", () => {
+      const lua = compile(`
+        /** @inline */
+        const double = (x: number) => x * 2;
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).not.toContain("@inline");
+    });
+  });
+
   describe("edge cases", () => {
     it("does not inline when rule is disabled", () => {
       const lua = compile(
@@ -226,6 +248,126 @@ describe("inline", () => {
         const r = (double as any)();
       `);
       expect(lua).toContain("double(");
+    });
+  });
+
+  describe("warnings", () => {
+    it("warns on multi-statement body", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function compute(x: number) {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+        declare const a: number;
+        const r = compute(a);
+      `);
+      expect(lua).toContain("compute(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("single return statement");
+    });
+
+    it("warns on arity mismatch", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        // @ts-expect-error testing arity mismatch
+        const r = double();
+      `);
+      expect(lua).toContain("double(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("argument count");
+    });
+
+    it("warns on rest parameters", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function first(...args: number[]) { return args[0]; }
+        const r = first(1, 2, 3);
+      `);
+      expect(lua).toContain("first(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("rest parameters");
+    });
+
+    it("warns on optional parameters", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function maybe(x?: number) { return x; }
+        const r = maybe(5);
+      `);
+      expect(lua).toContain("maybe(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("optional parameters");
+    });
+
+    it("warns on default parameters", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function withDefault(x: number = 0) { return x; }
+        const r = withDefault(5);
+      `);
+      expect(lua).toContain("withDefault(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("default parameters");
+    });
+
+    it("warns on non-module scope", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        function outer() {
+          const captured = 10;
+          /** @inline */
+          function inner(x: number) { return x + captured; }
+          return inner(5);
+        }
+      `);
+      expect(lua).toContain("inner(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("module scope");
+    });
+
+    it("warns on recursive function", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function recurse(x: number): number { return recurse(x); }
+        const r = recurse(5);
+      `);
+      expect(lua).toContain("recurse(");
+      // Both the outer call recurse(5) and the inner body call recurse(x) are visited
+      expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+      expect(diagnostics[0].messageText).toContain("recursive");
+    });
+
+    it("warns on parameter written inside body", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function f(x: number) { return (x = 1, x); }
+        const result = f(0);
+      `);
+      expect(lua).toContain("f(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("written inside body");
+    });
+
+    it("warns on side-effect duplication", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function square(x: number) { return x * x; }
+        declare function foo(): number;
+        const r = square(foo());
+      `);
+      expect(lua).toContain("square(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("side effects");
+    });
+
+    it("emits no warning without @inline tag", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(diagnostics).toHaveLength(0);
     });
   });
 });

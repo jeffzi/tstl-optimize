@@ -58,5 +58,8 @@ jobs:
           path: .conformance
           key: conformance-${{ hashFiles('scripts/conformance.mjs', 'scripts/conformance.patch') }}
 
+      - name: Check examples in sync
+        run: npm run examples:check
+
       - name: Conformance tests
         run: npm run test:conformance

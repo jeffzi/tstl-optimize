@@ -32,3 +32,6 @@ pre-push:
     test:
       glob: "src/**/*.ts"
       run: npm test
+    examples:
+      glob: "{src/**/*.ts,examples/**/*.ts}"
+      run: npm run examples:check

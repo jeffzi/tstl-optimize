@@ -64,6 +64,20 @@ class OptimizePlugin implements tstl.Plugin {
     // Safe: each key was originally from a well-typed Visitors object
     this.visitors = merged as unknown as tstl.Visitors;
   }
+
+  // Strip @inline JSDoc artifacts — TSTL converts all JSDoc tags to Lua comments,
+  // but @inline is a compiler directive consumed by the inline rule, not documentation
+  beforeEmit(
+    _program: ts.Program,
+    _options: tstl.CompilerOptions,
+    _emitHost: tstl.EmitHost,
+    result: tstl.EmitFile[],
+  ): void {
+    if (!isRuleEnabled(this.config.rules, "inline")) return;
+    for (const file of result) {
+      file.code = file.code.replace(/---\n-- @inline\n/g, "");
+    }
+  }
 }
 
 // TSTL calls `typeof factory === "function" ? factory(pluginOption) : factory`

@@ -6,19 +6,29 @@ import { OptimizePlugin } from "../src/index";
 export interface CompileOptions {
   pluginOptions?: Record<string, unknown>;
   luaTarget?: tstl.LuaTarget;
+  luaLibImport?: tstl.LuaLibImportKind;
 }
 
-export function compile(source: string, options?: CompileOptions): string {
-  const { pluginOptions, luaTarget = tstl.LuaTarget.Lua51 } = options ?? {};
+export interface CompileResult {
+  lua: string;
+  diagnostics: ts.Diagnostic[];
+}
+
+function transpile(source: string, options?: CompileOptions): tstl.TranspileVirtualProjectResult {
+  const {
+    pluginOptions,
+    luaTarget = tstl.LuaTarget.Lua51,
+    luaLibImport = tstl.LuaLibImportKind.None,
+  } = options ?? {};
   const plugin = new OptimizePlugin(pluginOptions);
-  const result = tstl.transpileVirtualProject(
+  return tstl.transpileVirtualProject(
     { "main.ts": source },
     {
       noHeader: true,
       luaPlugins: [{ plugin }],
       noImplicitSelf: true,
       luaTarget,
-      luaLibImport: tstl.LuaLibImportKind.None,
+      luaLibImport,
       strict: true,
       // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
       // which lets the type checker identify loop variables as `number` (not `any`)
@@ -28,6 +38,9 @@ export function compile(source: string, options?: CompileOptions): string {
       types: ["@typescript-to-lua/language-extensions"],
     },
   );
+}
+
+function extractLua(result: tstl.TranspileVirtualProjectResult): string {
   const errors = result.diagnostics.filter(
     (d) => d.category === 1 /* ts.DiagnosticCategory.Error */ && d.code >= 100_000,
   );
@@ -42,4 +55,15 @@ export function compile(source: string, options?: CompileOptions): string {
     throw new Error("No Lua output.");
   }
   return file.lua;
+}
+
+export function compile(source: string, options?: CompileOptions): string {
+  return extractLua(transpile(source, options));
+}
+
+export function compileWithDiagnostics(source: string, options?: CompileOptions): CompileResult {
+  const result = transpile(source, options);
+  const lua = extractLua(result);
+  const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
+  return { lua, diagnostics };
 }

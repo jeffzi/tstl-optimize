@@ -34,13 +34,9 @@ export interface ScopeInfo {
  *
  * When `shallow` is true, skips FunctionExpression bodies.
  */
-export function collectScopeInfo(
-  statements: tstl.Statement[],
-  shallow: boolean,
-  initialDefs?: Iterable<string>,
-): ScopeInfo {
+export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean): ScopeInfo {
   const chainCounts = new Map<string, number>();
-  const scopeDefs = new Set<string>(initialDefs);
+  const scopeDefs = new Set<string>();
   const hooks = {
     shallow,
     guardDepth: 0,
@@ -84,6 +80,94 @@ export function collectScopeInfo(
   };
   walkStatements(statements, hooks);
   return { chainCounts, scopeDefs };
+}
+
+export interface ArrayElementInfo {
+  /** Read-count per base name (LHS writes are NOT counted — only reads benefit from localization) */
+  counts: Map<string, number>;
+  /** Base names that appear as LHS of assignments */
+  writes: Set<string>;
+  /** Which loop variable is used as index for each base name */
+  loopVar: Map<string, string>;
+}
+
+/**
+ * Walk a statement list counting `base[loopVar]` patterns for array element localization.
+ * Only RHS reads are counted toward the threshold — LHS writes are tracked separately
+ * because the write-back still needs one table access, so writes don't save lookups.
+ */
+export function collectArrayElementAccesses(
+  statements: tstl.Statement[],
+  loopVarNames: ReadonlySet<string>,
+  shallow: boolean,
+): ArrayElementInfo {
+  const counts = new Map<string, number>();
+  const writes = new Set<string>();
+  const loopVar = new Map<string, string>();
+  // Bases used with multiple different loop vars — excluded from hoisting
+  const mixedIndex = new Set<string>();
+
+  const hooks = {
+    shallow,
+    guardDepth: 0,
+    expr: (
+      expr: tstl.Expression,
+      _replace: (n: tstl.Expression) => void,
+      control: TraversalControl,
+    ) => {
+      if (
+        tstl.isTableIndexExpression(expr) &&
+        tstl.isIdentifier(expr.table) &&
+        tstl.isIdentifier(expr.index) &&
+        loopVarNames.has(expr.index.text)
+      ) {
+        if (hooks.guardDepth === 0) {
+          const baseName = expr.table.text;
+          const indexName = expr.index.text;
+          const existing = loopVar.get(baseName);
+          if (existing !== undefined && existing !== indexName) {
+            mixedIndex.add(baseName);
+          } else {
+            loopVar.set(baseName, indexName);
+          }
+          counts.set(baseName, (counts.get(baseName) ?? 0) + 1);
+        }
+        control.skip();
+      }
+    },
+    stmt: (stmt: tstl.Statement) => {
+      if (tstl.isAssignmentStatement(stmt)) {
+        for (const lhs of stmt.left) {
+          if (
+            tstl.isTableIndexExpression(lhs) &&
+            tstl.isIdentifier(lhs.table) &&
+            tstl.isIdentifier(lhs.index) &&
+            loopVarNames.has(lhs.index.text)
+          ) {
+            const baseName = lhs.table.text;
+            const indexName = lhs.index.text;
+            const existing = loopVar.get(baseName);
+            if (existing !== undefined && existing !== indexName) {
+              mixedIndex.add(baseName);
+            } else {
+              loopVar.set(baseName, indexName);
+            }
+            writes.add(baseName);
+          }
+        }
+      }
+    },
+  };
+  walkStatements(statements, hooks);
+
+  // Remove bases with inconsistent indices
+  for (const name of mixedIndex) {
+    counts.delete(name);
+    writes.delete(name);
+    loopVar.delete(name);
+  }
+
+  return { counts, writes, loopVar };
 }
 
 /** Reconstruct a TableIndexExpression from a dotted chain string (e.g. "math.floor"). */
