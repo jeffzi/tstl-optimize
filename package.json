@@ -37,7 +37,7 @@
     "dprint": "^0.52.0",
     "knip": "^5.85.0",
     "lefthook": "^2.1.0",
-    "lua-types": "^2.13.0",
+    "lua-types": "^2.14.1",
     "luamark-types": "github:jeffzi/luamark#ts-types",
     "markdownlint-cli2": "^0.21.0",
     "typescript": "^5.9.0",
