@@ -47,10 +47,12 @@ const PROBES = {
 
 const ALL_LABELS = Object.keys(PROBES);
 
-// --- CLI args: filter to requested labels, or run all ---
+// --- CLI args: split into interpreter labels and file patterns ---
 
 const requested = process.argv.slice(2);
-const labels = requested.length > 0 ? requested : ALL_LABELS;
+const interpreterArgs = requested.filter((a) => a in PROBES);
+const filePatterns = requested.filter((a) => !(a in PROBES));
+const labels = interpreterArgs.length > 0 ? interpreterArgs : ALL_LABELS;
 
 // --- Main loop ---
 
@@ -96,6 +98,10 @@ for (const label of labels) {
       .sort();
   } catch {
     files = [];
+  }
+
+  if (filePatterns.length > 0) {
+    files = files.filter((f) => filePatterns.some((p) => f.includes(p.replace(/\.ts$/, ".lua"))));
   }
 
   if (files.length === 0) {
