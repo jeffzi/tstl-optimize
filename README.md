@@ -4,8 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that generates faster Lua
-code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. Every
-rule defaults to on except `debug-strip`, which removes code. Toggle each rule individually.
+code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. All rules
+default to on except `conditional-compilation` and `debug-strip`, which remove code. Toggle each
+rule individually.
 
 ## Installation
 
@@ -52,10 +53,72 @@ To customize rules:
 
 ## Rules
 
+### `conditional-compilation`
+
+Evaluates compile-time constants and strips dead branches from `if`/ternary/`switch` statements.
+**Off by default** — enable it with a constants map binding each identifier to an environment
+variable and a default value.
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "rules": {
+          "conditional-compilation": {
+            "constants": {
+              "DEBUG": { "env": "DEBUG", "default": false },
+              "PLATFORM": { "env": "PLATFORM", "default": "desktop" },
+              "LOG_LEVEL": { "env": "LOG_LEVEL", "default": 0 }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+```typescript
+// Branch folding — the rule strips dead branches entirely
+if (DEBUG) { print("debug info"); }          // stripped (DEBUG is false)
+const label = PLATFORM === "web" ? "W" : "D"; // folds to "D"
+
+// Switch — only the matching case survives
+switch (PLATFORM) {
+  case "web": setupWeb(); break;      // stripped
+  case "desktop": setupDesktop(); break; // kept
+}
+
+// Expression substitution — the rule replaces constants with literals everywhere
+const isDebug = DEBUG;                // becomes: isDebug = false
+const isWeb = PLATFORM === "web";     // becomes: isWeb = false
+```
+
+At build time the rule reads the environment variable named in `env` and falls back to `default`
+when the variable is unset. Supported value types: `boolean`, `number`, `string`.
+
+Beyond branch elimination, the rule **substitutes every constant reference with its literal value**
+in any expression context. This matters because `declare const` identifiers lack a runtime
+definition — without substitution they would appear as undefined globals in the Lua output. The rule
+replaces bare identifiers (`DEBUG`), binary comparisons (`PLATFORM === "web"`), and negations
+(`!DEBUG`) with their resolved literals wherever they appear.
+
+**Limitations:**
+
+- **Name-based matching** — matches bare identifiers, not TS types. A local variable that shadows a
+  constant name will also be substituted.
+- **Partial conditions emit a warning** — when a condition mixes compile-time constants with runtime
+  variables (e.g., `PLATFORM === "desktop" && connected`), the rule cannot fold the branch and emits
+  a diagnostic warning (code 90002).
+- **Supported operators** — `===`, `!==`, `&&`, `||`, `!` in conditions. The rule does not evaluate
+  other operators (e.g., `<`, `+`).
+
 ### `math-intrinsics`
 
-Replaces `Math.*` calls with inline Lua expressions, eliminating the overhead of a C function call
-through the `math` table. Skipped on LuaJIT, which already dispatches C calls fast.
+Replaces `Math.*` calls with inline Lua expressions, eliminating C-function-call overhead through
+the `math` table. Skipped on LuaJIT, which already dispatches C calls fast.
 
 | Source | Lua output | Notes |
 | --- | --- | --- |
@@ -66,8 +129,8 @@ through the `math` table. Skipped on LuaJIT, which already dispatches C calls fa
 | `Math.min(a, b)` | `(a < b) and a or b` | 2-arg only. Returns `b` when either arg is `NaN` |
 | `x ** 2` | `x * x` | Lossless. Literal `2` exponent only |
 
-The rule applies `abs`, `max`, and `min` only to side-effect-free arguments, so duplicating them in
-the output is safe.
+The rule inlines `abs`, `max`, and `min` only for side-effect-free arguments, so duplicating them in
+the output stays safe.
 
 > **Edge cases:** The `-0` and `NaN` deviations are deliberate trade-offs. Typical Lua 5.1 game
 > code never observes these values. If your code relies on IEEE 754 `NaN` propagation or `-0`
@@ -111,7 +174,7 @@ A function qualifies for inlining when it meets all these conditions:
 - Single-expression body (or arrow `=> expr`)
 - Module-scope function (not nested)
 - No rest, default, or optional parameters
-- Not recursive
+- Non-recursive
 - No parameter writes inside the body
 - Each parameter used more than once receives only side-effect-free arguments
 
@@ -138,23 +201,23 @@ end                                    pos[i] = pos[i] + ____vel * dt
                                    end
 ```
 
-Array element localization handles only the simple case: the base must be a plain identifier, the
-index must be exactly a loop control variable, the rule skips loops containing function calls (a call
-could modify the array through a reference, making the cached local stale), and skips write-back
-candidates in loops with early exits (`break`/`return`).
+Array element localization handles the simple case only: the base must be a plain identifier, the
+index must match exactly the loop control variable, the rule skips loops containing function calls
+(a call could modify the array through a reference, making the cached local stale), and skips
+write-back candidates in loops with early exits (`break`/`return`).
 
 Options:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `threshold` | `number` | `2` | Minimum read-count before hoisting |
-| `scope` | `"module" \| "function" \| "all"` | `"all"` | Where hoisting is applied |
+| `scope` | `"module" \| "function" \| "all"` | `"all"` | Where the rule hoists locals |
 
 ### `debug-strip`
 
 Strips debug and profiling calls from the Lua output. **Off by default** — enable it explicitly,
-since it removes code rather than optimizing it. Set `"debug-strip": true` to enable with defaults,
-or pass an object to customize which calls are stripped.
+since it removes code rather than optimizing it. Set `"debug-strip": true` for defaults, or pass an
+object to customize which calls the rule strips.
 
 ```lua
 -- Before                          -- After (with debug-strip enabled)
@@ -164,8 +227,8 @@ assert(hp > 0)                     -- (removed)
 local x = compute()               local x = compute()
 ```
 
-The rule strips only calls in **statement position**. It preserves calls whose return value is used
-(variable initializers, return values, function arguments).
+The rule strips only statement-position calls. It preserves calls whose return value feeds a
+variable initializer, return statement, or function argument.
 
 Options:
 
@@ -178,7 +241,7 @@ Options:
 
 - **Name-based matching** — matches Lua-level identifier text, not TS types. A local variable named
   `print` that shadows the global will also be stripped.
-- **`assert` removal is semantic** — strips the runtime error-on-falsy check, not just output.
+- **`assert` removal changes semantics** — strips the runtime error-on-falsy check, not just output.
   Understand this tradeoff before enabling the rule.
 - **Custom config replaces defaults** — `functions: ["myDebug"]` replaces the default list; it does
   not extend it. Include defaults explicitly to keep both.
@@ -187,10 +250,11 @@ Options:
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `rules.math-intrinsics` | `boolean` | `true` | Enable math intrinsic inlining |
-| `rules.loop-rebase` | `boolean` | `true` | Enable 0-to-1-based loop conversion |
-| `rules.inline` | `boolean` | `true` | Enable `@inline` function inlining |
-| `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Enable table-chain hoisting |
+| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants |
+| `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions |
+| `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based |
+| `rules.inline` | `boolean` | `true` | Inline `@inline` functions at call sites |
+| `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals |
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |
 

@@ -14,30 +14,30 @@ export interface CompileResult {
   diagnostics: ts.Diagnostic[];
 }
 
-function transpile(source: string, options?: CompileOptions): tstl.TranspileVirtualProjectResult {
+function transpile(
+  files: Record<string, string>,
+  options?: CompileOptions,
+): tstl.TranspileVirtualProjectResult {
   const {
     pluginOptions,
     luaTarget = tstl.LuaTarget.Lua51,
     luaLibImport = tstl.LuaLibImportKind.None,
   } = options ?? {};
   const plugin = new OptimizePlugin(pluginOptions);
-  return tstl.transpileVirtualProject(
-    { "main.ts": source },
-    {
-      noHeader: true,
-      luaPlugins: [{ plugin }],
-      noImplicitSelf: true,
-      luaTarget,
-      luaLibImport,
-      strict: true,
-      // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
-      // which lets the type checker identify loop variables as `number` (not `any`)
-      // so TSTL correctly applies +1 to array index accesses.
-      target: ts.ScriptTarget.ESNext,
-      lib: ["lib.esnext.d.ts"],
-      types: ["@typescript-to-lua/language-extensions"],
-    },
-  );
+  return tstl.transpileVirtualProject(files, {
+    noHeader: true,
+    luaPlugins: [{ plugin }],
+    noImplicitSelf: true,
+    luaTarget,
+    luaLibImport,
+    strict: true,
+    // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
+    // which lets the type checker identify loop variables as `number` (not `any`)
+    // so TSTL correctly applies +1 to array index accesses.
+    target: ts.ScriptTarget.ESNext,
+    lib: ["lib.esnext.d.ts"],
+    types: ["@typescript-to-lua/language-extensions"],
+  });
 }
 
 function extractLua(result: tstl.TranspileVirtualProjectResult): string {
@@ -58,11 +58,11 @@ function extractLua(result: tstl.TranspileVirtualProjectResult): string {
 }
 
 export function compile(source: string, options?: CompileOptions): string {
-  return extractLua(transpile(source, options));
+  return extractLua(transpile({ "main.ts": source }, options));
 }
 
 export function compileWithDiagnostics(source: string, options?: CompileOptions): CompileResult {
-  const result = transpile(source, options);
+  const result = transpile({ "main.ts": source }, options);
   const lua = extractLua(result);
   const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
   return { lua, diagnostics };

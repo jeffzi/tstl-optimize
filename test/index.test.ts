@@ -103,6 +103,27 @@ describe("parseConfig rules edge cases", () => {
     const config = parseConfig({ rules: { "debug-strip": { functions: ["myFn"] } } });
     expect(config.rules["debug-strip"]).toStrictEqual({ functions: ["myFn"] });
   });
+
+  it("defaults conditional-compilation to false", () => {
+    const config = parseConfig();
+    expect(config.rules["conditional-compilation"]).toBe(false);
+  });
+
+  it("accepts conditional-compilation boolean true", () => {
+    const config = parseConfig({ rules: { "conditional-compilation": true } });
+    expect(config.rules["conditional-compilation"]).toBe(true);
+  });
+
+  it("accepts conditional-compilation object config", () => {
+    const obj = { constants: { DEBUG: { env: "DEBUG", default: false } } };
+    const config = parseConfig({ rules: { "conditional-compilation": obj } });
+    expect(config.rules["conditional-compilation"]).toStrictEqual(obj);
+  });
+
+  it("ignores non-boolean non-object conditional-compilation value", () => {
+    const config = parseConfig({ rules: { "conditional-compilation": "invalid" } });
+    expect(config.rules["conditional-compilation"]).toBe(false);
+  });
 });
 
 describe("target auto-detection", () => {

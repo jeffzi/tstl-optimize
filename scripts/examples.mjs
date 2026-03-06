@@ -18,8 +18,8 @@ const ts = (await import("typescript")).default;
 const tstl = await import("typescript-to-lua");
 const { OptimizePlugin } = await import("../dist/index.js");
 
-function compile(source) {
-  const plugin = new OptimizePlugin();
+function compile(source, pluginOptions) {
+  const plugin = new OptimizePlugin(pluginOptions);
   const result = tstl.transpileVirtualProject(
     { "main.ts": source },
     {
@@ -55,7 +55,14 @@ for (const name of tsFiles) {
   const tsPath = resolve(examplesDir, name);
   const luaPath = resolve(examplesDir, luaName);
   const source = readFileSync(tsPath, "utf8");
-  const { lua, warnings } = compile(source);
+  const optsPath = resolve(examplesDir, name.replace(/\.ts$/, ".opts.json"));
+  let pluginOptions;
+  try {
+    pluginOptions = JSON.parse(readFileSync(optsPath, "utf8"));
+  } catch {
+    // no sidecar opts file — use defaults
+  }
+  const { lua, warnings } = compile(source, pluginOptions);
 
   for (const w of warnings) {
     const msg = typeof w.messageText === "string" ? w.messageText : w.messageText.messageText;

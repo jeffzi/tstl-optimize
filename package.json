@@ -23,6 +23,7 @@
     "examples": "npm run build && node scripts/examples.mjs",
     "examples:check": "node scripts/examples.mjs --check",
     "bench": "echo 'Use: task bench (requires go-task)' && exit 1",
+    "prepack": "tsc -p tsconfig.plugin.json",
     "prepare": "lefthook install"
   },
   "peerDependencies": {
