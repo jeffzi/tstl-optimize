@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-06
+
+### Added
+
+- **conditional-compilation** rule — strip dead `if`/ternary/`switch` branches and substitute
+  compile-time constants resolved from environment variables; emits a diagnostic when a
+  condition mixes constants with runtime expressions
+
+### Fixed
+
+- Expression visitors from different rules now chain correctly instead of the higher-priority
+  visitor shadowing lower-priority ones
+
+## [0.2.0] - 2026-03-02
+
+### Added
+
+- **debug-strip** rule — remove calls to configurable function names and namespace prefixes
+  (e.g. debug/profiling helpers) from Lua output; off by default
+
 ## [0.1.0] - 2026-03-02
 
 ### Added
@@ -25,5 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations
 - Runnable examples with generation script
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jeffzi/tstl-optimize/releases/tag/v0.1.0
