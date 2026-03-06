@@ -101,8 +101,8 @@ class OptimizePlugin implements tstl.Plugin {
     this.visitors = merged as unknown as tstl.Visitors;
   }
 
-  // Strip @inline JSDoc artifacts — TSTL converts all JSDoc tags to Lua comments,
-  // but @inline is a compiler directive consumed by the inline rule, not documentation
+  // Strip JSDoc artifact — TSTL converts all JSDoc tags to Lua comments,
+  // but @inline is a compiler directive, not documentation
   beforeEmit(
     _program: ts.Program,
     _options: tstl.CompilerOptions,
