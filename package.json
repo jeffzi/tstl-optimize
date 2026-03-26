@@ -24,7 +24,7 @@
     "examples:check": "node scripts/examples.mjs --check",
     "bench": "echo 'Use: task bench (requires go-task)' && exit 1",
     "prepack": "tsc -p tsconfig.plugin.json",
-    "prepare": "lefthook install"
+    "prepare": "npm run build && (test -d .git && lefthook install || true)"
   },
   "peerDependencies": {
     "typescript-to-lua": ">=1.22.0"
