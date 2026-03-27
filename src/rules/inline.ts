@@ -145,6 +145,9 @@ function canInline(
 
   if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
 
+  if (callNode.getSourceFile().fileName !== declaration.getSourceFile().fileName)
+    return "cross-module inlining is not supported";
+
   // Reject recursion: body references the function itself
   if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
     return "recursive functions cannot be inlined";

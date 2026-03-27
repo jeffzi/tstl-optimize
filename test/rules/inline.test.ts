@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compile, compileWithDiagnostics } from "../helpers";
+import { compile, compileMultiFileWithDiagnostics, compileWithDiagnostics } from "../helpers";
 
 describe("inline", () => {
   describe("positive: inlined", () => {
@@ -413,6 +413,61 @@ describe("inline", () => {
         const r = double(a);
       `);
       expect(diagnostics).toHaveLength(0);
+    });
+  });
+
+  describe("cross-module", () => {
+    it("does not inline cross-module function with free variables", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const factor = 10;
+          /** @inline */
+          export function scale(x: number) { return x * factor; }
+        `,
+        "main.ts": `
+          import { scale } from "./utils";
+          declare const a: number;
+          const r = scale(a);
+        `,
+      });
+      expect(lua).toContain("scale(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("cross-module");
+    });
+
+    it("does not inline cross-module function even when self-contained", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function double(x: number) { return x * 2; }
+        `,
+        "main.ts": `
+          import { double } from "./utils";
+          declare const a: number;
+          const r = double(a);
+        `,
+      });
+      expect(lua).toContain("double(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("cross-module");
+    });
+
+    it("warns with correct diagnostic metadata", () => {
+      const { diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function double(x: number) { return x * 2; }
+        `,
+        "main.ts": `
+          import { double } from "./utils";
+          declare const a: number;
+          const r = double(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("cross-module inlining is not supported");
+      expect(diagnostics[0].category).toBe(0); // ts.DiagnosticCategory.Warning
+      expect(diagnostics[0].source).toBe("tstl-optimize");
     });
   });
 });
