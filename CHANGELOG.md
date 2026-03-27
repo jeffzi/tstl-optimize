@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-03-27
+
+### Fixed
+
+- **localizer** no longer hoists metatable-chaining globals (`assert.are_not.equal`,
+  `spy`, `mock`, etc.) that silently break runtime semantics when collapsed into locals.
+  The localizer now defaults to hoisting only Lua stdlib roots (`math`, `string`,
+  `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`). Use `include` to
+  add engine-specific roots (e.g., `["go", "msg", "vmath"]` for Defold) or `["*"]` to
+  restore previous behavior. Use `exclude` to remove specific roots.
+
 ## [0.3.0] - 2026-03-06
 
 ### Added
@@ -45,7 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations
 - Runnable examples with generation script
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jeffzi/tstl-optimize/releases/tag/v0.1.0
