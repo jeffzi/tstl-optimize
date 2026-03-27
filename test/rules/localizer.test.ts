@@ -600,6 +600,138 @@ describe("localizer", () => {
     });
   });
 
+  describe("root filtering", () => {
+    it("default config only hoists stdlib roots", () => {
+      // math is stdlib — should be hoisted
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "const a = Math.ceil(x); const b = Math.ceil(x);",
+        ].join("\n"),
+        { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+    });
+
+    it("default config does NOT hoist non-stdlib roots", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "const a = config.graphics.width;",
+          "const b = config.graphics.width;",
+        ].join("\n"),
+        MODULE_SCOPE,
+      );
+      // config is not stdlib — should NOT be hoisted with default config
+      expect(lua).not.toContain("local ____config_graphics_width");
+      expect(lua).toContain("config.graphics.width");
+    });
+
+    it("include adds non-stdlib root to allowed set", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "const a = config.graphics.width;",
+          "const b = config.graphics.width;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["config"] } } } },
+      );
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
+    });
+
+    it("exclude removes stdlib root from allowed set", () => {
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "const a = Math.ceil(x); const b = Math.ceil(x);",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "module" as const, exclude: ["math"] } } },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      // math is excluded — should NOT be hoisted
+      expect(lua).not.toContain("local ____math_ceil");
+      expect(lua).toContain("math.ceil");
+    });
+
+    it("include: ['*'] hoists all roots except blocklist", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "const a = config.graphics.width;",
+          "const b = config.graphics.width;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["*"] } } } },
+      );
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
+    });
+
+    it("include: ['*'] with exclude blocks specific roots", () => {
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "const a = Math.ceil(x); const b = Math.ceil(x);",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["*"], exclude: ["math"] } } },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      expect(lua).not.toContain("local ____math_ceil");
+      expect(lua).toContain("math.ceil");
+    });
+
+    it("blocklisted root is not hoisted by default", () => {
+      const lua = compile(
+        [
+          "declare const assert: { are_not: { flag: boolean } };",
+          "const a = assert.are_not.flag;",
+          "const b = assert.are_not.flag;",
+        ].join("\n"),
+        MODULE_SCOPE,
+      );
+      expect(lua).not.toContain("local ____assert_are_not_flag");
+    });
+
+    it("explicit include overrides blocklist", () => {
+      const lua = compile(
+        [
+          "declare const assert: { are_not: { flag: boolean } };",
+          "const a = assert.are_not.flag;",
+          "const b = assert.are_not.flag;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["assert"] } } } },
+      );
+      expect(lua).toContain("local ____assert_are_not_flag = assert.are_not.flag");
+    });
+
+    it("wildcard does NOT override blocklist", () => {
+      const lua = compile(
+        [
+          "declare const assert: { are_not: { flag: boolean } };",
+          "const a = assert.are_not.flag;",
+          "const b = assert.are_not.flag;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["*"] } } } },
+      );
+      // wildcard alone does not override blocklist
+      expect(lua).not.toContain("local ____assert_are_not_flag");
+    });
+
+    it("wildcard with explicit include overrides blocklist for that root", () => {
+      const lua = compile(
+        [
+          "declare const assert: { are_not: { flag: boolean } };",
+          "const a = assert.are_not.flag;",
+          "const b = assert.are_not.flag;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["*", "assert"] } } } },
+      );
+      expect(lua).toContain("local ____assert_are_not_flag = assert.are_not.flag");
+    });
+  });
+
   describe("interaction with other rules", () => {
     it("math-intrinsics transforms Math.floor to inline on PUC — nothing for localizer to hoist", () => {
       const lua = compile(
