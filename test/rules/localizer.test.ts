@@ -771,6 +771,116 @@ describe("localizer", () => {
       );
       expect(lua).toContain("local ____assert_are_not_flag = assert.are_not.flag");
     });
+
+    it("wildcard with non-stdlib exclude: excluded root not hoisted, stdlib still hoisted", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "declare const x: number;",
+          "const a = config.graphics.width; const b = config.graphics.width;",
+          "const c = Math.ceil(x); const d = Math.ceil(x);",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: {
+              localizer: { scope: "module" as const, include: ["*"], exclude: ["config"] },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      // config is excluded — should NOT be hoisted
+      expect(lua).not.toContain("local ____config_graphics_width");
+      expect(lua).toContain("config.graphics.width");
+      // math is stdlib and not excluded — should still be hoisted
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+    });
+
+    it("multiple non-stdlib includes: both roots hoisted alongside stdlib", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "declare const go: { msg: { post: (id: string) => void } };",
+          "const a = config.graphics.width; const b = config.graphics.width;",
+          "const c = go.msg.post; const d = go.msg.post;",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config", "go"] } },
+          },
+        },
+      );
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
+      expect(lua).toContain("local ____go_msg_post = go.msg.post");
+    });
+
+    it("redundant include of stdlib root is a no-op: math still hoisted", () => {
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "const a = Math.ceil(x); const b = Math.ceil(x);",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["math"] } },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      // math is already in stdlib — including it again should be harmless
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+    });
+
+    it("exclude of non-allowed root is a no-op: root still not hoisted", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "const a = config.graphics.width; const b = config.graphics.width;",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, exclude: ["config"] } },
+          },
+        },
+      );
+      // config was already not in allowed set — excluding it changes nothing
+      expect(lua).not.toContain("local ____config_graphics_width");
+      expect(lua).toContain("config.graphics.width");
+    });
+
+    it("resolution formula: (STDLIB union include) minus exclude minus (BLOCKLIST minus include)", () => {
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "declare const go: { msg: { post: (id: string) => void } };",
+          "declare const assert: { are_not: { flag: boolean } };",
+          // Each chain used 2+ times to meet threshold
+          "const a = Math.ceil(x); const b = Math.ceil(x);",
+          "const c = go.msg.post; const d = go.msg.post;",
+          "const e = assert.are_not.flag; const f = assert.are_not.flag;",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module" as const,
+                include: ["go"],
+                exclude: ["math"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      // math: in STDLIB but excluded → NOT hoisted
+      expect(lua).not.toContain("local ____math_ceil");
+      expect(lua).toContain("math.ceil");
+      // go: in include, not excluded, not blocklisted → IS hoisted
+      expect(lua).toContain("local ____go_msg_post = go.msg.post");
+      // assert: in BLOCKLIST, NOT in include → NOT hoisted
+      expect(lua).not.toContain("local ____assert_are_not_flag");
+      expect(lua).toContain("assert.are_not.flag");
+    });
   });
 
   describe("interaction with other rules", () => {
