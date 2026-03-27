@@ -883,6 +883,131 @@ describe("localizer", () => {
     });
   });
 
+  describe("root filtering interactions", () => {
+    it("root filter applied in function scope mode", () => {
+      // Without include: non-stdlib config NOT hoisted
+      const luaDefault = compile(
+        [
+          "function process() {",
+          "  const a = config.graphics.width;",
+          "  const b = config.graphics.width;",
+          "  return a + b;",
+          "}",
+          "declare const config: { graphics: { width: number } };",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      expect(luaDefault).not.toContain("local ____config_graphics_width");
+
+      // With include: config IS hoisted in function scope
+      const luaInclude = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "function process() {",
+          "  const a = config.graphics.width;",
+          "  const b = config.graphics.width;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["config"] } },
+          },
+        },
+      );
+      expect(luaInclude).toContain("local ____config_graphics_width = config.graphics.width");
+    });
+
+    it("root filter applied in all scope mode", () => {
+      const lua = compile(
+        [
+          "declare const x: number;",
+          "declare const config: { graphics: { width: number } };",
+          "const a = Math.ceil(x); const b = Math.ceil(x);",
+          "function process() {",
+          "  const c = config.graphics.width;",
+          "  const d = config.graphics.width;",
+          "  return c + d;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "all" as const, include: ["config"] } },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      );
+      // math.ceil hoisted at module level (stdlib)
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+      // config.graphics.width hoisted inside function (non-stdlib, included)
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
+    });
+
+    it("root filter does not affect array element localization", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "for (const i of $range(0, n - 1)) {",
+          "  const a = arr[i] + arr[i];",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      // arr is NOT in stdlib or include, but array element localization is independent
+      expect(lua).toContain("local ____arr = arr[i]");
+      expect(lua).toContain("____arr + ____arr");
+    });
+
+    it("root filter and array element localization coexist", () => {
+      // With include: config hoisted AND velY[i] localized
+      const luaWithInclude = compile(
+        [
+          "declare const config: { physics: { gravity: number } };",
+          "declare const velY: number[];",
+          "declare const n: number;",
+          "declare const dt: number;",
+          "for (const i of $range(0, n - 1)) {",
+          "  velY[i] = velY[i] + config.physics.gravity * dt;",
+          "  velY[i] = velY[i] * config.physics.gravity;",
+          "}",
+          "const g = config.physics.gravity + config.physics.gravity;",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "all" as const, include: ["config"] } },
+          },
+        },
+      );
+      // config chain hoisted at module level
+      expect(luaWithInclude).toContain(
+        "local ____config_physics_gravity = config.physics.gravity",
+      );
+      // velY[i] localized in loop body
+      expect(luaWithInclude).toContain("local ____velY = velY[i]");
+
+      // Without include: config NOT hoisted but velY[i] still localized
+      const luaDefault = compile(
+        [
+          "declare const config: { physics: { gravity: number } };",
+          "declare const velY: number[];",
+          "declare const n: number;",
+          "declare const dt: number;",
+          "for (const i of $range(0, n - 1)) {",
+          "  velY[i] = velY[i] + config.physics.gravity * dt;",
+          "  velY[i] = velY[i] * config.physics.gravity;",
+          "}",
+          "const g = config.physics.gravity + config.physics.gravity;",
+        ].join("\n"),
+        ALL_SCOPE,
+      );
+      // config NOT hoisted (not in allowed set)
+      expect(luaDefault).not.toContain("local ____config_physics_gravity");
+      // velY[i] still localized (array element localization is independent)
+      expect(luaDefault).toContain("local ____velY = velY[i]");
+    });
+  });
+
   describe("interaction with other rules", () => {
     it("math-intrinsics transforms Math.floor to inline on PUC — nothing for localizer to hoist", () => {
       const lua = compile(
