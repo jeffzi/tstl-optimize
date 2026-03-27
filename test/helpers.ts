@@ -67,3 +67,13 @@ export function compileWithDiagnostics(source: string, options?: CompileOptions)
   const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
   return { lua, diagnostics };
 }
+
+export function compileMultiFileWithDiagnostics(
+  files: Record<string, string>,
+  options?: CompileOptions,
+): CompileResult {
+  const result = transpile(files, options);
+  const lua = extractLua(result);
+  const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
+  return { lua, diagnostics };
+}
