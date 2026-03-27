@@ -11,6 +11,50 @@ import {
 import type { LocalizerConfig, RuleFactory } from "../config";
 import { resolveLocalizerConfig } from "../config";
 
+/** Lua stdlib globals that are safe to hoist (flat function tables, no metatables). */
+const STDLIB_ROOTS: ReadonlySet<string> = new Set([
+  "math", "string", "table", "os", "io",
+  "coroutine", "bit", "bit32", "jit", "debug",
+]);
+
+/** Globals known to rely on metatables -- never hoisted unless explicitly included. */
+const INTERNAL_BLOCKLIST: ReadonlySet<string> = new Set([
+  "assert", "spy", "stub", "mock",
+  "describe", "it", "pending",
+  "setup", "teardown", "before_each", "after_each",
+  "insist",
+]);
+
+/**
+ * Build a predicate that checks whether a given root identifier is allowed for hoisting.
+ * Resolution formula: (STDLIB union include) \ exclude \ (BLOCKLIST \ include)
+ */
+function buildRootFilter(
+  include: readonly string[],
+  exclude: readonly string[],
+): (root: string) => boolean {
+  const hasWildcard = include.includes("*");
+  const includeSet = new Set(include);
+  const excludeSet = new Set(exclude);
+
+  if (hasWildcard) {
+    return (root) => {
+      if (excludeSet.has(root)) return false;
+      if (INTERNAL_BLOCKLIST.has(root) && !includeSet.has(root)) return false;
+      return true;
+    };
+  }
+
+  // Non-wildcard: pre-compute allowed set
+  const allowed = new Set(STDLIB_ROOTS);
+  for (const root of include) allowed.add(root);
+  for (const root of exclude) allowed.delete(root);
+  for (const root of INTERNAL_BLOCKLIST) {
+    if (!includeSet.has(root)) allowed.delete(root);
+  }
+  return (root) => allowed.has(root);
+}
+
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
 function replaceChains(statements: tstl.Statement[], hoisted: Map<string, tstl.Identifier>): void {
   walkStatements(statements, {
@@ -40,6 +84,7 @@ function hoistScope(
   alreadyHoisted: ReadonlySet<string>,
   context: tstl.TransformationContext,
   reservedNames?: ReadonlySet<string>,
+  isRootAllowed?: (root: string) => boolean,
 ): Set<string> {
   const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
   const toHoist = new Map<string, tstl.Identifier>();
@@ -51,6 +96,7 @@ function hoistScope(
   for (const [chain, count] of sorted) {
     if (count < threshold || alreadyHoisted.has(chain)) continue;
     const parts = chain.split(".");
+    if (isRootAllowed && !isRootAllowed(parts[0])) continue;
     const hoistName = `____${parts.join("_")}`;
     if (scopeDefs.has(parts[0]) || scopeDefs.has(hoistName) || reservedNames?.has(hoistName))
       continue;
@@ -221,17 +267,20 @@ function processFile(
   file: tstl.File,
   config: LocalizerConfig,
   context: tstl.TransformationContext,
+  isRootAllowed: (root: string) => boolean,
 ): void {
   const { threshold, scope } = config;
 
   if (scope === "module") {
-    hoistScope(file.statements, threshold, false, new Set(), context);
+    hoistScope(file.statements, threshold, false, new Set(), context, undefined, isRootAllowed);
   } else if (scope === "function") {
-    processFunctionBodies(file.statements, threshold, new Set(), context);
+    processFunctionBodies(file.statements, threshold, new Set(), context, isRootAllowed);
   } else {
     // "all": module pass first, then function pass for remaining chains
-    const hoistedAtModule = hoistScope(file.statements, threshold, false, new Set(), context);
-    processFunctionBodies(file.statements, threshold, hoistedAtModule, context);
+    const hoistedAtModule = hoistScope(
+      file.statements, threshold, false, new Set(), context, undefined, isRootAllowed,
+    );
+    processFunctionBodies(file.statements, threshold, hoistedAtModule, context, isRootAllowed);
   }
 }
 
@@ -240,6 +289,7 @@ function processFunctionBodies(
   threshold: number,
   alreadyHoisted: ReadonlySet<string>,
   context: tstl.TransformationContext,
+  isRootAllowed: (root: string) => boolean,
 ): void {
   for (const stmt of statements) {
     if (
@@ -248,28 +298,38 @@ function processFunctionBodies(
     ) {
       const fn = stmt.right[0];
       const paramNames = new Set(fn.params?.filter(tstl.isIdentifier).map((p) => p.text));
-      hoistScope(fn.body.statements, threshold, true, alreadyHoisted, context, paramNames);
-      processFunctionBodies(fn.body.statements, threshold, alreadyHoisted, context);
+      hoistScope(
+        fn.body.statements, threshold, true, alreadyHoisted, context, paramNames, isRootAllowed,
+      );
+      processFunctionBodies(fn.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
     } else if (tstl.isDoStatement(stmt)) {
-      processFunctionBodies(stmt.statements, threshold, alreadyHoisted, context);
+      processFunctionBodies(stmt.statements, threshold, alreadyHoisted, context, isRootAllowed);
     } else if (tstl.isIfStatement(stmt)) {
-      processFunctionBodies(stmt.ifBlock.statements, threshold, alreadyHoisted, context);
+      processFunctionBodies(
+        stmt.ifBlock.statements, threshold, alreadyHoisted, context, isRootAllowed,
+      );
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
-          processFunctionBodies([stmt.elseBlock], threshold, alreadyHoisted, context);
+          processFunctionBodies(
+            [stmt.elseBlock], threshold, alreadyHoisted, context, isRootAllowed,
+          );
         } else {
-          processFunctionBodies(stmt.elseBlock.statements, threshold, alreadyHoisted, context);
+          processFunctionBodies(
+            stmt.elseBlock.statements, threshold, alreadyHoisted, context, isRootAllowed,
+          );
         }
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)
         ? new Set(stmt.names.filter(tstl.isIdentifier).map((n) => n.text))
         : new Set([stmt.controlVariable.text]);
-      hoistScope(stmt.body.statements, threshold, true, alreadyHoisted, context, loopNames);
+      hoistScope(
+        stmt.body.statements, threshold, true, alreadyHoisted, context, loopNames, isRootAllowed,
+      );
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context);
-      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context);
+      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
-      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context);
+      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
     }
   }
 }
@@ -278,12 +338,14 @@ export const createVisitors: RuleFactory = (_checker, config) => {
   const resolved = resolveLocalizerConfig(config.rules.localizer);
   if (!resolved) return {};
 
+  const isRootAllowed = buildRootFilter(resolved.include, resolved.exclude);
+
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context: tstl.TransformationContext) => {
       const result = context.superTransformNode(node);
       const fileNode = result[0];
       if (fileNode && tstl.isFile(fileNode)) {
-        processFile(fileNode, resolved, context);
+        processFile(fileNode, resolved, context, isRootAllowed);
         return fileNode;
       }
       // Fallback: superTransformStatements still routes each statement through the
@@ -293,7 +355,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
         stmts.push(...context.superTransformStatements(s));
       }
       const file = tstl.createFile(stmts, context.usedLuaLibFeatures, "", node);
-      processFile(file, resolved, context);
+      processFile(file, resolved, context, isRootAllowed);
       return file;
     },
   };
