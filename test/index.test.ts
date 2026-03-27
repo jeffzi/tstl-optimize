@@ -1,6 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import type { LocalizerConfig } from "../src/config";
 import { isRuleEnabled, parseConfig, resolveLocalizerConfig } from "../src/config";
 import pluginFactory from "../src/index";
 import { compile } from "./helpers";
@@ -144,7 +145,7 @@ describe("resolveLocalizerConfig include/exclude", () => {
   });
 
   it("resolveLocalizerConfig({ include: ['go'] }) returns include: ['go'], exclude: []", () => {
-    const config = resolveLocalizerConfig({ include: ["go"] } as any);
+    const config = resolveLocalizerConfig({ include: ["go"] } as LocalizerConfig);
     expect(config).not.toBe(false);
     if (config === false) return;
     expect(config.include).toStrictEqual(["go"]);
@@ -152,7 +153,7 @@ describe("resolveLocalizerConfig include/exclude", () => {
   });
 
   it("resolveLocalizerConfig({ exclude: ['math'] }) returns include: [], exclude: ['math']", () => {
-    const config = resolveLocalizerConfig({ exclude: ["math"] } as any);
+    const config = resolveLocalizerConfig({ exclude: ["math"] } as LocalizerConfig);
     expect(config).not.toBe(false);
     if (config === false) return;
     expect(config.include).toStrictEqual([]);
@@ -160,7 +161,10 @@ describe("resolveLocalizerConfig include/exclude", () => {
   });
 
   it("resolveLocalizerConfig({ include: ['*'], exclude: ['debug'] }) preserves both arrays", () => {
-    const config = resolveLocalizerConfig({ include: ["*"], exclude: ["debug"] } as any);
+    const config = resolveLocalizerConfig({
+      include: ["*"],
+      exclude: ["debug"],
+    } as LocalizerConfig);
     expect(config).not.toBe(false);
     if (config === false) return;
     expect(config.include).toStrictEqual(["*"]);
@@ -171,9 +175,7 @@ describe("resolveLocalizerConfig include/exclude", () => {
 describe("parseConfig include/exclude passthrough", () => {
   it("parseConfig passes through include array from localizer config", () => {
     const config = parseConfig({ rules: { localizer: { include: ["go", "msg"] } } });
-    const resolved = resolveLocalizerConfig(
-      config.rules.localizer as boolean | Parameters<typeof resolveLocalizerConfig>[0],
-    );
+    const resolved = resolveLocalizerConfig(config.rules.localizer);
     expect(resolved).not.toBe(false);
     if (resolved === false) return;
     expect(resolved.include).toStrictEqual(["go", "msg"]);
@@ -181,9 +183,7 @@ describe("parseConfig include/exclude passthrough", () => {
 
   it("parseConfig passes through exclude array from localizer config", () => {
     const config = parseConfig({ rules: { localizer: { exclude: ["math"] } } });
-    const resolved = resolveLocalizerConfig(
-      config.rules.localizer as boolean | Parameters<typeof resolveLocalizerConfig>[0],
-    );
+    const resolved = resolveLocalizerConfig(config.rules.localizer);
     expect(resolved).not.toBe(false);
     if (resolved === false) return;
     expect(resolved.exclude).toStrictEqual(["math"]);
@@ -191,9 +191,7 @@ describe("parseConfig include/exclude passthrough", () => {
 
   it("parseConfig with localizer: true results in include: [] and exclude: [] after resolve", () => {
     const config = parseConfig({ rules: { localizer: true } });
-    const resolved = resolveLocalizerConfig(
-      config.rules.localizer as boolean | Parameters<typeof resolveLocalizerConfig>[0],
-    );
+    const resolved = resolveLocalizerConfig(config.rules.localizer);
     expect(resolved).not.toBe(false);
     if (resolved === false) return;
     expect(resolved.include).toStrictEqual([]);
