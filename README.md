@@ -212,6 +212,59 @@ Options:
 | --- | --- | --- | --- |
 | `threshold` | `number` | `2` | Minimum read-count before hoisting |
 | `scope` | `"module" \| "function" \| "all"` | `"all"` | Where the rule hoists locals |
+| `include` | `string[]` | `[]` | Additional root globals to hoist alongside stdlib. Use `["*"]` to allow all roots (opt-out mode). Explicit entries override the internal blocklist. |
+| `exclude` | `string[]` | `[]` | Root globals to block from hoisting, even if in stdlib or `include`. |
+
+#### Root filtering
+
+**Default behavior (breaking change from v0.x)**
+
+In v1.0, the localizer hoists only chains rooted at Lua stdlib globals by default:
+`math`, `string`, `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`.
+
+Chains rooted at any other global are skipped. This protects against libraries that rely on
+metatables (e.g., busted/luassert: `assert.are_not.equal`), where hoisting the chain would
+collapse the `__index` chain and silently change behavior.
+
+**Resolution formula:** `(STDLIB ∪ include) \ exclude \ (BLOCKLIST \ include)`
+
+An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pending`, `setup`,
+`teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
+excluded unless the user explicitly names them in `include`.
+
+**Restoring previous behavior**
+
+To hoist all chains as v0.x did, set `include: ["*"]`. This enables opt-out mode — all roots
+are allowed except those in `exclude` and the internal blocklist (unless also named in `include`).
+
+```jsonc
+"localizer": { "include": ["*"] }
+```
+
+**Defold engine** — Defold exposes flat function tables (`go`, `msg`, `vmath`, etc.) that are
+safe to hoist. List the ones you use:
+
+```jsonc
+"localizer": {
+  "include": ["go", "msg", "vmath", "sprite", "gui", "sound"]
+}
+```
+
+**WoW API** — Same pattern for World of Warcraft namespaced APIs:
+
+```jsonc
+"localizer": {
+  "include": ["C_Timer", "C_Map", "UnitName"]
+}
+```
+
+**Overriding the internal blocklist** — If you know a blocklisted global is safe in your
+codebase (e.g., you use a custom `assert` that is a plain function table), name it explicitly
+in `include`:
+
+```jsonc
+"localizer": { "include": ["assert"] }
+```
 
 ### `debug-strip`
 
@@ -254,7 +307,7 @@ Options:
 | `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions |
 | `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based |
 | `rules.inline` | `boolean` | `true` | Inline `@inline` functions at call sites |
-| `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals |
+| `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default — see `localizer` section for `include`/`exclude` options |
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |
 
