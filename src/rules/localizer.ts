@@ -13,15 +13,31 @@ import { resolveLocalizerConfig } from "../config";
 
 /** Lua stdlib globals that are safe to hoist (flat function tables, no metatables). */
 const STDLIB_ROOTS: ReadonlySet<string> = new Set([
-  "math", "string", "table", "os", "io",
-  "coroutine", "bit", "bit32", "jit", "debug",
+  "math",
+  "string",
+  "table",
+  "os",
+  "io",
+  "coroutine",
+  "bit",
+  "bit32",
+  "jit",
+  "debug",
 ]);
 
 /** Globals known to rely on metatables -- never hoisted unless explicitly included. */
 const INTERNAL_BLOCKLIST: ReadonlySet<string> = new Set([
-  "assert", "spy", "stub", "mock",
-  "describe", "it", "pending",
-  "setup", "teardown", "before_each", "after_each",
+  "assert",
+  "spy",
+  "stub",
+  "mock",
+  "describe",
+  "it",
+  "pending",
+  "setup",
+  "teardown",
+  "before_each",
+  "after_each",
   "insist",
 ]);
 
@@ -278,7 +294,13 @@ function processFile(
   } else {
     // "all": module pass first, then function pass for remaining chains
     const hoistedAtModule = hoistScope(
-      file.statements, threshold, false, new Set(), context, undefined, isRootAllowed,
+      file.statements,
+      threshold,
+      false,
+      new Set(),
+      context,
+      undefined,
+      isRootAllowed,
     );
     processFunctionBodies(file.statements, threshold, hoistedAtModule, context, isRootAllowed);
   }
@@ -299,23 +321,41 @@ function processFunctionBodies(
       const fn = stmt.right[0];
       const paramNames = new Set(fn.params?.filter(tstl.isIdentifier).map((p) => p.text));
       hoistScope(
-        fn.body.statements, threshold, true, alreadyHoisted, context, paramNames, isRootAllowed,
+        fn.body.statements,
+        threshold,
+        true,
+        alreadyHoisted,
+        context,
+        paramNames,
+        isRootAllowed,
       );
       processFunctionBodies(fn.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
     } else if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, threshold, alreadyHoisted, context, isRootAllowed);
     } else if (tstl.isIfStatement(stmt)) {
       processFunctionBodies(
-        stmt.ifBlock.statements, threshold, alreadyHoisted, context, isRootAllowed,
+        stmt.ifBlock.statements,
+        threshold,
+        alreadyHoisted,
+        context,
+        isRootAllowed,
       );
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
           processFunctionBodies(
-            [stmt.elseBlock], threshold, alreadyHoisted, context, isRootAllowed,
+            [stmt.elseBlock],
+            threshold,
+            alreadyHoisted,
+            context,
+            isRootAllowed,
           );
         } else {
           processFunctionBodies(
-            stmt.elseBlock.statements, threshold, alreadyHoisted, context, isRootAllowed,
+            stmt.elseBlock.statements,
+            threshold,
+            alreadyHoisted,
+            context,
+            isRootAllowed,
           );
         }
       }
@@ -324,12 +364,30 @@ function processFunctionBodies(
         ? new Set(stmt.names.filter(tstl.isIdentifier).map((n) => n.text))
         : new Set([stmt.controlVariable.text]);
       hoistScope(
-        stmt.body.statements, threshold, true, alreadyHoisted, context, loopNames, isRootAllowed,
+        stmt.body.statements,
+        threshold,
+        true,
+        alreadyHoisted,
+        context,
+        loopNames,
+        isRootAllowed,
       );
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context);
-      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
+      processFunctionBodies(
+        stmt.body.statements,
+        threshold,
+        alreadyHoisted,
+        context,
+        isRootAllowed,
+      );
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
-      processFunctionBodies(stmt.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
+      processFunctionBodies(
+        stmt.body.statements,
+        threshold,
+        alreadyHoisted,
+        context,
+        isRootAllowed,
+      );
     }
   }
 }
