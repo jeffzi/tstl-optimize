@@ -44,7 +44,11 @@ describe("localizer", () => {
           "  }",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["item"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____item_x_y = item.x.y");
     });
@@ -58,7 +62,9 @@ describe("localizer", () => {
           "  return a + b;",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: { rules: { localizer: { scope: "function" as const, include: ["obj"] } } },
+        },
       );
       expect(lua).toContain("local ____obj_x_y = obj.x.y");
     });
@@ -87,7 +93,11 @@ describe("localizer", () => {
           "const a = config.graphics.width;",
           "const b = config.graphics.width;",
         ].join("\n"),
-        MODULE_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
     });
@@ -112,7 +122,11 @@ describe("localizer", () => {
           "declare const b: { x: number };",
           "const r = a.x + a.x + b.x + b.x;",
         ].join("\n"),
-        MODULE_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["a", "b"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____a_x = a.x");
       expect(lua).toContain("local ____b_x = b.x");
@@ -149,7 +163,11 @@ describe("localizer", () => {
           "const a = config.graphics.width;",
           "const b = config.graphics.width;",
         ].join("\n"),
-        MODULE_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
       );
       // config is a local — hoisting above its definition would make config nil
       expect(lua).not.toContain("local ____config_graphics_width = config.graphics.width");
@@ -165,7 +183,9 @@ describe("localizer", () => {
           "  return a + b + y;",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: { rules: { localizer: { scope: "function" as const, include: ["obj"] } } },
+        },
       );
       expect(lua).toContain("local ____obj_x_y = obj.x.y");
     });
@@ -181,7 +201,9 @@ describe("localizer", () => {
           "  }",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: { rules: { localizer: { scope: "function" as const, include: ["obj"] } } },
+        },
       );
       expect(lua).toContain("local ____obj_x = obj.x");
     });
@@ -195,7 +217,7 @@ describe("localizer", () => {
           "  return a + b;",
           "}",
         ].join("\n"),
-        MODULE_SCOPE,
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["obj"] } } } },
       );
       expect(lua).not.toContain("local ____obj_x_y = obj.x.y");
     });
@@ -210,7 +232,9 @@ describe("localizer", () => {
           "  }",
           "}",
         ].join("\n"),
-        MODULE_SCOPE,
+        {
+          pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["item"] } } },
+        },
       );
       expect(lua).not.toContain("local ____item_x_y = item.x.y");
     });
@@ -222,7 +246,7 @@ describe("localizer", () => {
           "const a = obj && obj.name;",
           "const b = obj && obj.name;",
         ].join("\n"),
-        MODULE_SCOPE,
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["obj"] } } } },
       );
       // obj.name is inside `obj and obj.name` — conditionally evaluated.
       // Hoisting would make it unconditional, crashing when obj is nil.
@@ -493,7 +517,7 @@ describe("localizer", () => {
           // Extra use outside loop so each chain reaches threshold 2
           "const terminalSpeed = config.physics.gravity / config.physics.friction;",
         ].join("\n"),
-        ALL_SCOPE,
+        { pluginOptions: { rules: { localizer: { scope: "all" as const, include: ["config"] } } } },
       );
       // Static chains hoisted at module level
       expect(lua).toContain("local ____config_physics_friction = config.physics.friction");
@@ -562,7 +586,11 @@ describe("localizer", () => {
           "  running = false;",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["config"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____config_physics_gravity = config.physics.gravity");
     });
@@ -578,7 +606,11 @@ describe("localizer", () => {
           "  const neg = function() { return config.physics.gravity + config.physics.gravity; };",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["config"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____config_physics_gravity = config.physics.gravity");
     });
@@ -594,7 +626,11 @@ describe("localizer", () => {
           "  const neg = function() { return config.physics.gravity + config.physics.gravity; };",
           "}",
         ].join("\n"),
-        FUNC_SCOPE,
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["config"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____config_physics_gravity = config.physics.gravity");
     });
@@ -604,10 +640,7 @@ describe("localizer", () => {
     it("default config only hoists stdlib roots", () => {
       // math is stdlib — should be hoisted
       const lua = compile(
-        [
-          "declare const x: number;",
-          "const a = Math.ceil(x); const b = Math.ceil(x);",
-        ].join("\n"),
+        ["declare const x: number;", "const a = Math.ceil(x); const b = Math.ceil(x);"].join("\n"),
         { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
       );
       expect(lua).toContain("local ____math_ceil = math.ceil");
@@ -634,17 +667,18 @@ describe("localizer", () => {
           "const a = config.graphics.width;",
           "const b = config.graphics.width;",
         ].join("\n"),
-        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["config"] } } } },
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
     });
 
     it("exclude removes stdlib root from allowed set", () => {
       const lua = compile(
-        [
-          "declare const x: number;",
-          "const a = Math.ceil(x); const b = Math.ceil(x);",
-        ].join("\n"),
+        ["declare const x: number;", "const a = Math.ceil(x); const b = Math.ceil(x);"].join("\n"),
         {
           pluginOptions: { rules: { localizer: { scope: "module" as const, exclude: ["math"] } } },
           luaTarget: tstl.LuaTarget.LuaJIT,
@@ -669,12 +703,11 @@ describe("localizer", () => {
 
     it("include: ['*'] with exclude blocks specific roots", () => {
       const lua = compile(
-        [
-          "declare const x: number;",
-          "const a = Math.ceil(x); const b = Math.ceil(x);",
-        ].join("\n"),
+        ["declare const x: number;", "const a = Math.ceil(x); const b = Math.ceil(x);"].join("\n"),
         {
-          pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["*"], exclude: ["math"] } } },
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["*"], exclude: ["math"] } },
+          },
           luaTarget: tstl.LuaTarget.LuaJIT,
         },
       );
@@ -701,7 +734,11 @@ describe("localizer", () => {
           "const a = assert.are_not.flag;",
           "const b = assert.are_not.flag;",
         ].join("\n"),
-        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["assert"] } } } },
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["assert"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____assert_are_not_flag = assert.are_not.flag");
     });
@@ -726,7 +763,11 @@ describe("localizer", () => {
           "const a = assert.are_not.flag;",
           "const b = assert.are_not.flag;",
         ].join("\n"),
-        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["*", "assert"] } } } },
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["*", "assert"] } },
+          },
+        },
       );
       expect(lua).toContain("local ____assert_are_not_flag = assert.are_not.flag");
     });
