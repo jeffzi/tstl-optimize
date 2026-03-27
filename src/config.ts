@@ -13,6 +13,8 @@ export interface LocalizerConfig {
   enabled: boolean;
   threshold: number;
   scope: LocalizerScope;
+  include: string[];
+  exclude: string[];
 }
 
 export type ConstantValue = boolean | number | string;
@@ -53,6 +55,8 @@ const DEFAULT_LOCALIZER: LocalizerConfig = {
   enabled: true,
   threshold: 2,
   scope: "all",
+  include: [],
+  exclude: [],
 };
 
 const DEFAULT_RULES: RulesConfig = {
