@@ -116,6 +116,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
     config.rules["conditional-compilation"],
   );
   if (maybeResolved === false || maybeResolved.size === 0) return {};
+  // Rebind after guard so TypeScript narrows the type inside closures below
   const resolved = maybeResolved;
 
   function tryFoldExpression(

@@ -154,6 +154,7 @@ describe("localizer", () => {
         { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
       );
       expect(lua).toContain("local ____math_floor = math.floor");
+      expect(lua).toContain("____math_floor(x)");
     });
 
     it("does not hoist chain whose base is locally defined in the same scope", () => {
@@ -816,10 +817,7 @@ describe("localizer", () => {
 
     it("redundant include of stdlib root is a no-op: math still hoisted", () => {
       const lua = compile(
-        [
-          "declare const x: number;",
-          "const a = Math.ceil(x); const b = Math.ceil(x);",
-        ].join("\n"),
+        ["declare const x: number;", "const a = Math.ceil(x); const b = Math.ceil(x);"].join("\n"),
         {
           pluginOptions: {
             rules: { localizer: { scope: "module" as const, include: ["math"] } },
@@ -980,9 +978,7 @@ describe("localizer", () => {
         },
       );
       // config chain hoisted at module level
-      expect(luaWithInclude).toContain(
-        "local ____config_physics_gravity = config.physics.gravity",
-      );
+      expect(luaWithInclude).toContain("local ____config_physics_gravity = config.physics.gravity");
       // velY[i] localized in loop body
       expect(luaWithInclude).toContain("local ____velY = velY[i]");
 

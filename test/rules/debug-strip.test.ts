@@ -1,37 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import { compile, normalizeLua } from "../helpers";
 
 const enabled = { pluginOptions: { rules: { "debug-strip": true } } };
-
-/** Collapse whitespace so assertions catch any leftover fragments. */
-function normalize(lua: string): string {
-  return lua
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .join("\n");
-}
 
 describe("debug-strip", () => {
   describe("functions (bare function stripping)", () => {
     it("strips print() in statement position", () => {
       const lua = compile('print("hello"); const x = 1;', enabled);
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("strips assert() in statement position", () => {
       const lua = compile("declare const cond: boolean; assert(cond); const x = 1;", enabled);
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("strips call with multiple arguments", () => {
       const lua = compile('print("x", "y", "z"); const x = 1;', enabled);
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("does not strip unlisted functions", () => {
       const lua = compile("declare function foo(): void; foo();", enabled);
-      expect(normalize(lua)).toBe("foo()");
+      expect(normalizeLua(lua)).toBe("foo()");
     });
   });
 
@@ -41,7 +32,7 @@ describe("debug-strip", () => {
         "declare namespace debug { function traceback(): string; } debug.traceback(); const x = 1;",
         enabled,
       );
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("strips namespace call with arguments", () => {
@@ -53,7 +44,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("strips two-level nested namespace call (debug.profiler.start())", () => {
@@ -65,7 +56,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("strips three-level nested namespace call (debug.profiler.hooks.begin())", () => {
@@ -77,7 +68,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
   });
 
@@ -87,7 +78,7 @@ describe("debug-strip", () => {
         'declare function print(msg: string): string; const x = print("x");',
         enabled,
       );
-      expect(normalize(lua)).toBe('x = print("x")');
+      expect(normalizeLua(lua)).toBe('x = print("x")');
     });
 
     it("keeps assert() used as return value", () => {
@@ -98,7 +89,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("function check(v)\nreturn assert(v)\nend");
+      expect(normalizeLua(lua)).toBe("function check(v)\nreturn assert(v)\nend");
     });
 
     it("keeps print() used as argument", () => {
@@ -110,7 +101,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe('foo(print("x"))');
+      expect(normalizeLua(lua)).toBe('foo(print("x"))');
     });
   });
 
@@ -120,7 +111,7 @@ describe("debug-strip", () => {
         'declare function myDebug(msg: string): void; print("a"); myDebug("b");',
         { pluginOptions: { rules: { "debug-strip": { functions: ["myDebug"] } } } },
       );
-      expect(normalize(lua)).toBe('print("a")');
+      expect(normalizeLua(lua)).toBe('print("a")');
     });
 
     it("custom namespaces list replaces defaults", () => {
@@ -133,21 +124,21 @@ describe("debug-strip", () => {
         ].join("\n"),
         { pluginOptions: { rules: { "debug-strip": { namespaces: ["profiler"] } } } },
       );
-      expect(normalize(lua)).toBe("debug.traceback()");
+      expect(normalizeLua(lua)).toBe("debug.traceback()");
     });
 
     it('"debug-strip": false disables the rule', () => {
       const lua = compile('print("hello");', {
         pluginOptions: { rules: { "debug-strip": false } },
       });
-      expect(normalize(lua)).toBe('print("hello")');
+      expect(normalizeLua(lua)).toBe('print("hello")');
     });
 
     it('"debug-strip": { enabled: false } disables the rule', () => {
       const lua = compile('print("hello");', {
         pluginOptions: { rules: { "debug-strip": { enabled: false } } },
       });
-      expect(normalize(lua)).toBe('print("hello")');
+      expect(normalizeLua(lua)).toBe('print("hello")');
     });
   });
 
@@ -164,7 +155,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("heal(10)");
+      expect(normalizeLua(lua)).toBe("heal(10)");
     });
 
     it("strips multiple namespace calls interspersed with other code", () => {
@@ -179,7 +170,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("a = x + 1\nb = x + 2");
+      expect(normalizeLua(lua)).toBe("a = x + 1\nb = x + 2");
     });
 
     it("strips a call whose arguments span multiple lines", () => {
@@ -196,7 +187,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("x = hp + mp");
+      expect(normalizeLua(lua)).toBe("x = hp + mp");
     });
 
     it("strips a namespace call whose arguments span multiple lines", () => {
@@ -212,7 +203,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("x = 1");
+      expect(normalizeLua(lua)).toBe("x = 1");
     });
 
     it("strips mixed function and namespace calls in one block", () => {
@@ -227,14 +218,14 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalize(lua)).toBe("result = n * 2");
+      expect(normalizeLua(lua)).toBe("result = n * 2");
     });
   });
 
   describe("preserves non-identifier callees", () => {
     it("keeps IIFE (callee is FunctionExpression, not in any strip list)", () => {
       const lua = compile("(function() { const a = 1; })(); const x = 1;", enabled);
-      expect(normalize(lua)).toBe("(function()\nlocal a = 1\nend)()\nx = 1");
+      expect(normalizeLua(lua)).toBe("(function()\nlocal a = 1\nend)()\nx = 1");
     });
   });
 
@@ -244,7 +235,7 @@ describe("debug-strip", () => {
         ["declare const x: number;", "const a = Math.floor(x);", 'print("debug");'].join("\n"),
         { pluginOptions: { rules: { "debug-strip": true } } },
       );
-      expect(normalize(lua)).toBe("a = x - x % 1");
+      expect(normalizeLua(lua)).toBe("a = x - x % 1");
     });
   });
 });

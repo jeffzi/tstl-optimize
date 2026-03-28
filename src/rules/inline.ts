@@ -163,79 +163,142 @@ function canInline(
   return true;
 }
 
+/**
+ * Recursively transform a Lua expression tree. `leafFn` is called on each node;
+ * if it returns a value, that replaces the node (no further recursion).
+ * Otherwise the default recursion rebuilds the node with mapped children.
+ * Does not recurse into nested function bodies — they have their own scope.
+ */
+function mapLuaExpression(
+  node: tstl.Expression,
+  leafFn: (n: tstl.Expression) => tstl.Expression | undefined,
+): tstl.Expression {
+  const hit = leafFn(node);
+  if (hit !== undefined) return hit;
+
+  const recurse = (n: tstl.Expression) => mapLuaExpression(n, leafFn);
+
+  switch (node.kind) {
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      return tstl.createBinaryExpression(recurse(bin.left), recurse(bin.right), bin.operator);
+    }
+    case tstl.SyntaxKind.UnaryExpression: {
+      const un = node as tstl.UnaryExpression;
+      return tstl.createUnaryExpression(recurse(un.operand), un.operator);
+    }
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      return tstl.createCallExpression(recurse(call.expression), call.params.map(recurse));
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      return tstl.createMethodCallExpression(
+        recurse(method.prefixExpression),
+        method.name,
+        method.params.map(recurse),
+      );
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      return tstl.createTableIndexExpression(recurse(tbl.table), recurse(tbl.index));
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return tstl.createParenthesizedExpression(
+        recurse((node as tstl.ParenthesizedExpression).expression),
+      );
+    case tstl.SyntaxKind.TableExpression: {
+      const tblExpr = node as tstl.TableExpression;
+      return tstl.createTableExpression(
+        tblExpr.fields.map((field) =>
+          tstl.createTableFieldExpression(
+            recurse(field.value),
+            field.key ? recurse(field.key) : undefined,
+          ),
+        ),
+      );
+    }
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      return tstl.createConditionalExpression(
+        recurse(cond.condition),
+        recurse(cond.whenTrue),
+        recurse(cond.whenFalse),
+      );
+    }
+    default:
+      return node;
+  }
+}
+
 function substituteParams(
   node: tstl.Expression,
   paramMap: Map<tstl.SymbolId, tstl.Expression>,
 ): tstl.Expression {
-  if (tstl.isIdentifier(node)) {
-    const mapped = node.symbolId !== undefined ? paramMap.get(node.symbolId) : undefined;
-    if (mapped) {
-      return tstl.cloneNode(mapped);
+  return mapLuaExpression(node, (n) => {
+    if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
+    const id = n as tstl.Identifier;
+    const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
+    return mapped ? tstl.cloneNode(mapped) : n;
+  });
+}
+
+/**
+ * Test whether a predicate holds for any identifier (with a symbolId) in the
+ * expression tree. Short-circuits on first match. Does not recurse into
+ * nested function bodies.
+ */
+function someLuaIdentifier(
+  node: tstl.Expression,
+  predicate: (symbolId: tstl.SymbolId) => boolean,
+): boolean {
+  if (node.kind === tstl.SyntaxKind.Identifier) {
+    const symbolId = (node as tstl.Identifier).symbolId;
+    return symbolId !== undefined && predicate(symbolId);
+  }
+  return luaExprChildren(node).some((child) => someLuaIdentifier(child, predicate));
+}
+
+function collectSymbolIds(node: tstl.Expression, ids: Set<tstl.SymbolId>): void {
+  someLuaIdentifier(node, (id) => {
+    ids.add(id);
+    return false; // keep walking
+  });
+}
+
+function luaExprChildren(node: tstl.Expression): tstl.Expression[] {
+  switch (node.kind) {
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      return [bin.left, bin.right];
     }
-    return node;
+    case tstl.SyntaxKind.UnaryExpression:
+      return [(node as tstl.UnaryExpression).operand];
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      return [call.expression, ...call.params];
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      return [method.prefixExpression, ...method.params];
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      return [tbl.table, tbl.index];
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return [(node as tstl.ParenthesizedExpression).expression];
+    case tstl.SyntaxKind.TableExpression:
+      return (node as tstl.TableExpression).fields.flatMap((f) =>
+        f.key !== undefined ? [f.value, f.key] : [f.value],
+      );
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      return [cond.condition, cond.whenTrue, cond.whenFalse];
+    }
+    default:
+      return [];
   }
-
-  if (tstl.isBinaryExpression(node)) {
-    return tstl.createBinaryExpression(
-      substituteParams(node.left, paramMap),
-      substituteParams(node.right, paramMap),
-      node.operator,
-    );
-  }
-
-  if (tstl.isUnaryExpression(node)) {
-    return tstl.createUnaryExpression(substituteParams(node.operand, paramMap), node.operator);
-  }
-
-  if (tstl.isCallExpression(node)) {
-    return tstl.createCallExpression(
-      substituteParams(node.expression, paramMap),
-      node.params.map((p) => substituteParams(p, paramMap)),
-    );
-  }
-
-  if (tstl.isMethodCallExpression(node)) {
-    return tstl.createMethodCallExpression(
-      substituteParams(node.prefixExpression, paramMap),
-      node.name,
-      node.params.map((p) => substituteParams(p, paramMap)),
-    );
-  }
-
-  if (tstl.isTableIndexExpression(node)) {
-    return tstl.createTableIndexExpression(
-      substituteParams(node.table, paramMap),
-      substituteParams(node.index, paramMap),
-    );
-  }
-
-  if (tstl.isParenthesizedExpression(node)) {
-    return tstl.createParenthesizedExpression(substituteParams(node.expression, paramMap));
-  }
-
-  if (tstl.isTableExpression(node)) {
-    return tstl.createTableExpression(
-      node.fields.map((field) =>
-        tstl.createTableFieldExpression(
-          substituteParams(field.value, paramMap),
-          field.key ? substituteParams(field.key, paramMap) : undefined,
-        ),
-      ),
-    );
-  }
-
-  if (tstl.isConditionalExpression(node)) {
-    return tstl.createConditionalExpression(
-      substituteParams(node.condition, paramMap),
-      substituteParams(node.whenTrue, paramMap),
-      substituteParams(node.whenFalse, paramMap),
-    );
-  }
-
-  // Don't recurse into nested function bodies — they have their own scope
-  if (tstl.isFunctionExpression(node)) return node;
-
-  return node;
 }
 
 function needsParentheses(node: tstl.Expression): boolean {
@@ -288,7 +351,31 @@ function handleCallExpression(
     paramMap.set(symbolId, luaArg);
   }
 
+  const isCrossModule =
+    node.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+
+  if (isCrossModule) {
+    const paramIds = new Set(paramMap.keys());
+    if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
+      context.diagnostics.push(
+        createInlineWarning(node, "cross-module function references non-parameter identifiers"),
+      );
+      return undefined;
+    }
+  }
+
   const substituted = substituteParams(luaBody, paramMap);
+
+  // Defense-in-depth: after substitution, only caller-provided identifiers should remain
+  if (isCrossModule) {
+    const callerIds = new Set<tstl.SymbolId>();
+    for (const arg of paramMap.values()) {
+      collectSymbolIds(arg, callerIds);
+    }
+    if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
+      return undefined;
+    }
+  }
 
   if (needsParentheses(substituted)) {
     return tstl.createParenthesizedExpression(substituted);

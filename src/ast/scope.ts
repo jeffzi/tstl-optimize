@@ -107,6 +107,15 @@ export function collectArrayElementAccesses(
   // Bases used with multiple different loop vars — excluded from hoisting
   const mixedIndex = new Set<string>();
 
+  function trackLoopVar(baseName: string, indexName: string): void {
+    const existing = loopVar.get(baseName);
+    if (existing !== undefined && existing !== indexName) {
+      mixedIndex.add(baseName);
+    } else {
+      loopVar.set(baseName, indexName);
+    }
+  }
+
   const hooks = {
     shallow,
     guardDepth: 0,
@@ -122,15 +131,8 @@ export function collectArrayElementAccesses(
         loopVarNames.has(expr.index.text)
       ) {
         if (hooks.guardDepth === 0) {
-          const baseName = expr.table.text;
-          const indexName = expr.index.text;
-          const existing = loopVar.get(baseName);
-          if (existing !== undefined && existing !== indexName) {
-            mixedIndex.add(baseName);
-          } else {
-            loopVar.set(baseName, indexName);
-          }
-          counts.set(baseName, (counts.get(baseName) ?? 0) + 1);
+          trackLoopVar(expr.table.text, expr.index.text);
+          counts.set(expr.table.text, (counts.get(expr.table.text) ?? 0) + 1);
         }
         control.skip();
       }
@@ -144,15 +146,8 @@ export function collectArrayElementAccesses(
             tstl.isIdentifier(lhs.index) &&
             loopVarNames.has(lhs.index.text)
           ) {
-            const baseName = lhs.table.text;
-            const indexName = lhs.index.text;
-            const existing = loopVar.get(baseName);
-            if (existing !== undefined && existing !== indexName) {
-              mixedIndex.add(baseName);
-            } else {
-              loopVar.set(baseName, indexName);
-            }
-            writes.add(baseName);
+            trackLoopVar(lhs.table.text, lhs.index.text);
+            writes.add(lhs.table.text);
           }
         }
       }
