@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-28
+
+### Added
+
+- **inline** rule now supports cross-module `@inline` for self-contained functions whose
+  bodies reference only parameters and literals. Functions that capture module-scope variables
+  are still rejected with a diagnostic warning.
+
 ## [0.3.1] - 2026-03-27
 
 ### Fixed
@@ -28,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Expression visitors from different rules now chain correctly instead of the higher-priority
-  visitor shadowing lower-priority ones
+- Multiple optimization rules targeting the same expression now all apply correctly instead of
+  only the highest-priority rule firing
 
 ## [0.2.0] - 2026-03-02
 
@@ -56,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations
 - Runnable examples with generation script
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.1.0...v0.2.0
