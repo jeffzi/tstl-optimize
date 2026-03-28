@@ -36,7 +36,7 @@
     "@types/node": "^25.3.0",
     "@vitest/coverage-v8": "^4.0.0",
     "dprint": "^0.52.0",
-    "knip": "^5.85.0",
+    "knip": "^6.1.0",
     "lefthook": "^2.1.0",
     "lua-types": "^2.13.0",
     "luamark-types": "github:jeffzi/luamark#ts-types",
