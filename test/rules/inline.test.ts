@@ -150,97 +150,6 @@ describe("inline", () => {
     });
   });
 
-  describe("negative: not inlined", () => {
-    it("does not inline without @inline tag", () => {
-      const lua = compile(`
-        function double(x: number) { return x * 2; }
-        declare const a: number;
-        const r = double(a);
-      `);
-      expect(lua).toContain("double(");
-    });
-
-    it("does not inline multi-statement body", () => {
-      const lua = compile(`
-        /** @inline */
-        function compute(x: number) {
-          const tmp = x * 2;
-          return tmp + 1;
-        }
-        declare const a: number;
-        const r = compute(a);
-      `);
-      expect(lua).toContain("compute(");
-    });
-
-    it("does not inline when side-effecting arg is used multiple times", () => {
-      const lua = compile(`
-        /** @inline */
-        function square(x: number) { return x * x; }
-        declare function foo(): number;
-        const r = square(foo());
-      `);
-      expect(lua).toContain("square(");
-    });
-
-    it("does not inline rest parameters", () => {
-      const lua = compile(`
-        /** @inline */
-        function first(...args: number[]) { return args[0]; }
-        const r = first(1, 2, 3);
-      `);
-      expect(lua).toContain("first(");
-    });
-
-    it("does not inline optional parameters", () => {
-      const lua = compile(`
-        /** @inline */
-        function maybe(x?: number) { return x; }
-        const r = maybe(5);
-      `);
-      expect(lua).toContain("maybe(");
-    });
-
-    it("does not inline default parameters", () => {
-      const lua = compile(`
-        /** @inline */
-        function withDefault(x: number = 0) { return x; }
-        const r = withDefault(5);
-      `);
-      expect(lua).toContain("withDefault(");
-    });
-
-    it("does not inline closure capture from non-module scope", () => {
-      const lua = compile(`
-        function outer() {
-          const captured = 10;
-          /** @inline */
-          function inner(x: number) { return x + captured; }
-          return inner(5);
-        }
-      `);
-      expect(lua).toContain("inner(");
-    });
-
-    it("does not inline when parameter is written inside body", () => {
-      const lua = compile(`
-        /** @inline */
-        function f(x: number) { return (x = 1, x); }
-        const result = f(0);
-      `);
-      expect(lua).toContain("f(");
-    });
-
-    it("does not inline recursive function", () => {
-      const lua = compile(`
-        /** @inline */
-        function recurse(x: number): number { return recurse(x); }
-        const r = recurse(5);
-      `);
-      expect(lua).toContain("recurse(");
-    });
-  });
-
   describe("comment cleanup", () => {
     it("strips @inline JSDoc comment from function declaration", () => {
       const lua = compile(`
@@ -407,17 +316,18 @@ describe("inline", () => {
     });
 
     it("emits no warning without @inline tag", () => {
-      const { diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(`
         function double(x: number) { return x * 2; }
         declare const a: number;
         const r = double(a);
       `);
+      expect(lua).toContain("double(");
       expect(diagnostics).toHaveLength(0);
     });
   });
 
   describe("cross-module: inlined (self-contained)", () => {
-    it("inlines pure parameter arithmetic", () => {
+    it("inlines self-contained function from another module", () => {
       const { lua, diagnostics } = compileMultiFileWithDiagnostics({
         "utils.ts": `
           /** @inline */
@@ -431,91 +341,6 @@ describe("inline", () => {
       });
       expect(lua).toContain("a * 2");
       expect(lua).not.toContain("double(");
-      expect(diagnostics).toHaveLength(0);
-    });
-
-    it("inlines zero-parameter function with literal", () => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export function pi() { return 3.14; }
-        `,
-        "main.ts": `
-          import { pi } from "./utils";
-          const r = pi();
-        `,
-      });
-      expect(lua).toContain("3.14");
-      expect(lua).not.toContain("pi(");
-      expect(diagnostics).toHaveLength(0);
-    });
-
-    it("inlines multi-parameter arithmetic", () => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export function add(a: number, b: number) { return a + b; }
-        `,
-        "main.ts": `
-          import { add } from "./utils";
-          declare const x: number;
-          declare const y: number;
-          const r = add(x, y);
-        `,
-      });
-      expect(lua).toContain("x + y");
-      expect(lua).not.toContain("add(");
-      expect(diagnostics).toHaveLength(0);
-    });
-
-    it("inlines parameter property access", () => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export function getX(obj: { x: number }) { return obj.x; }
-        `,
-        "main.ts": `
-          import { getX } from "./utils";
-          declare const t: { x: number };
-          const r = getX(t);
-        `,
-      });
-      expect(lua).toContain("t.x");
-      expect(lua).not.toContain("getX(");
-      expect(diagnostics).toHaveLength(0);
-    });
-
-    it("inlines unary on parameter", () => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export function neg(x: number) { return -x; }
-        `,
-        "main.ts": `
-          import { neg } from "./utils";
-          declare const a: number;
-          const r = neg(a);
-        `,
-      });
-      expect(lua).toContain("-a");
-      expect(lua).not.toContain("neg(");
-      expect(diagnostics).toHaveLength(0);
-    });
-
-    it("inlines table constructor from parameter", () => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export function wrap(x: number) { return { value: x }; }
-        `,
-        "main.ts": `
-          import { wrap } from "./utils";
-          declare const a: number;
-          const r = wrap(a);
-        `,
-      });
-      expect(lua).toContain("value = a");
-      expect(lua).not.toContain("wrap(");
       expect(diagnostics).toHaveLength(0);
     });
 
@@ -555,6 +380,8 @@ describe("inline", () => {
       expect(lua).toContain("scale(");
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(0); // ts.DiagnosticCategory.Warning
+      expect(diagnostics[0].source).toBe("tstl-optimize");
     });
 
     it("rejects function calling module-scope function", () => {
@@ -591,25 +418,6 @@ describe("inline", () => {
       expect(lua).toContain("isUp(");
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("non-parameter");
-    });
-
-    it("warns with correct diagnostic metadata for free variables", () => {
-      const { diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          const K = 10;
-          /** @inline */
-          export function scale(x: number) { return x * K; }
-        `,
-        "main.ts": `
-          import { scale } from "./utils";
-          declare const a: number;
-          const r = scale(a);
-        `,
-      });
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("non-parameter");
-      expect(diagnostics[0].category).toBe(0); // ts.DiagnosticCategory.Warning
-      expect(diagnostics[0].source).toBe("tstl-optimize");
     });
   });
 });

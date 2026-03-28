@@ -163,61 +163,57 @@ function canInline(
   return true;
 }
 
-function substituteParams(
+/**
+ * Recursively transform a Lua expression tree. `leafFn` is called on each node;
+ * if it returns a value, that replaces the node (no further recursion).
+ * Otherwise the default recursion rebuilds the node with mapped children.
+ * Does not recurse into nested function bodies — they have their own scope.
+ */
+function mapLuaExpression(
   node: tstl.Expression,
-  paramMap: Map<tstl.SymbolId, tstl.Expression>,
+  leafFn: (n: tstl.Expression) => tstl.Expression | undefined,
 ): tstl.Expression {
+  const hit = leafFn(node);
+  if (hit !== undefined) return hit;
+
+  const recurse = (n: tstl.Expression) => mapLuaExpression(n, leafFn);
+
   switch (node.kind) {
-    case tstl.SyntaxKind.Identifier: {
-      const id = node as tstl.Identifier;
-      const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
-      return mapped ? tstl.cloneNode(mapped) : node;
-    }
     case tstl.SyntaxKind.BinaryExpression: {
       const bin = node as tstl.BinaryExpression;
-      return tstl.createBinaryExpression(
-        substituteParams(bin.left, paramMap),
-        substituteParams(bin.right, paramMap),
-        bin.operator,
-      );
+      return tstl.createBinaryExpression(recurse(bin.left), recurse(bin.right), bin.operator);
     }
     case tstl.SyntaxKind.UnaryExpression: {
       const un = node as tstl.UnaryExpression;
-      return tstl.createUnaryExpression(substituteParams(un.operand, paramMap), un.operator);
+      return tstl.createUnaryExpression(recurse(un.operand), un.operator);
     }
     case tstl.SyntaxKind.CallExpression: {
       const call = node as tstl.CallExpression;
-      return tstl.createCallExpression(
-        substituteParams(call.expression, paramMap),
-        call.params.map((p) => substituteParams(p, paramMap)),
-      );
+      return tstl.createCallExpression(recurse(call.expression), call.params.map(recurse));
     }
     case tstl.SyntaxKind.MethodCallExpression: {
       const method = node as tstl.MethodCallExpression;
       return tstl.createMethodCallExpression(
-        substituteParams(method.prefixExpression, paramMap),
+        recurse(method.prefixExpression),
         method.name,
-        method.params.map((p) => substituteParams(p, paramMap)),
+        method.params.map(recurse),
       );
     }
     case tstl.SyntaxKind.TableIndexExpression: {
       const tbl = node as tstl.TableIndexExpression;
-      return tstl.createTableIndexExpression(
-        substituteParams(tbl.table, paramMap),
-        substituteParams(tbl.index, paramMap),
+      return tstl.createTableIndexExpression(recurse(tbl.table), recurse(tbl.index));
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return tstl.createParenthesizedExpression(
+        recurse((node as tstl.ParenthesizedExpression).expression),
       );
-    }
-    case tstl.SyntaxKind.ParenthesizedExpression: {
-      const paren = node as tstl.ParenthesizedExpression;
-      return tstl.createParenthesizedExpression(substituteParams(paren.expression, paramMap));
-    }
     case tstl.SyntaxKind.TableExpression: {
       const tblExpr = node as tstl.TableExpression;
       return tstl.createTableExpression(
         tblExpr.fields.map((field) =>
           tstl.createTableFieldExpression(
-            substituteParams(field.value, paramMap),
-            field.key ? substituteParams(field.key, paramMap) : undefined,
+            recurse(field.value),
+            field.key ? recurse(field.key) : undefined,
           ),
         ),
       );
@@ -225,118 +221,83 @@ function substituteParams(
     case tstl.SyntaxKind.ConditionalExpression: {
       const cond = node as tstl.ConditionalExpression;
       return tstl.createConditionalExpression(
-        substituteParams(cond.condition, paramMap),
-        substituteParams(cond.whenTrue, paramMap),
-        substituteParams(cond.whenFalse, paramMap),
+        recurse(cond.condition),
+        recurse(cond.whenTrue),
+        recurse(cond.whenFalse),
       );
     }
-    // Don't recurse into nested function bodies — they have their own scope
     default:
       return node;
   }
 }
 
-function hasFreeVariables(node: tstl.Expression, paramIds: ReadonlySet<tstl.SymbolId>): boolean {
-  switch (node.kind) {
-    case tstl.SyntaxKind.Identifier: {
-      const symbolId = (node as tstl.Identifier).symbolId;
-      return symbolId !== undefined && !paramIds.has(symbolId);
-    }
-    case tstl.SyntaxKind.BinaryExpression: {
-      const bin = node as tstl.BinaryExpression;
-      return hasFreeVariables(bin.left, paramIds) || hasFreeVariables(bin.right, paramIds);
-    }
-    case tstl.SyntaxKind.UnaryExpression:
-      return hasFreeVariables((node as tstl.UnaryExpression).operand, paramIds);
-    case tstl.SyntaxKind.CallExpression: {
-      const call = node as tstl.CallExpression;
-      return (
-        hasFreeVariables(call.expression, paramIds) ||
-        call.params.some((p) => hasFreeVariables(p, paramIds))
-      );
-    }
-    case tstl.SyntaxKind.MethodCallExpression: {
-      const method = node as tstl.MethodCallExpression;
-      return (
-        hasFreeVariables(method.prefixExpression, paramIds) ||
-        method.params.some((p) => hasFreeVariables(p, paramIds))
-      );
-    }
-    case tstl.SyntaxKind.TableIndexExpression: {
-      const tbl = node as tstl.TableIndexExpression;
-      return hasFreeVariables(tbl.table, paramIds) || hasFreeVariables(tbl.index, paramIds);
-    }
-    case tstl.SyntaxKind.ParenthesizedExpression:
-      return hasFreeVariables((node as tstl.ParenthesizedExpression).expression, paramIds);
-    case tstl.SyntaxKind.TableExpression:
-      return (node as tstl.TableExpression).fields.some(
-        (f) =>
-          hasFreeVariables(f.value, paramIds) ||
-          (f.key !== undefined && hasFreeVariables(f.key, paramIds)),
-      );
-    case tstl.SyntaxKind.ConditionalExpression: {
-      const cond = node as tstl.ConditionalExpression;
-      return (
-        hasFreeVariables(cond.condition, paramIds) ||
-        hasFreeVariables(cond.whenTrue, paramIds) ||
-        hasFreeVariables(cond.whenFalse, paramIds)
-      );
-    }
-    default:
-      return false;
+function substituteParams(
+  node: tstl.Expression,
+  paramMap: Map<tstl.SymbolId, tstl.Expression>,
+): tstl.Expression {
+  return mapLuaExpression(node, (n) => {
+    if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
+    const id = n as tstl.Identifier;
+    const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
+    return mapped ? tstl.cloneNode(mapped) : n;
+  });
+}
+
+/**
+ * Test whether a predicate holds for any identifier (with a symbolId) in the
+ * expression tree. Short-circuits on first match. Does not recurse into
+ * nested function bodies.
+ */
+function someLuaIdentifier(
+  node: tstl.Expression,
+  predicate: (symbolId: tstl.SymbolId) => boolean,
+): boolean {
+  if (node.kind === tstl.SyntaxKind.Identifier) {
+    const symbolId = (node as tstl.Identifier).symbolId;
+    return symbolId !== undefined && predicate(symbolId);
   }
+  return luaExprChildren(node).some((child) => someLuaIdentifier(child, predicate));
 }
 
 function collectSymbolIds(node: tstl.Expression, ids: Set<tstl.SymbolId>): void {
+  someLuaIdentifier(node, (id) => {
+    ids.add(id);
+    return false; // keep walking
+  });
+}
+
+function luaExprChildren(node: tstl.Expression): tstl.Expression[] {
   switch (node.kind) {
-    case tstl.SyntaxKind.Identifier: {
-      const id = node as tstl.Identifier;
-      if (id.symbolId !== undefined) ids.add(id.symbolId);
-      break;
-    }
     case tstl.SyntaxKind.BinaryExpression: {
       const bin = node as tstl.BinaryExpression;
-      collectSymbolIds(bin.left, ids);
-      collectSymbolIds(bin.right, ids);
-      break;
+      return [bin.left, bin.right];
     }
     case tstl.SyntaxKind.UnaryExpression:
-      collectSymbolIds((node as tstl.UnaryExpression).operand, ids);
-      break;
+      return [(node as tstl.UnaryExpression).operand];
     case tstl.SyntaxKind.CallExpression: {
       const call = node as tstl.CallExpression;
-      collectSymbolIds(call.expression, ids);
-      for (const p of call.params) collectSymbolIds(p, ids);
-      break;
+      return [call.expression, ...call.params];
     }
     case tstl.SyntaxKind.MethodCallExpression: {
       const method = node as tstl.MethodCallExpression;
-      collectSymbolIds(method.prefixExpression, ids);
-      for (const p of method.params) collectSymbolIds(p, ids);
-      break;
+      return [method.prefixExpression, ...method.params];
     }
     case tstl.SyntaxKind.TableIndexExpression: {
       const tbl = node as tstl.TableIndexExpression;
-      collectSymbolIds(tbl.table, ids);
-      collectSymbolIds(tbl.index, ids);
-      break;
+      return [tbl.table, tbl.index];
     }
     case tstl.SyntaxKind.ParenthesizedExpression:
-      collectSymbolIds((node as tstl.ParenthesizedExpression).expression, ids);
-      break;
+      return [(node as tstl.ParenthesizedExpression).expression];
     case tstl.SyntaxKind.TableExpression:
-      for (const f of (node as tstl.TableExpression).fields) {
-        collectSymbolIds(f.value, ids);
-        if (f.key) collectSymbolIds(f.key, ids);
-      }
-      break;
+      return (node as tstl.TableExpression).fields.flatMap((f) =>
+        f.key !== undefined ? [f.value, f.key] : [f.value],
+      );
     case tstl.SyntaxKind.ConditionalExpression: {
       const cond = node as tstl.ConditionalExpression;
-      collectSymbolIds(cond.condition, ids);
-      collectSymbolIds(cond.whenTrue, ids);
-      collectSymbolIds(cond.whenFalse, ids);
-      break;
+      return [cond.condition, cond.whenTrue, cond.whenFalse];
     }
+    default:
+      return [];
   }
 }
 
@@ -395,7 +356,7 @@ function handleCallExpression(
 
   if (isCrossModule) {
     const paramIds = new Set(paramMap.keys());
-    if (hasFreeVariables(luaBody, paramIds)) {
+    if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
       context.diagnostics.push(
         createInlineWarning(node, "cross-module function references non-parameter identifiers"),
       );
@@ -411,7 +372,7 @@ function handleCallExpression(
     for (const arg of paramMap.values()) {
       collectSymbolIds(arg, callerIds);
     }
-    if (hasFreeVariables(substituted, callerIds)) {
+    if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
       return undefined;
     }
   }

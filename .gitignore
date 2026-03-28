@@ -64,3 +64,8 @@ research/
 
 # Conformance test TSTL clone
 .conformance/
+
+# Claude Code
+CLAUDE.md
+.planning/
+

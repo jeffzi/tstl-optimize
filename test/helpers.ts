@@ -61,13 +61,6 @@ export function compile(source: string, options?: CompileOptions): string {
   return extractLua(transpile({ "main.ts": source }, options));
 }
 
-export function compileWithDiagnostics(source: string, options?: CompileOptions): CompileResult {
-  const result = transpile({ "main.ts": source }, options);
-  const lua = extractLua(result);
-  const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
-  return { lua, diagnostics };
-}
-
 export function compileMultiFileWithDiagnostics(
   files: Record<string, string>,
   options?: CompileOptions,
@@ -76,4 +69,8 @@ export function compileMultiFileWithDiagnostics(
   const lua = extractLua(result);
   const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
   return { lua, diagnostics };
+}
+
+export function compileWithDiagnostics(source: string, options?: CompileOptions): CompileResult {
+  return compileMultiFileWithDiagnostics({ "main.ts": source }, options);
 }
