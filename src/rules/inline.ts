@@ -145,9 +145,6 @@ function canInline(
 
   if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
 
-  if (callNode.getSourceFile().fileName !== declaration.getSourceFile().fileName)
-    return "cross-module inlining is not supported";
-
   // Reject recursion: body references the function itself
   if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
     return "recursive functions cannot be inlined";
@@ -170,75 +167,177 @@ function substituteParams(
   node: tstl.Expression,
   paramMap: Map<tstl.SymbolId, tstl.Expression>,
 ): tstl.Expression {
-  if (tstl.isIdentifier(node)) {
-    const mapped = node.symbolId !== undefined ? paramMap.get(node.symbolId) : undefined;
-    if (mapped) {
-      return tstl.cloneNode(mapped);
+  switch (node.kind) {
+    case tstl.SyntaxKind.Identifier: {
+      const id = node as tstl.Identifier;
+      const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
+      return mapped ? tstl.cloneNode(mapped) : node;
     }
-    return node;
-  }
-
-  if (tstl.isBinaryExpression(node)) {
-    return tstl.createBinaryExpression(
-      substituteParams(node.left, paramMap),
-      substituteParams(node.right, paramMap),
-      node.operator,
-    );
-  }
-
-  if (tstl.isUnaryExpression(node)) {
-    return tstl.createUnaryExpression(substituteParams(node.operand, paramMap), node.operator);
-  }
-
-  if (tstl.isCallExpression(node)) {
-    return tstl.createCallExpression(
-      substituteParams(node.expression, paramMap),
-      node.params.map((p) => substituteParams(p, paramMap)),
-    );
-  }
-
-  if (tstl.isMethodCallExpression(node)) {
-    return tstl.createMethodCallExpression(
-      substituteParams(node.prefixExpression, paramMap),
-      node.name,
-      node.params.map((p) => substituteParams(p, paramMap)),
-    );
-  }
-
-  if (tstl.isTableIndexExpression(node)) {
-    return tstl.createTableIndexExpression(
-      substituteParams(node.table, paramMap),
-      substituteParams(node.index, paramMap),
-    );
-  }
-
-  if (tstl.isParenthesizedExpression(node)) {
-    return tstl.createParenthesizedExpression(substituteParams(node.expression, paramMap));
-  }
-
-  if (tstl.isTableExpression(node)) {
-    return tstl.createTableExpression(
-      node.fields.map((field) =>
-        tstl.createTableFieldExpression(
-          substituteParams(field.value, paramMap),
-          field.key ? substituteParams(field.key, paramMap) : undefined,
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      return tstl.createBinaryExpression(
+        substituteParams(bin.left, paramMap),
+        substituteParams(bin.right, paramMap),
+        bin.operator,
+      );
+    }
+    case tstl.SyntaxKind.UnaryExpression: {
+      const un = node as tstl.UnaryExpression;
+      return tstl.createUnaryExpression(substituteParams(un.operand, paramMap), un.operator);
+    }
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      return tstl.createCallExpression(
+        substituteParams(call.expression, paramMap),
+        call.params.map((p) => substituteParams(p, paramMap)),
+      );
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      return tstl.createMethodCallExpression(
+        substituteParams(method.prefixExpression, paramMap),
+        method.name,
+        method.params.map((p) => substituteParams(p, paramMap)),
+      );
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      return tstl.createTableIndexExpression(
+        substituteParams(tbl.table, paramMap),
+        substituteParams(tbl.index, paramMap),
+      );
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression: {
+      const paren = node as tstl.ParenthesizedExpression;
+      return tstl.createParenthesizedExpression(substituteParams(paren.expression, paramMap));
+    }
+    case tstl.SyntaxKind.TableExpression: {
+      const tblExpr = node as tstl.TableExpression;
+      return tstl.createTableExpression(
+        tblExpr.fields.map((field) =>
+          tstl.createTableFieldExpression(
+            substituteParams(field.value, paramMap),
+            field.key ? substituteParams(field.key, paramMap) : undefined,
+          ),
         ),
-      ),
-    );
+      );
+    }
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      return tstl.createConditionalExpression(
+        substituteParams(cond.condition, paramMap),
+        substituteParams(cond.whenTrue, paramMap),
+        substituteParams(cond.whenFalse, paramMap),
+      );
+    }
+    // Don't recurse into nested function bodies — they have their own scope
+    default:
+      return node;
   }
+}
 
-  if (tstl.isConditionalExpression(node)) {
-    return tstl.createConditionalExpression(
-      substituteParams(node.condition, paramMap),
-      substituteParams(node.whenTrue, paramMap),
-      substituteParams(node.whenFalse, paramMap),
-    );
+function hasFreeVariables(node: tstl.Expression, paramIds: ReadonlySet<tstl.SymbolId>): boolean {
+  switch (node.kind) {
+    case tstl.SyntaxKind.Identifier: {
+      const symbolId = (node as tstl.Identifier).symbolId;
+      return symbolId !== undefined && !paramIds.has(symbolId);
+    }
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      return hasFreeVariables(bin.left, paramIds) || hasFreeVariables(bin.right, paramIds);
+    }
+    case tstl.SyntaxKind.UnaryExpression:
+      return hasFreeVariables((node as tstl.UnaryExpression).operand, paramIds);
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      return (
+        hasFreeVariables(call.expression, paramIds) ||
+        call.params.some((p) => hasFreeVariables(p, paramIds))
+      );
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      return (
+        hasFreeVariables(method.prefixExpression, paramIds) ||
+        method.params.some((p) => hasFreeVariables(p, paramIds))
+      );
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      return hasFreeVariables(tbl.table, paramIds) || hasFreeVariables(tbl.index, paramIds);
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return hasFreeVariables((node as tstl.ParenthesizedExpression).expression, paramIds);
+    case tstl.SyntaxKind.TableExpression:
+      return (node as tstl.TableExpression).fields.some(
+        (f) =>
+          hasFreeVariables(f.value, paramIds) ||
+          (f.key !== undefined && hasFreeVariables(f.key, paramIds)),
+      );
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      return (
+        hasFreeVariables(cond.condition, paramIds) ||
+        hasFreeVariables(cond.whenTrue, paramIds) ||
+        hasFreeVariables(cond.whenFalse, paramIds)
+      );
+    }
+    default:
+      return false;
   }
+}
 
-  // Don't recurse into nested function bodies — they have their own scope
-  if (tstl.isFunctionExpression(node)) return node;
-
-  return node;
+function collectSymbolIds(node: tstl.Expression, ids: Set<tstl.SymbolId>): void {
+  switch (node.kind) {
+    case tstl.SyntaxKind.Identifier: {
+      const id = node as tstl.Identifier;
+      if (id.symbolId !== undefined) ids.add(id.symbolId);
+      break;
+    }
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      collectSymbolIds(bin.left, ids);
+      collectSymbolIds(bin.right, ids);
+      break;
+    }
+    case tstl.SyntaxKind.UnaryExpression:
+      collectSymbolIds((node as tstl.UnaryExpression).operand, ids);
+      break;
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      collectSymbolIds(call.expression, ids);
+      for (const p of call.params) collectSymbolIds(p, ids);
+      break;
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      collectSymbolIds(method.prefixExpression, ids);
+      for (const p of method.params) collectSymbolIds(p, ids);
+      break;
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      collectSymbolIds(tbl.table, ids);
+      collectSymbolIds(tbl.index, ids);
+      break;
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      collectSymbolIds((node as tstl.ParenthesizedExpression).expression, ids);
+      break;
+    case tstl.SyntaxKind.TableExpression:
+      for (const f of (node as tstl.TableExpression).fields) {
+        collectSymbolIds(f.value, ids);
+        if (f.key) collectSymbolIds(f.key, ids);
+      }
+      break;
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      collectSymbolIds(cond.condition, ids);
+      collectSymbolIds(cond.whenTrue, ids);
+      collectSymbolIds(cond.whenFalse, ids);
+      break;
+    }
+  }
 }
 
 function needsParentheses(node: tstl.Expression): boolean {
@@ -291,7 +390,31 @@ function handleCallExpression(
     paramMap.set(symbolId, luaArg);
   }
 
+  const isCrossModule =
+    node.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+
+  if (isCrossModule) {
+    const paramIds = new Set(paramMap.keys());
+    if (hasFreeVariables(luaBody, paramIds)) {
+      context.diagnostics.push(
+        createInlineWarning(node, "cross-module function references non-parameter identifiers"),
+      );
+      return undefined;
+    }
+  }
+
   const substituted = substituteParams(luaBody, paramMap);
+
+  // Defense-in-depth: after substitution, only caller-provided identifiers should remain
+  if (isCrossModule) {
+    const callerIds = new Set<tstl.SymbolId>();
+    for (const arg of paramMap.values()) {
+      collectSymbolIds(arg, callerIds);
+    }
+    if (hasFreeVariables(substituted, callerIds)) {
+      return undefined;
+    }
+  }
 
   if (needsParentheses(substituted)) {
     return tstl.createParenthesizedExpression(substituted);

@@ -416,8 +416,130 @@ describe("inline", () => {
     });
   });
 
-  describe("cross-module", () => {
-    it("does not inline cross-module function with free variables", () => {
+  describe("cross-module: inlined (self-contained)", () => {
+    it("inlines pure parameter arithmetic", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function double(x: number) { return x * 2; }
+        `,
+        "main.ts": `
+          import { double } from "./utils";
+          declare const a: number;
+          const r = double(a);
+        `,
+      });
+      expect(lua).toContain("a * 2");
+      expect(lua).not.toContain("double(");
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it("inlines zero-parameter function with literal", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function pi() { return 3.14; }
+        `,
+        "main.ts": `
+          import { pi } from "./utils";
+          const r = pi();
+        `,
+      });
+      expect(lua).toContain("3.14");
+      expect(lua).not.toContain("pi(");
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it("inlines multi-parameter arithmetic", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function add(a: number, b: number) { return a + b; }
+        `,
+        "main.ts": `
+          import { add } from "./utils";
+          declare const x: number;
+          declare const y: number;
+          const r = add(x, y);
+        `,
+      });
+      expect(lua).toContain("x + y");
+      expect(lua).not.toContain("add(");
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it("inlines parameter property access", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function getX(obj: { x: number }) { return obj.x; }
+        `,
+        "main.ts": `
+          import { getX } from "./utils";
+          declare const t: { x: number };
+          const r = getX(t);
+        `,
+      });
+      expect(lua).toContain("t.x");
+      expect(lua).not.toContain("getX(");
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it("inlines unary on parameter", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function neg(x: number) { return -x; }
+        `,
+        "main.ts": `
+          import { neg } from "./utils";
+          declare const a: number;
+          const r = neg(a);
+        `,
+      });
+      expect(lua).toContain("-a");
+      expect(lua).not.toContain("neg(");
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it("inlines table constructor from parameter", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function wrap(x: number) { return { value: x }; }
+        `,
+        "main.ts": `
+          import { wrap } from "./utils";
+          declare const a: number;
+          const r = wrap(a);
+        `,
+      });
+      expect(lua).toContain("value = a");
+      expect(lua).not.toContain("wrap(");
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it("inlines when body uses const enum (baked as literal by TSTL)", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const enum Dir { Up = 1, Down = 2 }
+          /** @inline */
+          export function isUp(d: number) { return d === Dir.Up; }
+        `,
+        "main.ts": `
+          import { isUp } from "./utils";
+          declare const d: number;
+          const r = isUp(d);
+        `,
+      });
+      expect(lua).toContain("d == 1");
+      expect(lua).not.toContain("isUp(");
+      expect(diagnostics).toHaveLength(0);
+    });
+  });
+
+  describe("cross-module: not inlined (free variables)", () => {
+    it("rejects function referencing module constant", () => {
       const { lua, diagnostics } = compileMultiFileWithDiagnostics({
         "utils.ts": `
           const factor = 10;
@@ -432,40 +554,60 @@ describe("inline", () => {
       });
       expect(lua).toContain("scale(");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("cross-module");
+      expect(diagnostics[0].messageText).toContain("non-parameter");
     });
 
-    it("does not inline cross-module function even when self-contained", () => {
+    it("rejects function calling module-scope function", () => {
       const { lua, diagnostics } = compileMultiFileWithDiagnostics({
         "utils.ts": `
+          function helper(x: number) { return x + 1; }
           /** @inline */
-          export function double(x: number) { return x * 2; }
+          export function wrap(x: number) { return helper(x); }
         `,
         "main.ts": `
-          import { double } from "./utils";
+          import { wrap } from "./utils";
           declare const a: number;
-          const r = double(a);
+          const r = wrap(a);
         `,
       });
-      expect(lua).toContain("double(");
+      expect(lua).toContain("wrap(");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("cross-module");
+      expect(diagnostics[0].messageText).toContain("non-parameter");
     });
 
-    it("warns with correct diagnostic metadata", () => {
-      const { diagnostics } = compileMultiFileWithDiagnostics({
+    it("rejects function referencing non-const enum", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
         "utils.ts": `
+          enum Dir { Up = 1, Down = 2 }
           /** @inline */
-          export function double(x: number) { return x * 2; }
+          export function isUp(d: number) { return d === Dir.Up; }
         `,
         "main.ts": `
-          import { double } from "./utils";
+          import { isUp } from "./utils";
+          declare const d: number;
+          const r = isUp(d);
+        `,
+      });
+      expect(lua).toContain("isUp(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+    });
+
+    it("warns with correct diagnostic metadata for free variables", () => {
+      const { diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const K = 10;
+          /** @inline */
+          export function scale(x: number) { return x * K; }
+        `,
+        "main.ts": `
+          import { scale } from "./utils";
           declare const a: number;
-          const r = double(a);
+          const r = scale(a);
         `,
       });
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("cross-module inlining is not supported");
+      expect(diagnostics[0].messageText).toContain("non-parameter");
       expect(diagnostics[0].category).toBe(0); // ts.DiagnosticCategory.Warning
       expect(diagnostics[0].source).toBe("tstl-optimize");
     });
