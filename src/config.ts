@@ -123,30 +123,27 @@ function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
+const STRUCTURED_RULES: ReadonlySet<string> = new Set([
+  "conditional-compilation",
+  "localizer",
+  "debug-strip",
+]);
+
 export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   const rawRules = isRecord(options?.rules) ? options.rules : {};
 
   const rules: RulesConfig = { ...DEFAULT_RULES };
 
   for (const key of Object.keys(DEFAULT_RULES) as (keyof RulesConfig)[]) {
-    if (key in rawRules) {
-      const val = rawRules[key];
-      if (key === "conditional-compilation") {
-        if (typeof val === "boolean" || isRecord(val)) {
-          rules["conditional-compilation"] = val as boolean | ConditionalCompilationConfig;
-        }
-      } else if (key === "localizer") {
-        if (typeof val === "boolean" || isRecord(val)) {
-          // Safe after guard: val is boolean or a config object from tsconfig.json
-          rules.localizer = val as boolean | LocalizerConfig;
-        }
-      } else if (key === "debug-strip") {
-        if (typeof val === "boolean" || isRecord(val)) {
-          rules["debug-strip"] = val as boolean | DebugStripConfig;
-        }
-      } else if (typeof val === "boolean") {
-        rules[key] = val;
+    if (!(key in rawRules)) continue;
+    const val = rawRules[key];
+    if (STRUCTURED_RULES.has(key)) {
+      if (typeof val === "boolean" || isRecord(val)) {
+        // Safe: val is boolean or a config object from tsconfig.json
+        (rules as unknown as Record<string, unknown>)[key] = val;
       }
+    } else if (typeof val === "boolean") {
+      rules[key] = val;
     }
   }
 

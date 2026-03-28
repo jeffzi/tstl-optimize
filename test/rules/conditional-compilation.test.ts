@@ -1,19 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../src/config";
-import { compile, compileWithDiagnostics } from "../helpers";
+import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
 
 function ccOpts(constants: Record<string, { env: string; default: boolean | number | string }>) {
   return {
     pluginOptions: { rules: { "conditional-compilation": { constants } } },
   };
-}
-
-function normalize(lua: string): string {
-  return lua
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .join("\n");
 }
 
 describe("resolveConditionalCompilationConfig", () => {
@@ -108,7 +100,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("falsy condition with else keeps else-branch, strips then", () => {
@@ -120,7 +112,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: false } }),
       );
-      expect(normalize(lua)).toBe("b = x + 2");
+      expect(normalizeLua(lua)).toBe("b = x + 2");
     });
 
     it("falsy condition without else strips entire if", () => {
@@ -133,7 +125,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: false } }),
       );
-      expect(normalize(lua)).toBe("b = x");
+      expect(normalizeLua(lua)).toBe("b = x");
     });
 
     it("handles else-if chains", () => {
@@ -146,7 +138,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "native" } }),
       );
-      expect(normalize(lua)).toBe("b = 2");
+      expect(normalizeLua(lua)).toBe("b = 2");
     });
 
     it("unknown condition passes through as runtime if", () => {
@@ -168,9 +160,9 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toContain("a = x + 1");
-      expect(normalize(lua)).toContain("b = x + 2");
-      expect(normalize(lua)).toContain("c = x + 3");
+      expect(normalizeLua(lua)).toContain("a = x + 1");
+      expect(normalizeLua(lua)).toContain("b = x + 2");
+      expect(normalizeLua(lua)).toContain("c = x + 3");
     });
   });
 
@@ -184,7 +176,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("falsy condition keeps whenFalse expression", () => {
@@ -196,7 +188,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: false } }),
       );
-      expect(normalize(lua)).toBe("a = x + 2");
+      expect(normalizeLua(lua)).toBe("a = x + 2");
     });
 
     it("unknown condition leaves ternary as runtime code", () => {
@@ -222,7 +214,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ LEVEL: { env: "CC_UNUSED", default: 2 } }),
       );
-      expect(normalize(lua)).toBe("a = x + 20");
+      expect(normalizeLua(lua)).toBe("a = x + 20");
     });
   });
 
@@ -242,8 +234,8 @@ describe("conditional-compilation", () => {
           B: { env: "CC_UNUSED", default: false },
         }),
       );
-      expect(normalize(lua)).toContain("a = 1");
-      expect(normalize(lua)).not.toContain("b = 2");
+      expect(normalizeLua(lua)).toContain("a = 1");
+      expect(normalizeLua(lua)).not.toContain("b = 2");
     });
 
     it("numeric constants: 0 is falsy, non-zero is truthy", () => {
@@ -261,8 +253,8 @@ describe("conditional-compilation", () => {
           ZERO: { env: "CC_UNUSED", default: 0 },
         }),
       );
-      expect(normalize(lua)).toContain("a = 1");
-      expect(normalize(lua)).not.toContain("b = 2");
+      expect(normalizeLua(lua)).toContain("a = 1");
+      expect(normalizeLua(lua)).not.toContain("b = 2");
     });
 
     it('string constants: "" is falsy, non-empty is truthy', () => {
@@ -280,8 +272,8 @@ describe("conditional-compilation", () => {
           EMPTY: { env: "CC_UNUSED", default: "" },
         }),
       );
-      expect(normalize(lua)).toContain("a = 1");
-      expect(normalize(lua)).not.toContain("b = 2");
+      expect(normalizeLua(lua)).toContain("a = 1");
+      expect(normalizeLua(lua)).not.toContain("b = 2");
     });
 
     it("! negation", () => {
@@ -294,8 +286,8 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).not.toContain("a =");
-      expect(normalize(lua)).toContain("z = x");
+      expect(normalizeLua(lua)).not.toContain("a =");
+      expect(normalizeLua(lua)).toContain("z = x");
     });
 
     it("&& short-circuit: falsy left skips right", () => {
@@ -312,8 +304,8 @@ describe("conditional-compilation", () => {
           VERBOSE: { env: "CC_UNUSED", default: true },
         }),
       );
-      expect(normalize(lua)).not.toContain("a =");
-      expect(normalize(lua)).toContain("z = x");
+      expect(normalizeLua(lua)).not.toContain("a =");
+      expect(normalizeLua(lua)).toContain("z = x");
     });
 
     it("&& truthy left evaluates right", () => {
@@ -329,7 +321,7 @@ describe("conditional-compilation", () => {
           VERBOSE: { env: "CC_UNUSED", default: true },
         }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("|| short-circuit: truthy left skips right", () => {
@@ -345,7 +337,7 @@ describe("conditional-compilation", () => {
           VERBOSE: { env: "CC_UNUSED", default: false },
         }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("|| falsy left evaluates right", () => {
@@ -362,8 +354,8 @@ describe("conditional-compilation", () => {
           VERBOSE: { env: "CC_UNUSED", default: false },
         }),
       );
-      expect(normalize(lua)).not.toContain("a =");
-      expect(normalize(lua)).toContain("z = x");
+      expect(normalizeLua(lua)).not.toContain("a =");
+      expect(normalizeLua(lua)).toContain("z = x");
     });
 
     it("=== comparison", () => {
@@ -375,7 +367,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "HTML5" } }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("!== comparison", () => {
@@ -387,7 +379,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "HTML5" } }),
       );
-      expect(normalize(lua)).toBe("b = x + 2");
+      expect(normalizeLua(lua)).toBe("b = x + 2");
     });
 
     it("parenthesized grouping", () => {
@@ -405,7 +397,7 @@ describe("conditional-compilation", () => {
           ENABLED: { env: "CC_UNUSED", default: true },
         }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("unknown identifiers return undefined (no folding)", () => {
@@ -429,8 +421,8 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toContain("a = x + 1");
-      expect(normalize(lua)).not.toContain("b = x + 2");
+      expect(normalizeLua(lua)).toContain("a = x + 1");
+      expect(normalizeLua(lua)).not.toContain("b = x + 2");
     });
 
     it("numeric literal in ternary folds when rule is active", () => {
@@ -442,7 +434,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toBe("a = x + 10");
+      expect(normalizeLua(lua)).toBe("a = x + 10");
     });
 
     it("string literal in ternary folds when rule is active", () => {
@@ -454,7 +446,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toBe("a = x + 10");
+      expect(normalizeLua(lua)).toBe("a = x + 10");
     });
 
     it("=== with one unknown side does not fold", () => {
@@ -486,7 +478,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "desktop" } }),
       );
-      expect(normalize(lua)).toBe("setupDesktop()");
+      expect(normalizeLua(lua)).toBe("setupDesktop()");
     });
 
     it("matching case without break falls through to next case", () => {
@@ -502,7 +494,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ LEVEL: { env: "CC_UNUSED", default: 1 } }),
       );
-      const norm = normalize(lua);
+      const norm = normalizeLua(lua);
       expect(norm).toContain("a = x + 1");
       expect(norm).toContain("b = x + 2");
       expect(norm).not.toContain("c = x + 3");
@@ -520,7 +512,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "mobile" } }),
       );
-      expect(normalize(lua)).toBe("b = x + 2");
+      expect(normalizeLua(lua)).toBe("b = x + 2");
     });
 
     it("no match without default strips entire switch", () => {
@@ -536,7 +528,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "mobile" } }),
       );
-      expect(normalize(lua)).toBe("z = x");
+      expect(normalizeLua(lua)).toBe("z = x");
     });
 
     it("unknown expression passes through as runtime switch", () => {
@@ -569,7 +561,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "web" } }),
       );
-      expect(normalize(lua)).toBe("a = x + 1");
+      expect(normalizeLua(lua)).toBe("a = x + 1");
     });
 
     it("numeric constant matching", () => {
@@ -585,7 +577,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ LEVEL: { env: "CC_UNUSED", default: 2 } }),
       );
-      expect(normalize(lua)).toBe("c = x + 2");
+      expect(normalizeLua(lua)).toBe("c = x + 2");
     });
   });
 
@@ -651,7 +643,7 @@ describe("conditional-compilation", () => {
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: false } }),
       );
 
-      expect(normalize(lua)).toBe("isDebug = false");
+      expect(normalizeLua(lua)).toBe("isDebug = false");
     });
 
     it("replaces string constant identifier with literal", () => {
@@ -660,7 +652,7 @@ describe("conditional-compilation", () => {
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "desktop" } }),
       );
 
-      expect(normalize(lua)).toBe('p = "desktop"');
+      expect(normalizeLua(lua)).toBe('p = "desktop"');
     });
 
     it("folds === comparison to boolean literal", () => {
@@ -669,7 +661,7 @@ describe("conditional-compilation", () => {
         ccOpts({ PLATFORM: { env: "CC_UNUSED", default: "desktop" } }),
       );
 
-      expect(normalize(lua)).toBe("isWeb = false");
+      expect(normalizeLua(lua)).toBe("isWeb = false");
     });
 
     it("folds !constant to boolean literal", () => {
@@ -678,7 +670,7 @@ describe("conditional-compilation", () => {
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: false } }),
       );
 
-      expect(normalize(lua)).toBe("notDebug = true");
+      expect(normalizeLua(lua)).toBe("notDebug = true");
     });
 
     it("folds && expression to literal when fully resolvable", () => {
@@ -694,7 +686,7 @@ describe("conditional-compilation", () => {
         }),
       );
 
-      expect(normalize(lua)).toBe("both = false");
+      expect(normalizeLua(lua)).toBe("both = false");
     });
 
     it("does not substitute unknown identifiers", () => {
@@ -703,7 +695,7 @@ describe("conditional-compilation", () => {
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
 
-      expect(normalize(lua)).toBe("x = unknown");
+      expect(normalizeLua(lua)).toBe("x = unknown");
     });
 
     it("substitutes constant in mixed expression (partial improvement)", () => {
@@ -728,7 +720,9 @@ describe("conditional-compilation", () => {
       const lua = compile("if (true) { const a = 1; } else { const b = 2; }", {
         pluginOptions: { rules: { "conditional-compilation": false } },
       });
-      expect(lua).toBeDefined();
+      expect(lua).toContain("if true then");
+      expect(lua).toContain("a = 1");
+      expect(lua).toContain("b = 2");
     });
 
     it("empty constants map → no identifiers resolve, no folding", () => {
@@ -748,7 +742,7 @@ describe("conditional-compilation", () => {
         ].join("\n"),
         ccOpts({ DEBUG: { env: "CC_UNUSED", default: true } }),
       );
-      expect(normalize(lua)).toContain("x - x % 1");
+      expect(normalizeLua(lua)).toContain("x - x % 1");
       expect(lua).not.toContain("math.ceil");
     });
 
@@ -771,7 +765,7 @@ describe("conditional-compilation", () => {
         },
       );
       expect(lua).not.toContain("print");
-      expect(normalize(lua)).toBe("a = x");
+      expect(normalizeLua(lua)).toBe("a = x");
     });
   });
 });

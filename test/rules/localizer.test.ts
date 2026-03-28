@@ -154,6 +154,7 @@ describe("localizer", () => {
         { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
       );
       expect(lua).toContain("local ____math_floor = math.floor");
+      expect(lua).toContain("____math_floor(x)");
     });
 
     it("does not hoist chain whose base is locally defined in the same scope", () => {
