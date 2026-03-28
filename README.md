@@ -8,6 +8,18 @@ code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **Lu
 default to on except `conditional-compilation` and `debug-strip`, which remove code. Toggle each
 rule individually.
 
+```typescript
+// TypeScript input                       // Lua output (with plugin)
+Math.sqrt(x)                           // x ^ 0.5
+math.floor(a) + math.floor(b)          // local ____math_floor = math.floor
+                                        // ____math_floor(a) + ____math_floor(b)
+/** @inline */
+function double(x: number) {            // (inlined at call sites)
+  return x * 2;
+}
+const y = double(5);                    // local y = 5 * 2
+```
+
 ## Installation
 
 ```bash
@@ -117,8 +129,8 @@ replaces bare identifiers (`DEBUG`), binary comparisons (`PLATFORM === "web"`), 
 
 ### `math-intrinsics`
 
-Replaces `Math.*` calls with inline Lua expressions, eliminating C-function-call overhead through
-the `math` table. Skipped on LuaJIT, which already dispatches C calls fast.
+Replaces `Math.*` calls with inline Lua expressions, avoiding the overhead of dispatching through
+the `math` table. Skipped on LuaJIT, which already handles C calls fast.
 
 | Source | Lua output | Notes |
 | --- | --- | --- |
@@ -158,7 +170,8 @@ in a nested declaration.
 
 ### `inline`
 
-Inlines `@inline`-tagged single-expression functions at call sites.
+Inlines `@inline`-tagged single-expression functions at call sites. Works within the same module and
+across module boundaries.
 
 ```typescript
 /** @inline */
@@ -166,6 +179,21 @@ function double(x: number) {
   return x * 2;
 }
 const y = double(5); // becomes: const y = 5 * 2
+```
+
+Cross-module inlining works for self-contained functions — bodies that reference only parameters and
+literals. Functions that capture module-scope variables are rejected with a diagnostic warning.
+
+```typescript
+// utils.ts
+/** @inline */
+export function double(x: number) { return x * 2; }       // ✓ cross-module OK
+/** @inline */
+export function addOffset(x: number) { return x + OFFSET; } // ✗ captures OFFSET
+
+// main.ts
+import { double } from "./utils";
+const y = double(5); // inlined: const y = 5 * 2
 ```
 
 A function qualifies for inlining when it meets all these conditions:
@@ -177,6 +205,7 @@ A function qualifies for inlining when it meets all these conditions:
 - Non-recursive
 - No parameter writes inside the body
 - Each parameter used more than once receives only side-effect-free arguments
+- Cross-module: body references only parameters and literals (no captured variables)
 
 ### `localizer`
 
@@ -217,9 +246,9 @@ Options:
 
 #### Root filtering
 
-**Default behavior (breaking change from v0.x)**
+##### Default behavior
 
-In v1.0, the localizer hoists only chains rooted at Lua stdlib globals by default:
+The localizer hoists only chains rooted at Lua stdlib globals by default:
 `math`, `string`, `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`.
 
 Chains rooted at any other global are skipped. This protects against libraries that rely on
@@ -232,9 +261,9 @@ An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pendi
 `teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
 excluded unless the user explicitly names them in `include`.
 
-**Restoring previous behavior**
+##### Restoring previous behavior
 
-To hoist all chains as v0.x did, set `include: ["*"]`. This enables opt-out mode — all roots
+To hoist all chains regardless of root, set `include: ["*"]`. This enables opt-out mode — all roots
 are allowed except those in `exclude` and the internal blocklist (unless also named in `include`).
 
 ```jsonc
@@ -306,7 +335,7 @@ Options:
 | `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants |
 | `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions |
 | `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based |
-| `rules.inline` | `boolean` | `true` | Inline `@inline` functions at call sites |
+| `rules.inline` | `boolean` | `true` | Inline `@inline` functions at call sites, including cross-module |
 | `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default — see `localizer` section for `include`/`exclude` options |
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |

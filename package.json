@@ -16,7 +16,7 @@
     "test:unit": "vitest run",
     "test:conformance": "node scripts/conformance.mjs",
     "check": "biome check --fix .",
-    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#research' '#plans'",
+    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#research' '#plans'",
     "check:unused": "knip",
     "typecheck": "tsc -p tsconfig.plugin.json --noEmit",
     "validate": "npm run check && npm run typecheck && npm run check:unused",
