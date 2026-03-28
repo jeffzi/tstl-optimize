@@ -138,11 +138,10 @@ function hasEarlyExit(statements: tstl.Statement[]): boolean {
     if (tstl.isIfStatement(stmt)) {
       if (hasEarlyExit(stmt.ifBlock.statements)) return true;
       if (stmt.elseBlock) {
-        if (tstl.isIfStatement(stmt.elseBlock)) {
-          if (hasEarlyExit([stmt.elseBlock])) return true;
-        } else {
-          if (hasEarlyExit(stmt.elseBlock.statements)) return true;
-        }
+        const elseStmts = tstl.isIfStatement(stmt.elseBlock)
+          ? [stmt.elseBlock]
+          : stmt.elseBlock.statements;
+        if (hasEarlyExit(elseStmts)) return true;
       }
     }
     if (tstl.isDoStatement(stmt)) {
@@ -279,6 +278,13 @@ function hoistArrayElements(
   }
 }
 
+interface ProcessingContext {
+  threshold: number;
+  alreadyHoisted: ReadonlySet<string>;
+  context: tstl.TransformationContext;
+  isRootAllowed: (root: string) => boolean;
+}
+
 function processFile(
   file: tstl.File,
   config: LocalizerConfig,
@@ -290,10 +296,15 @@ function processFile(
   if (scope === "module") {
     hoistScope(file.statements, threshold, false, new Set(), context, undefined, isRootAllowed);
   } else if (scope === "function") {
-    processFunctionBodies(file.statements, threshold, new Set(), context, isRootAllowed);
+    processFunctionBodies(file.statements, {
+      threshold,
+      alreadyHoisted: new Set(),
+      context,
+      isRootAllowed,
+    });
   } else {
     // "all": module pass first, then function pass for remaining chains
-    const hoistedAtModule = hoistScope(
+    const alreadyHoisted = hoistScope(
       file.statements,
       threshold,
       false,
@@ -302,17 +313,18 @@ function processFile(
       undefined,
       isRootAllowed,
     );
-    processFunctionBodies(file.statements, threshold, hoistedAtModule, context, isRootAllowed);
+    processFunctionBodies(file.statements, {
+      threshold,
+      alreadyHoisted,
+      context,
+      isRootAllowed,
+    });
   }
 }
 
-function processFunctionBodies(
-  statements: tstl.Statement[],
-  threshold: number,
-  alreadyHoisted: ReadonlySet<string>,
-  context: tstl.TransformationContext,
-  isRootAllowed: (root: string) => boolean,
-): void {
+function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingContext): void {
+  const { threshold, alreadyHoisted, context, isRootAllowed } = ctx;
+
   for (const stmt of statements) {
     if (
       (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) &&
@@ -329,35 +341,16 @@ function processFunctionBodies(
         paramNames,
         isRootAllowed,
       );
-      processFunctionBodies(fn.body.statements, threshold, alreadyHoisted, context, isRootAllowed);
+      processFunctionBodies(fn.body.statements, ctx);
     } else if (tstl.isDoStatement(stmt)) {
-      processFunctionBodies(stmt.statements, threshold, alreadyHoisted, context, isRootAllowed);
+      processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
-      processFunctionBodies(
-        stmt.ifBlock.statements,
-        threshold,
-        alreadyHoisted,
-        context,
-        isRootAllowed,
-      );
+      processFunctionBodies(stmt.ifBlock.statements, ctx);
       if (stmt.elseBlock) {
-        if (tstl.isIfStatement(stmt.elseBlock)) {
-          processFunctionBodies(
-            [stmt.elseBlock],
-            threshold,
-            alreadyHoisted,
-            context,
-            isRootAllowed,
-          );
-        } else {
-          processFunctionBodies(
-            stmt.elseBlock.statements,
-            threshold,
-            alreadyHoisted,
-            context,
-            isRootAllowed,
-          );
-        }
+        const elseStmts = tstl.isIfStatement(stmt.elseBlock)
+          ? [stmt.elseBlock]
+          : stmt.elseBlock.statements;
+        processFunctionBodies(elseStmts, ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)
@@ -373,21 +366,9 @@ function processFunctionBodies(
         isRootAllowed,
       );
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context);
-      processFunctionBodies(
-        stmt.body.statements,
-        threshold,
-        alreadyHoisted,
-        context,
-        isRootAllowed,
-      );
+      processFunctionBodies(stmt.body.statements, ctx);
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
-      processFunctionBodies(
-        stmt.body.statements,
-        threshold,
-        alreadyHoisted,
-        context,
-        isRootAllowed,
-      );
+      processFunctionBodies(stmt.body.statements, ctx);
     }
   }
 }

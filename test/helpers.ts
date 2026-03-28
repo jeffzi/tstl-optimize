@@ -42,7 +42,7 @@ function transpile(
 
 function extractLua(result: tstl.TranspileVirtualProjectResult): string {
   const errors = result.diagnostics.filter(
-    (d) => d.category === 1 /* ts.DiagnosticCategory.Error */ && d.code >= 100_000,
+    (d) => d.category === ts.DiagnosticCategory.Error && d.code >= 100_000,
   );
   if (errors.length > 0) {
     const msgs = errors
@@ -73,4 +73,12 @@ export function compileMultiFileWithDiagnostics(
 
 export function compileWithDiagnostics(source: string, options?: CompileOptions): CompileResult {
   return compileMultiFileWithDiagnostics({ "main.ts": source }, options);
+}
+
+export function normalizeLua(lua: string): string {
+  return lua
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n");
 }
