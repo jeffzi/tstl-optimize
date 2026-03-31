@@ -1633,3 +1633,93 @@ describe("@inline JSDoc stripping", () => {
     expect(lua).not.toContain("-- @inline");
   });
 });
+
+describe("strict mode", () => {
+  describe("global strict: true promotes inline warnings to errors", () => {
+    it("promotes warning to error for multi-statement call at expression position", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function effect(x: number): number {
+          const y = x + 1;
+          return y * 2;
+        }
+        declare const a: number;
+        const r = effect(a) + 1;
+        `,
+        { pluginOptions: { strict: true, rules: { inline: true } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+
+    it("promotes warning to error for early-return rejection", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function bad(x: number): void {
+          if (x > 0) return;
+          const y = x + 1;
+        }
+        declare const a: number;
+        bad(a);
+        `,
+        { pluginOptions: { strict: true, rules: { inline: true } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+  });
+
+  describe("per-rule inline.strict: false overrides global strict: true", () => {
+    it("keeps warning when per-rule strict is false", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function effect(x: number): number {
+          const y = x + 1;
+          return y * 2;
+        }
+        declare const a: number;
+        const r = effect(a) + 1;
+        `,
+        {
+          pluginOptions: {
+            strict: true,
+            rules: { inline: { strict: false } },
+          },
+        },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+  });
+
+  describe("per-rule inline.strict: true with global strict: false promotes to error", () => {
+    it("promotes to error when only per-rule strict is true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function effect(x: number): number {
+          const y = x + 1;
+          return y * 2;
+        }
+        declare const a: number;
+        const r = effect(a) + 1;
+        `,
+        {
+          pluginOptions: {
+            strict: false,
+            rules: { inline: { strict: true } },
+          },
+        },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+  });
+});
