@@ -40,6 +40,8 @@ const EXPRESSION_KINDS: ReadonlySet<number> = new Set([
 // statement kinds where erasure is the intended semantics.
 const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
   ts.SyntaxKind.ExpressionStatement,
+  ts.SyntaxKind.VariableStatement,
+  ts.SyntaxKind.ReturnStatement,
 ]);
 
 class OptimizePlugin implements tstl.Plugin {
