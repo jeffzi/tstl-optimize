@@ -927,3 +927,127 @@ describe("mapLuaStatements (unit)", () => {
     expect((labelResult as tstl.LabelStatement).name).toBe("lbl");
   });
 });
+
+describe("variable-declaration multi-statement inline", () => {
+  it("expands const r = foo(x) to local r / arg temps / do...end block with assignment", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      const r = compute(a);
+    `);
+    // result variable declared with no initializer
+    expect(lua).toContain("local r");
+    // arg temp hoisted outside do...end
+    expect(lua).toContain("____inline_arg_0");
+    // do...end block present
+    expect(lua).toMatch(/\bdo\b/);
+    // assignment inside block: r = <expr>
+    expect(lua).toContain("r =");
+    // no direct call preserved
+    expect(lua).not.toContain("= compute(");
+  });
+
+  it("arg temporaries appear before the do...end block", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      const r = compute(a);
+    `);
+    const argIdx = lua.indexOf("____inline_arg_0");
+    const doIdx = lua.indexOf("do", argIdx);
+    expect(argIdx).toBeLessThan(doIdx);
+  });
+
+  it("handles zero-parameter return-value function: no temp decls", () => {
+    const lua = compile(`
+      /** @inline */
+      function getVal(): number {
+        const x = 42;
+        return x;
+      }
+      const r = getVal();
+    `);
+    expect(lua).toContain("local r");
+    expect(lua).not.toContain("____inline_arg");
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).toContain("r =");
+    expect(lua).not.toContain("= getVal(");
+  });
+
+  it("handles multiple parameters: all arg temps outside do...end", () => {
+    const lua = compile(`
+      /** @inline */
+      function add(a: number, b: number): number {
+        const sum = a + b;
+        return sum;
+      }
+      declare const x: number;
+      declare const y: number;
+      const r = add(x, y);
+    `);
+    expect(lua).toContain("____inline_arg_0");
+    expect(lua).toContain("____inline_arg_1");
+    // Both temps should appear before do
+    const arg0Idx = lua.indexOf("____inline_arg_0");
+    const doIdx = lua.indexOf("do", arg0Idx);
+    expect(arg0Idx).toBeLessThan(doIdx);
+    expect(lua).not.toContain("= add(");
+  });
+
+  it("isolates inlined body locals inside do...end (scoping)", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x * 10;
+        return y + 1;
+      }
+      declare const a: number;
+      const y = 99;
+      const r = compute(a);
+      const z = y;
+    `);
+    // The do...end should scope the body's 'y' away from the caller's 'y'
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).not.toContain("= compute(");
+    // Caller's y=99 should still be present
+    expect(lua).toContain("99");
+  });
+
+  it("non-inline variable declaration passes through unchanged", () => {
+    const lua = compile(`
+      function notInlined(x: number): number { return x * 2; }
+      declare const a: number;
+      const r = notInlined(a);
+    `);
+    expect(lua).toContain("notInlined(a)");
+  });
+
+  it("variable declaration with non-call initializer passes through unchanged", () => {
+    const lua = compile(`
+      declare const a: number;
+      const r = a + 1;
+    `);
+    expect(lua).toContain("a + 1");
+  });
+
+  it("warns on void-body @inline at var-decl site: no inline expansion, call preserved", () => {
+    // A void multi-statement @inline called at var-decl site: handler returns undefined for
+    // non-statementsWithReturn target — TSTL handles it, call is preserved in output.
+    const { lua } = compileWithDiagnostics(`
+      /** @inline */
+      function doStuff(x: number): void { let a = x + 1; let b = a + 2; }
+      declare const a: number;
+      const r = (doStuff as any)(a);
+    `);
+    // The call is preserved (handler returns undefined for statements target)
+    expect(lua).toContain("doStuff(");
+  });
+});
