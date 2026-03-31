@@ -167,24 +167,22 @@ describe("inline", () => {
   });
 
   describe("comment cleanup", () => {
-    it("strips @inline JSDoc comment from function declaration", () => {
-      const lua = compile(`
+    it("strips @inline JSDoc comment from any function form", () => {
+      const luaDecl = compile(`
         /** @inline */
         function double(x: number) { return x * 2; }
         declare const a: number;
         const r = double(a);
       `);
-      expect(lua).not.toContain("@inline");
-    });
+      expect(luaDecl).not.toContain("@inline");
 
-    it("strips @inline JSDoc comment from arrow function", () => {
-      const lua = compile(`
+      const luaArrow = compile(`
         /** @inline */
         const double = (x: number) => x * 2;
         declare const a: number;
         const r = double(a);
       `);
-      expect(lua).not.toContain("@inline");
+      expect(luaArrow).not.toContain("@inline");
     });
   });
 
@@ -223,6 +221,8 @@ describe("inline", () => {
 
   describe("warnings", () => {
     it("warns on multi-statement body at expression position", () => {
+      // Multi-statement inline cannot be spliced into an expression context.
+      // Use a nested call position (e.g., inside a binary expression) to trigger this.
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function compute(x: number) {
@@ -230,7 +230,7 @@ describe("inline", () => {
           return tmp + 1;
         }
         declare const a: number;
-        const r = compute(a);
+        const r = compute(a) + 1;
       `);
       expect(lua).toContain("compute(");
       expect(diagnostics).toHaveLength(1);
@@ -449,18 +449,96 @@ describe("inline", () => {
       expect(diagnostics[0].messageText).toContain("non-parameter");
     });
   });
+
+  describe("cross-module: multi-statement statement bodies", () => {
+    it("inlines cross-module void multi-statement with self-contained body", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function log(x: number): void {
+            const y = x + 1;
+            const z = y * 2;
+          }
+        `,
+        "main.ts": `
+          import { log } from "./utils";
+          declare const a: number;
+          log(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("log(");
+    });
+
+    it("rejects cross-module void multi-statement with module-scope free variable", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const factor = 10;
+          /** @inline */
+          export function scale(x: number): void {
+            const y = x * factor;
+          }
+        `,
+        "main.ts": `
+          import { scale } from "./utils";
+          declare const a: number;
+          scale(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(lua).toContain("scale(");
+    });
+
+    it("rejects cross-module var-decl statementsWithReturn with free variable", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const offset = 5;
+          /** @inline */
+          export function compute(x: number): number {
+            const temp = x + offset;
+            return temp * 2;
+          }
+        `,
+        "main.ts": `
+          import { compute } from "./utils";
+          declare const a: number;
+          const r = compute(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(lua).toContain("compute(");
+    });
+
+    it("rejects cross-module return-statement statementsWithReturn with free variable", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const multiplier = 3;
+          /** @inline */
+          export function triple(x: number): number {
+            const temp = x * multiplier;
+            return temp;
+          }
+        `,
+        "main.ts": `
+          import { triple } from "./utils";
+          declare const a: number;
+          function wrapper(x: number) { return triple(x); }
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(lua).toContain("triple(");
+    });
+  });
 });
 
-describe("ExpressionStatement visitor", () => {
-  it("non-inline expression statement is not erased from Lua output", () => {
-    const lua = compile(`
-      declare function someFunc(x: number): void;
-      declare const a: number;
-      someFunc(a);
-    `);
-    expect(lua).toContain("someFunc(a)");
-  });
-
+describe("statement-position calls", () => {
   it("non-inline expression statement preserved with both inline and debug-strip enabled", () => {
     const lua = compile(
       `
@@ -542,31 +620,29 @@ describe("void multi-statement inline", () => {
     expect(diagnostics[0].messageText).toContain("early return");
   });
 
-  it("rejects @inline function with top-level break", () => {
-    const { diagnostics } = compileWithDiagnostics(`
+  it("rejects @inline function with top-level break or continue", () => {
+    const { diagnostics: breakDiags } = compileWithDiagnostics(`
       /** @inline */
       function stopLoop() { break; }
       for (let i = 0; i < 10; i++) {
         stopLoop();
       }
     `);
-    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+    expect(breakDiags.length).toBeGreaterThanOrEqual(1);
     expect(
-      diagnostics.some((d) => typeof d.messageText === "string" && d.messageText.includes("break")),
+      breakDiags.some((d) => typeof d.messageText === "string" && d.messageText.includes("break")),
     ).toBe(true);
-  });
 
-  it("rejects @inline function with top-level continue", () => {
-    const { diagnostics } = compileWithDiagnostics(`
+    const { diagnostics: continueDiags } = compileWithDiagnostics(`
       /** @inline */
       function skipIter() { continue; }
       for (let i = 0; i < 10; i++) {
         skipIter();
       }
     `);
-    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+    expect(continueDiags.length).toBeGreaterThanOrEqual(1);
     expect(
-      diagnostics.some(
+      continueDiags.some(
         (d) => typeof d.messageText === "string" && d.messageText.includes("continue"),
       ),
     ).toBe(true);
@@ -619,93 +695,113 @@ describe("void multi-statement inline", () => {
   });
 });
 
-describe("strict mode", () => {
-  describe("global strict: true promotes inline warnings to errors", () => {
-    it("promotes warning to error for multi-statement call at expression position", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
+describe("statementsWithReturn data model", () => {
+  describe("classifyBody: statementsWithReturn variant", () => {
+    it("multi-statement body with terminal return emits statementsWithReturn diagnostic (D-10) at void site", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
-        function effect(x: number): number {
-          const y = x + 1;
-          return y * 2;
+        function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
         }
         declare const a: number;
-        const r = effect(a) + 1;
-        `,
-        { pluginOptions: { strict: true, rules: { inline: true } } },
-      );
+        compute(a);
+      `);
+      // void call site: D-10 warns, does not inline
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
-      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].messageText).toContain("return-value function called at void site");
+      expect(lua).toContain("compute(a)");
     });
 
-    it("promotes warning to error for early-return rejection", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
+    it("multi-statement body with no terminal return still produces statements target (no regression)", () => {
+      // A void multi-statement function (no terminal return) should still inline
+      const lua = compile(`
         /** @inline */
-        function bad(x: number): void {
-          if (x > 0) return;
-          const y = x + 1;
+        function setup(x: number): void {
+          let a = x + 1;
+          let b = a + 2;
         }
+        declare const n: number;
+        setup(n);
+      `);
+      expect(lua).toContain("do");
+      expect(lua).not.toContain("setup(n)");
+    });
+
+    it("single-statement return still produces expression target (no regression)", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number): number { return x * 2; }
         declare const a: number;
-        bad(a);
-        `,
-        { pluginOptions: { strict: true, rules: { inline: true } } },
-      );
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
-      expect(diagnostics[0].code).toBe(90001);
+        const r = double(a);
+      `);
+      expect(lua).toContain("a * 2");
+      // function declaration has double( in it; verify no standalone call "= double("
+      expect(lua).not.toContain("= double(");
     });
   });
 
-  describe("per-rule inline.strict: false overrides global strict: true", () => {
-    it("keeps warning when per-rule strict is false", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
+  describe("canInlineStatements: statementsWithReturn validation", () => {
+    it("rejects return-value function with early return in pre-return stmts", () => {
+      // This has an early return inside the body stmts (before the terminal return)
+      const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
-        function effect(x: number): number {
+        function f(x: number): number {
+          if (x > 0) { return 0; }
           const y = x + 1;
-          return y * 2;
+          return y;
         }
         declare const a: number;
-        const r = effect(a) + 1;
-        `,
-        {
-          pluginOptions: {
-            strict: true,
-            rules: { inline: { strict: false } },
-          },
-        },
-      );
+        f(a);
+      `);
+      // early return in body should still be rejected
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
-      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].messageText).toContain("@inline ignored");
+      expect(lua).toContain("f(a)");
+    });
+
+    it("rejects return-value function with recursive call in return expression (void site emits D-10)", () => {
+      // At a void site, D-10 fires before recursive check — but a diagnostic is still emitted
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function fib(n: number): number {
+          const a = n - 1;
+          return fib(a);
+        }
+        declare const x: number;
+        fib(x);
+      `);
+      expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+      // At void site: D-10 fires (return-value function called at void site)
+      expect(
+        diagnostics.some(
+          (d) => typeof d.messageText === "string" && d.messageText.includes("@inline ignored"),
+        ),
+      ).toBe(true);
     });
   });
+});
 
-  describe("per-rule inline.strict: true with global strict: false promotes to error", () => {
-    it("promotes to error when only per-rule strict is true", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
-        /** @inline */
-        function effect(x: number): number {
-          const y = x + 1;
-          return y * 2;
-        }
-        declare const a: number;
-        const r = effect(a) + 1;
-        `,
-        {
-          pluginOptions: {
-            strict: false,
-            rules: { inline: { strict: true } },
-          },
-        },
-      );
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
-      expect(diagnostics[0].code).toBe(90001);
-    });
+describe("statement visitor fallthrough", () => {
+  it("non-inline VariableStatement is preserved when inline rule is active", () => {
+    // TSTL emits module-level vars without `local`; function-level vars use `local`.
+    const lua = compile(`
+      function makeLocals(): void {
+        const x = 5;
+        const r = x + 1;
+      }
+    `);
+    expect(lua).toContain("local x = 5");
+  });
+
+  it("non-inline ReturnStatement is preserved when inline rule is active", () => {
+    const lua = compile(`
+      function getVal(): number {
+        declare const y: number;
+        return 42;
+      }
+    `);
+    expect(lua).toContain("return 42");
   });
 });
 
@@ -720,16 +816,14 @@ describe("mapLuaStatements (unit)", () => {
 
   it("returns empty array for empty input", () => {
     const result = mapLuaStatements([], leafFn);
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("substitutes in ExpressionStatement", () => {
     const stmt = tstl.createExpressionStatement(tstl.createIdentifier("x"));
     const [result] = mapLuaStatements([stmt], leafFn);
-    expect((result as tstl.ExpressionStatement).expression).toSatisfy(
-      (e: tstl.Expression) =>
-        e.kind === tstl.SyntaxKind.Identifier && (e as tstl.Identifier).text === "replaced",
-    );
+    const expr = (result as tstl.ExpressionStatement).expression as tstl.Identifier;
+    expect(expr.text).toBe("replaced");
   });
 
   it("substitutes in VariableDeclarationStatement right side", () => {
@@ -884,23 +978,748 @@ describe("mapLuaStatements (unit)", () => {
     expect(stmts).toHaveLength(1);
   });
 
-  it("passes through BreakStatement unchanged", () => {
-    const stmt = tstl.createBreakStatement();
-    const [result] = mapLuaStatements([stmt], leafFn);
-    expect(result.kind).toBe(tstl.SyntaxKind.BreakStatement);
+  it("passes through leaf statements (break, goto, label) unchanged", () => {
+    const breakStmt = tstl.createBreakStatement();
+    const [breakResult] = mapLuaStatements([breakStmt], leafFn);
+    expect(breakResult.kind).toBe(tstl.SyntaxKind.BreakStatement);
+
+    const gotoStmt = tstl.createGotoStatement("lbl");
+    const [gotoResult] = mapLuaStatements([gotoStmt], leafFn);
+    expect(gotoResult.kind).toBe(tstl.SyntaxKind.GotoStatement);
+    expect((gotoResult as tstl.GotoStatement).label).toBe("lbl");
+
+    const labelStmt = tstl.createLabelStatement("lbl");
+    const [labelResult] = mapLuaStatements([labelStmt], leafFn);
+    expect(labelResult.kind).toBe(tstl.SyntaxKind.LabelStatement);
+    expect((labelResult as tstl.LabelStatement).name).toBe("lbl");
+  });
+});
+
+describe("variable-declaration multi-statement inline", () => {
+  it("expands const r = foo(x) to local r / arg temps / do...end block with assignment", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      const r = compute(a);
+    `);
+    expect(lua).toContain("local r");
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).toContain("r =");
+    expect(lua).not.toContain("= compute(");
+    // arg temp hoisted before do...end block
+    const argIdx = lua.indexOf("____inline_arg_0");
+    expect(argIdx).toBeGreaterThan(-1);
+    const doIdx = lua.indexOf("do", argIdx);
+    expect(argIdx).toBeLessThan(doIdx);
   });
 
-  it("passes through GotoStatement unchanged", () => {
-    const stmt = tstl.createGotoStatement("lbl");
-    const [result] = mapLuaStatements([stmt], leafFn);
-    expect(result.kind).toBe(tstl.SyntaxKind.GotoStatement);
-    expect((result as tstl.GotoStatement).label).toBe("lbl");
+  it("handles zero-parameter return-value function: no temp decls", () => {
+    const lua = compile(`
+      /** @inline */
+      function getVal(): number {
+        const x = 42;
+        return x;
+      }
+      const r = getVal();
+    `);
+    expect(lua).toContain("local r");
+    expect(lua).not.toContain("____inline_arg");
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).toContain("r =");
+    expect(lua).not.toContain("= getVal(");
   });
 
-  it("passes through LabelStatement unchanged", () => {
-    const stmt = tstl.createLabelStatement("lbl");
-    const [result] = mapLuaStatements([stmt], leafFn);
-    expect(result.kind).toBe(tstl.SyntaxKind.LabelStatement);
-    expect((result as tstl.LabelStatement).name).toBe("lbl");
+  it("handles multiple parameters: all arg temps outside do...end", () => {
+    const lua = compile(`
+      /** @inline */
+      function add(a: number, b: number): number {
+        const sum = a + b;
+        return sum;
+      }
+      declare const x: number;
+      declare const y: number;
+      const r = add(x, y);
+    `);
+    expect(lua).toContain("____inline_arg_0");
+    expect(lua).toContain("____inline_arg_1");
+    // Both temps should appear before do
+    const arg0Idx = lua.indexOf("____inline_arg_0");
+    const doIdx = lua.indexOf("do", arg0Idx);
+    expect(arg0Idx).toBeLessThan(doIdx);
+    expect(lua).not.toContain("= add(");
+  });
+
+  it("isolates inlined body locals inside do...end (scoping)", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x * 10;
+        return y + 1;
+      }
+      declare const a: number;
+      const y = 99;
+      const r = compute(a);
+      const z = y;
+    `);
+    // The do...end should scope the body's 'y' away from the caller's 'y'
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).not.toContain("= compute(");
+    // Caller's y=99 should still be present
+    expect(lua).toContain("99");
+  });
+
+  it("non-inline variable declaration passes through unchanged", () => {
+    const lua = compile(`
+      function notInlined(x: number): number { return x * 2; }
+      declare const a: number;
+      const r = notInlined(a);
+    `);
+    expect(lua).toContain("notInlined(a)");
+  });
+
+  it("variable declaration with non-call initializer passes through unchanged", () => {
+    const lua = compile(`
+      declare const a: number;
+      const r = a + 1;
+    `);
+    expect(lua).toContain("a + 1");
+  });
+
+  it("warns on void-body @inline at var-decl site: no inline expansion, call preserved", () => {
+    // A void multi-statement @inline called at var-decl site: handler returns undefined for
+    // non-statementsWithReturn target — TSTL handles it, call is preserved in output.
+    const { lua } = compileWithDiagnostics(`
+      /** @inline */
+      function doStuff(x: number): void { let a = x + 1; let b = a + 2; }
+      declare const a: number;
+      const r = (doStuff as any)(a);
+    `);
+    // The call is preserved (handler returns undefined for statements target)
+    expect(lua).toContain("doStuff(");
+  });
+});
+
+describe("return-statement multi-statement inline", () => {
+  it("expands return foo(x) to flat sequence: arg temps + body + return", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      function caller(): number {
+        return compute(a);
+      }
+    `);
+    expect(lua).toContain("local y");
+    expect(lua).toContain("return y");
+    // no do...end wrapping at return site (flat emission)
+    expect(lua).not.toMatch(/\bdo\b/);
+    expect(lua).not.toContain("return compute(");
+    // arg temp appears before body statements within caller
+    const callerIdx = lua.indexOf("caller");
+    const argIdx = lua.indexOf("____inline_arg_0", callerIdx);
+    const bodyIdx = lua.indexOf("local y", argIdx);
+    expect(argIdx).toBeGreaterThan(-1);
+    expect(argIdx).toBeLessThan(bodyIdx);
+  });
+
+  it("handles zero-parameter return-value function at return site", () => {
+    const lua = compile(`
+      /** @inline */
+      function getVal(): number {
+        const x = 42;
+        return x;
+      }
+      function caller(): number {
+        return getVal();
+      }
+    `);
+    // no arg temps
+    expect(lua).not.toContain("____inline_arg");
+    // body and return emitted
+    expect(lua).toContain("local x = 42");
+    expect(lua).toContain("return x");
+    // no do...end
+    expect(lua).not.toMatch(/\bdo\b/);
+    // no call preserved
+    expect(lua).not.toContain("return getVal()");
+  });
+
+  it("non-inline return statement preserved unchanged", () => {
+    const lua = compile(`
+      function caller(x: number): number {
+        return x + 1;
+      }
+    `);
+    expect(lua).toContain("return x + 1");
+  });
+
+  it("return without call expression preserved unchanged", () => {
+    const lua = compile(`
+      function caller(): number {
+        const x = 42;
+        return x;
+      }
+    `);
+    expect(lua).toContain("return x");
+    expect(lua).not.toContain("____inline_arg");
+  });
+
+  it("warns on void-body @inline at return site: returns undefined, call preserved", () => {
+    // A void multi-statement @inline at return site: handler returns undefined for
+    // non-statementsWithReturn target.
+    const { lua } = compileWithDiagnostics(`
+      /** @inline */
+      function doStuff(x: number): void { let a = x + 1; let b = a + 2; }
+      declare const a: number;
+      function caller() {
+        return (doStuff as any)(a);
+      }
+    `);
+    // The call is preserved (handler returns undefined for statements target)
+    expect(lua).toContain("doStuff(");
+  });
+
+  it("body locals appear in caller scope (no do...end at return site)", () => {
+    // At a return site, no caller code follows, so body locals in caller scope is safe.
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x * 10;
+        return y + 1;
+      }
+      declare const a: number;
+      function caller(): number {
+        return compute(a);
+      }
+    `);
+    expect(lua).toContain("local y");
+    expect(lua).not.toMatch(/\bdo\b/);
+    expect(lua).not.toContain("return compute(");
+  });
+});
+
+describe("destructuring multi-statement inline", () => {
+  it("object destructuring: expands const { a, b } = foo(x) with result ident and field-access assignments", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): { a: number; b: number } {
+        const obj = { a: x, b: x + 1 };
+        return obj;
+      }
+      declare const x: number;
+      const { a, b } = foo(x);
+    `);
+    expect(lua).toMatch(/____inline_result_\d+/);
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).toMatch(/\.a\b/);
+    expect(lua).toMatch(/\.b\b/);
+    expect(lua).not.toContain("= foo(");
+    // field-access assignments appear after the do...end block
+    const endIdx = lua.lastIndexOf("end");
+    expect(lua.indexOf(".a", endIdx)).toBeGreaterThan(endIdx);
+    expect(lua.indexOf(".b", endIdx)).toBeGreaterThan(endIdx);
+  });
+
+  it("object destructuring: renamed binding uses propertyName as key and binding name as local", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): { a: number } {
+        const obj = { a: x };
+        return obj;
+      }
+      declare const x: number;
+      const { a: myA } = foo(x);
+    `);
+    // Local binding should use 'myA', access via .a key
+    expect(lua).toContain("myA");
+    expect(lua).toMatch(/\.a\b/);
+    // No field named 'myA' — only field key 'a'
+    expect(lua).not.toMatch(/\.myA\b/);
+  });
+
+  it("non-inline object destructuring passes through unchanged", () => {
+    const lua = compile(`
+      function foo(): { a: number; b: number } { return { a: 1, b: 2 }; }
+      const { a, b } = foo();
+    `);
+    // No inline expansion
+    expect(lua).not.toMatch(/____inline_result_\d+/);
+    // Original call preserved
+    expect(lua).toContain("foo()");
+  });
+
+  it("array destructuring: expands const [a, b] = foo(x) with result ident and unpack call", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): number[] {
+        const arr = [x, x + 1];
+        return arr;
+      }
+      declare const x: number;
+      const [a, b] = foo(x);
+    `);
+    expect(lua).toMatch(/____inline_result_\d+/);
+    expect(lua).toMatch(/\bdo\b/);
+    expect(lua).toContain("unpack(");
+    expect(lua).not.toContain("= foo(");
+    // binding identifiers appear in unpack assignment
+    expect(lua).toContain("a,");
+    expect(lua).toContain("b");
+  });
+
+  it("non-inline array destructuring passes through unchanged", () => {
+    const lua = compile(`
+      function foo(): number[] { return [1, 2]; }
+      const [a, b] = foo();
+    `);
+    // No inline expansion
+    expect(lua).not.toMatch(/____inline_result_\d+/);
+    // Original call preserved
+    expect(lua).toContain("foo()");
+  });
+});
+
+describe("cross-module statement body: void multi-statement", () => {
+  it("allows cross-module void multi-statement inline when body is self-contained (param-only)", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        /** @inline */
+        export function setup(x: number): void {
+          let a = x + 1;
+          let b = a * 2;
+        }
+      `,
+      "main.ts": `
+        import { setup } from "./utils";
+        declare const n: number;
+        setup(n);
+      `,
+    });
+    // Body is self-contained: all identifiers come from params — should be inlined
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).not.toContain("setup(n)");
+    expect(lua).toMatch(/\bdo\b/);
+  });
+
+  it("rejects cross-module void multi-statement inline when body references free variable", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        const factor = 10;
+        /** @inline */
+        export function scale(x: number): void {
+          let a = x * factor;
+          let b = a + 1;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        declare const n: number;
+        scale(n);
+      `,
+    });
+    // factor is a free variable from the source module — should be rejected
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("non-parameter");
+    expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    expect(diagnostics[0].code).toBe(90001);
+    expect(lua).toContain("scale(n)");
+  });
+});
+
+describe("cross-module statement body: var-decl statementsWithReturn", () => {
+  it("allows cross-module var-decl multi-statement inline when body is self-contained", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        /** @inline */
+        export function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { compute } from "./utils";
+        declare const a: number;
+        const r = compute(a);
+      `,
+    });
+    // Self-contained: tmp is a local, x comes from params — should be inlined.
+    // buildVarDeclInline uses the binding name (r) as the result variable, not ____inline_result_N.
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).not.toContain("= compute(");
+    expect(lua).toContain("local r");
+    expect(lua).toContain("____inline_arg_0");
+  });
+
+  it("rejects cross-module var-decl multi-statement inline when body references free variable", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        const factor = 10;
+        /** @inline */
+        export function scale(x: number): number {
+          const tmp = x * factor;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        declare const a: number;
+        const r = scale(a);
+      `,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("non-parameter");
+    expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    expect(diagnostics[0].code).toBe(90001);
+    expect(lua).toContain("scale(a)");
+  });
+});
+
+describe("cross-module statement body: return-statement statementsWithReturn", () => {
+  it("allows cross-module return-statement multi-statement inline when body is self-contained", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        /** @inline */
+        export function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { compute } from "./utils";
+        declare const a: number;
+        function caller(): number {
+          return compute(a);
+        }
+      `,
+    });
+    // Self-contained: should be inlined at return site
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).not.toContain("return compute(");
+  });
+
+  it("rejects cross-module return-statement multi-statement inline when body references free variable", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        const factor = 10;
+        /** @inline */
+        export function scale(x: number): number {
+          const tmp = x * factor;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        declare const a: number;
+        function caller(): number {
+          return scale(a);
+        }
+      `,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("non-parameter");
+    expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    expect(diagnostics[0].code).toBe(90001);
+    expect(lua).toContain("return scale(a)");
+  });
+});
+
+describe("inline strict mode", () => {
+  describe("global strict: true promotes warnings to errors (code 90001)", () => {
+    it("emits Error when global strict: true and no per-rule override (expression body)", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+
+    it("emits Warning when global strict: false (default)", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: false } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    });
+
+    it("emits Error for statement-body inline warning when global strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function greet(x: number) { let y = x + 1; y = y + 1; }
+        declare const a: number;
+        const r = greet(a);
+        `,
+        { pluginOptions: { strict: true } },
+      );
+      // statementsWithReturn or statements at expression position -> Warning/Error
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+  });
+
+  describe("per-rule inline.strict override", () => {
+    it("emits Warning when global strict: true but inline.strict: false", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true, rules: { inline: { strict: false } } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    });
+
+    it("emits Error when global strict: false but inline.strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: false, rules: { inline: { strict: true } } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+
+    it("emits Error when both global strict: true and inline.strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true, rules: { inline: { strict: true } } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+  });
+
+  describe("diagnostic code 90001 still correct regardless of strict mode", () => {
+    it("code is 90001 with global strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].source).toBe("tstl-optimize");
+    });
+  });
+});
+
+describe("diagnostic messages", () => {
+  describe("rejection reasons are specific", () => {
+    it("rejects early return with specific message", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function bad(x: number): void {
+          if (x > 0) return;
+          const y = x + 1;
+        }
+        declare const a: number;
+        bad(a);
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("early return in body");
+    });
+
+    it("rejects break in body with specific message", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function bad(x: number): void {
+          break;
+        }
+        declare const a: number;
+        bad(a);
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("break in body");
+    });
+
+    it("rejects rest parameters with specific message", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function bad(...args: number[]): void {
+          const x = args[0];
+        }
+        declare const a: number;
+        bad(a);
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("rest parameters are not supported");
+    });
+  });
+
+  it("emits specific message for multi-statement call at expression position", () => {
+    const { diagnostics } = compileWithDiagnostics(`
+      /** @inline */
+      function effect(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      const r = effect(a) + 1;
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain(
+      "multi-statement body cannot be inlined at expression position",
+    );
+    expect(diagnostics[0].messageText).toContain("only statement-position calls supported");
+    expect(diagnostics[0].code).toBe(90001);
+  });
+});
+
+describe("@inline JSDoc stripping", () => {
+  it("strips @inline comment from single-expression function Lua output", () => {
+    const lua = compile(`
+      /** @inline */
+      function single(x: number) { return x + 1; }
+      declare const a: number;
+      const r = single(a);
+    `);
+    expect(lua).not.toContain("@inline");
+    expect(lua).not.toContain("---");
+  });
+
+  it("strips @inline comment from multi-statement function Lua output", () => {
+    const lua = compile(`
+      /** @inline */
+      function multi(x: number): void {
+        const y = x + 1;
+        const z = y * 2;
+      }
+      declare const a: number;
+      multi(a);
+    `);
+    expect(lua).not.toContain("@inline");
+    // The function declaration's JSDoc block (---\n-- @inline\n) must not appear
+    expect(lua).not.toContain("-- @inline");
+  });
+});
+
+describe("strict mode", () => {
+  describe("global strict: true promotes inline warnings to errors", () => {
+    it("promotes warning to error for multi-statement call at expression position", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function effect(x: number): number {
+          const y = x + 1;
+          return y * 2;
+        }
+        declare const a: number;
+        const r = effect(a) + 1;
+        `,
+        { pluginOptions: { strict: true, rules: { inline: true } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+
+    it("promotes warning to error for early-return rejection", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function bad(x: number): void {
+          if (x > 0) return;
+          const y = x + 1;
+        }
+        declare const a: number;
+        bad(a);
+        `,
+        { pluginOptions: { strict: true, rules: { inline: true } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+  });
+
+  describe("per-rule inline.strict: false overrides global strict: true", () => {
+    it("keeps warning when per-rule strict is false", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function effect(x: number): number {
+          const y = x + 1;
+          return y * 2;
+        }
+        declare const a: number;
+        const r = effect(a) + 1;
+        `,
+        {
+          pluginOptions: {
+            strict: true,
+            rules: { inline: { strict: false } },
+          },
+        },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(diagnostics[0].code).toBe(90001);
+    });
+  });
+
+  describe("per-rule inline.strict: true with global strict: false promotes to error", () => {
+    it("promotes to error when only per-rule strict is true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function effect(x: number): number {
+          const y = x + 1;
+          return y * 2;
+        }
+        declare const a: number;
+        const r = effect(a) + 1;
+        `,
+        {
+          pluginOptions: {
+            strict: false,
+            rules: { inline: { strict: true } },
+          },
+        },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].code).toBe(90001);
+    });
   });
 });

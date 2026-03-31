@@ -39,7 +39,7 @@
     "formatter": { "quoteStyle": "double", "semicolons": "always" }
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist"]
+    "includes": ["**", "!**/node_modules", "!**/dist", "!.claude"]
   },
   "overrides": [
     {
