@@ -818,6 +818,102 @@ function buildObjectDestructureInline(
   return [resultDecl, ...tempDecls, doEnd, ...fieldDecls];
 }
 
+function buildArrayDestructureInline(
+  pattern: ts.ArrayBindingPattern,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  // Only handle simple binding elements (no rest, no nested patterns, no omitted elements).
+  for (const element of pattern.elements) {
+    if (ts.isOmittedExpression(element)) return undefined;
+    if (element.dotDotDotToken) return undefined;
+    if (!ts.isIdentifier(element.name)) return undefined;
+  }
+
+  // Generate fresh result identifier: ____inline_result_N
+  const resultSymId = context.nextSymbolId();
+  const resultIdent = tstl.createIdentifier(
+    `____inline_result_${resultSymId}`,
+    undefined,
+    resultSymId,
+  );
+  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
+
+  const { bodyStmts, params, declaration } = target;
+
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+
+  // Transform body statements inside a function scope.
+  context.pushScope(ScopeType.Function, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  // Transform and substitute the return expression, then assign to result ident inside do...end.
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+
+  const assignResult = tstl.createAssignmentStatement(
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
+    [substitutedReturn],
+  );
+
+  const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+  // Detect LuaMultiReturn return type: if the function returns LuaMultiReturn, no unpack needed.
+  const signature = checker.getResolvedSignature(callNode);
+  const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
+  const isMultiReturn = returnType?.symbol?.name === "LuaMultiReturn";
+
+  // Build binding element identifiers (fresh symbolIds since TSTL hasn't processed them yet).
+  const bindingIdents: tstl.Identifier[] = pattern.elements
+    .filter((e): e is ts.BindingElement => !ts.isOmittedExpression(e))
+    .map((element) => {
+      const bindingSymId = context.nextSymbolId();
+      return tstl.createIdentifier((element.name as ts.Identifier).text, undefined, bindingSymId);
+    });
+
+  if (isMultiReturn) {
+    // LuaMultiReturn: emit `a, b = <resultIdent>` (multi-left assignment, no unpack).
+    const assignStmt = tstl.createAssignmentStatement(
+      bindingIdents as unknown as tstl.AssignmentLeftHandSideExpression[],
+      [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
+    );
+    return [resultDecl, ...tempDecls, doEnd, assignStmt];
+  }
+
+  // Plain array: emit `local a, b = unpack(resultId, 1, N)`.
+  const unpackCall = tstl.createCallExpression(tstl.createIdentifier("unpack"), [
+    tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
+    tstl.createNumericLiteral(1),
+    tstl.createNumericLiteral(pattern.elements.length),
+  ]);
+
+  return [
+    resultDecl,
+    ...tempDecls,
+    doEnd,
+    tstl.createVariableDeclarationStatement(bindingIdents, [unpackCall]),
+  ];
+}
+
 function handleVariableStatement(
   node: ts.VariableStatement,
   checker: ts.TypeChecker,
@@ -863,7 +959,11 @@ function handleVariableStatement(
     return buildObjectDestructureInline(decl.name, target, callNode, checker, context) ?? undefined;
   }
 
-  // Array destructuring: handled in buildArrayDestructureInline (below).
+  // Array destructuring: const [a, b] = foo(x)
+  if (ts.isArrayBindingPattern(decl.name)) {
+    return buildArrayDestructureInline(decl.name, target, callNode, checker, context) ?? undefined;
+  }
+
   return undefined;
 }
 
