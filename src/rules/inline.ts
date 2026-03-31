@@ -68,8 +68,19 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
     if (ts.isFunctionDeclaration(decl)) {
       if (!hasInlineTag(decl)) continue;
       const classified = classifyBody(decl);
-      if (!classified)
-        return { reason: "body must be a single return statement or arrow expression" };
+      if (!classified) {
+        // Empty body: treat as statement target with zero statements.
+        // ExpressionStatement handler erases silently; expression handler rejects.
+        return {
+          target: {
+            kind: "statements",
+            bodyStmts: [],
+            params: decl.parameters,
+            declaration: decl,
+            resolvedSymbol: resolved,
+          },
+        };
+      }
       if (classified.kind === "statements") {
         return {
           target: {
@@ -100,8 +111,17 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
       const init = decl.initializer;
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
         const classified = classifyBody(init);
-        if (!classified)
-          return { reason: "body must be a single return statement or arrow expression" };
+        if (!classified) {
+          return {
+            target: {
+              kind: "statements",
+              bodyStmts: [],
+              params: init.parameters,
+              declaration: decl,
+              resolvedSymbol: resolved,
+            },
+          };
+        }
         if (classified.kind === "statements") {
           return {
             target: {
@@ -393,7 +413,6 @@ export function mapLuaStatements(
   });
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: prepared for Phase 5 multi-statement inline
 function substituteParamsInStatements(
   statements: readonly tstl.Statement[],
   paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>,
@@ -484,6 +503,83 @@ function createInlineWarning(node: ts.CallExpression, reason: string): ts.Diagno
   };
 }
 
+function hasLinearControlFlow(stmts: readonly ts.Statement[]): true | string {
+  for (const stmt of stmts) {
+    if (ts.isReturnStatement(stmt)) return "early return in body";
+    if (ts.isBreakStatement(stmt)) return "break in body";
+    if (ts.isContinueStatement(stmt)) return "continue in body";
+    // Per CONTEXT.md: do NOT recurse into if/while/for blocks
+  }
+  return true;
+}
+
+function canInlineStatements(
+  target: StatementInlineTarget,
+  callNode: ts.CallExpression,
+  _checker: ts.TypeChecker,
+): true | string {
+  const { bodyStmts, params, declaration } = target;
+
+  for (const param of params) {
+    if (param.dotDotDotToken) return "rest parameters are not supported";
+    if (param.questionToken) return "optional parameters are not supported";
+    if (param.initializer) return "default parameters are not supported";
+  }
+
+  if (callNode.arguments.length !== params.length)
+    return "argument count does not match parameter count";
+
+  if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
+
+  const controlFlow = hasLinearControlFlow(bodyStmts);
+  if (controlFlow !== true) return controlFlow;
+
+  return true;
+}
+
+// TSTL ScopeType.Function = 2 (not part of public API, using numeric value)
+const SCOPE_TYPE_FUNCTION = 2;
+
+function buildDoEndBlock(
+  target: StatementInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  const { bodyStmts, params, declaration } = target;
+
+  // 1. Transform arguments and create temp identifiers
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+
+  // 2. Transform body statements via TSTL in a function scope so that
+  //    local variable declarations produce `local` in Lua (not global assignments).
+  context.pushScope(SCOPE_TYPE_FUNCTION, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+
+  const substituted = substituteParamsInStatements(luaBody, paramMap);
+
+  // 3. Wrap in do...end
+  const doBlock = tstl.createDoStatement(substituted);
+
+  // 4. Return temp declarations + do...end
+  return [...tempDecls, doBlock];
+}
+
 function handleCallExpression(
   node: ts.CallExpression,
   checker: ts.TypeChecker,
@@ -498,13 +594,17 @@ function handleCallExpression(
   const { target } = result;
 
   if (target.kind === "statements") {
-    context.diagnostics.push(
-      createInlineWarning(
-        node,
-        "multi-statement body cannot be inlined at expression position" +
-          " (only statement-position calls supported)",
-      ),
-    );
+    // Skip diagnostic if parent is ExpressionStatement -- the statement-level handler
+    // already emits the appropriate diagnostic or inlines. This prevents double diagnostics.
+    if (!ts.isExpressionStatement(node.parent)) {
+      context.diagnostics.push(
+        createInlineWarning(
+          node,
+          "multi-statement body cannot be inlined at expression position" +
+            " (only statement-position calls supported)",
+        ),
+      );
+    }
     return undefined;
   }
 
@@ -583,9 +683,27 @@ function handleExpressionStatement(
     return [tstl.createExpressionStatement(inlined)];
   }
 
-  // target.kind === "statements" -- Phase 5 Plan 02 will handle this
-  // For now, return undefined (not handled, falls through to default)
-  return undefined;
+  // target.kind === "statements"
+  // Empty body: silently erase (no do...end, no output)
+  if (target.bodyStmts.length === 0) return [];
+
+  const canInlineResult = canInlineStatements(target, callNode, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    return undefined;
+  }
+
+  // Cross-module check: reject statement bodies with free variables
+  const isCrossModule =
+    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+  if (isCrossModule) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "cross-module multi-statement inline is not supported"),
+    );
+    return undefined;
+  }
+
+  return buildDoEndBlock(target, callNode, checker, context);
 }
 
 export const createVisitors: RuleFactory = (checker, _config) => {
