@@ -199,13 +199,145 @@ const y = double(5); // inlined: const y = 5 * 2
 A function qualifies for inlining when it meets all these conditions:
 
 - `@inline` JSDoc tag on the function
-- Single-expression body (or arrow `=> expr`)
+- Single-expression body (or arrow `=> expr`), or multi-statement body (see below)
 - Module-scope function (not nested)
 - No rest, default, or optional parameters
 - Non-recursive
 - No parameter writes inside the body
 - Each parameter used more than once receives only side-effect-free arguments
-- Cross-module: body references only parameters and literals (no captured variables)
+- Cross-module: body references only parameters and literals — no captured module-scope variables
+  (applies to both single-expression and multi-statement bodies)
+
+#### Multi-statement inline
+
+Multi-statement function bodies are supported at statement-level call sites and expand in-place.
+The inlined statements are wrapped in a `do...end` block (except at return sites) to prevent
+local variable names from leaking into the caller's scope.
+
+**Pattern 1 — Void statement site**
+
+```typescript
+/** @inline */
+function setup(x: number) {
+  let a = x + 1;
+  console.log(a);
+}
+declare const n: number;
+setup(n); // expanded into do...end block
+```
+
+```lua
+local ____inline_arg_0 = n
+do
+  local a = ____inline_arg_0 + 1
+  print(a)
+end
+```
+
+**Pattern 2 — Variable-declaration site**
+
+```typescript
+/** @inline */
+function compute(x: number): number {
+  const y = x + 1;
+  return y * 2;
+}
+declare const a: number;
+const r = compute(a);
+```
+
+```lua
+local r
+local ____inline_arg_0 = a
+do
+  local y = ____inline_arg_0 + 1
+  r = y * 2
+end
+```
+
+**Pattern 3 — Return site**
+
+```typescript
+/** @inline */
+function compute(x: number): number {
+  const y = x + 1;
+  return y * 2;
+}
+declare const a: number;
+function caller(): number {
+  return compute(a);
+}
+```
+
+```lua
+-- body statements emitted flat, no do...end needed
+local ____inline_arg_0 = a
+local y = ____inline_arg_0 + 1
+return y * 2
+```
+
+**Pattern 4 — Destructuring site**
+
+```typescript
+/** @inline */
+function foo(x: number): { a: number; b: number } {
+  const obj = { a: x, b: x + 1 };
+  return obj;
+}
+declare const x: number;
+const { a, b } = foo(x);
+```
+
+```lua
+-- result variable holds the inlined return, bindings extracted after do...end
+local a
+local b
+local ____inline_result_N
+local ____inline_arg_0 = x
+do
+  local obj = {a = ____inline_arg_0, b = ____inline_arg_0 + 1}
+  ____inline_result_N = obj
+end
+a = ____inline_result_N.a
+b = ____inline_result_N.b
+```
+
+(where `N` is a compiler-generated symbol ID; the exact value is unimportant)
+
+Argument temporaries are always hoisted before the `do...end` block to preserve the left-to-right
+evaluation order of the original call's arguments. Variables declared inside `do...end` do not leak
+into the caller's scope.
+
+A multi-statement `@inline` function with an empty body is erased silently at statement sites — no
+`do...end` is emitted.
+
+#### Call-site limitations
+
+Multi-statement inline is rejected with a diagnostic warning (code 90001) at expression positions
+where the result feeds another expression. The function declaration is kept and the call is left
+unchanged:
+
+```typescript
+// Not inlined — expression position
+const r = effect(a) + 1;   // warns: multi-statement body cannot be inlined at expression position
+bar(effect(a));             // warns: same reason
+```
+
+Functions with a top-level early `return`, `break`, or `continue` in the body are also rejected:
+
+```typescript
+/** @inline */
+function bail(x: number) { if (x > 0) return; console.log(x); }
+bail(n); // warns: @inline ignored — early return in body
+```
+
+#### Rule interaction
+
+Inlined `do...end` blocks are processed by subsequent rules in the pipeline. For example, if the
+inlined body calls `Math.floor(x)` three or more times, the `localizer` rule hoists a
+`____math_floor` local to module scope exactly as it would for non-inlined code. Similarly,
+`math-intrinsics` rewrites `Math.*` calls inside inlined bodies. Rules apply to the fully expanded
+output — inlined code receives the same optimizations as hand-written code.
 
 ### `localizer`
 
