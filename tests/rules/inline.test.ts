@@ -1199,8 +1199,8 @@ describe("destructuring multi-statement inline", () => {
     // Field-access assignments for each binding
     expect(lua).toMatch(/\.a\b/);
     expect(lua).toMatch(/\.b\b/);
-    // The original call should not appear
-    expect(lua).not.toContain("foo(");
+    // The inline call (not function definition) should not appear as a call site
+    expect(lua).not.toContain("= foo(");
   });
 
   it("object destructuring: field-access assignments appear outside the do...end block", () => {

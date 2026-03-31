@@ -730,6 +730,94 @@ function buildVarDeclInline(
   return [resultDecl, ...tempDecls, tstl.createDoStatement([...substitutedBody, assignResult])];
 }
 
+function buildObjectDestructureInline(
+  pattern: ts.ObjectBindingPattern,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  // Reject rest elements — too complex to support.
+  for (const element of pattern.elements) {
+    if (element.dotDotDotToken) return undefined;
+    // Only simple identifier bindings are supported (no nested destructuring).
+    if (!ts.isIdentifier(element.name)) return undefined;
+  }
+
+  // Generate fresh result identifier: ____inline_result_N
+  const resultSymId = context.nextSymbolId();
+  const resultIdent = tstl.createIdentifier(
+    `____inline_result_${resultSymId}`,
+    undefined,
+    resultSymId,
+  );
+  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
+
+  const { bodyStmts, params, declaration } = target;
+
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+
+  // Transform body statements inside a function scope.
+  context.pushScope(ScopeType.Function, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  // Transform and substitute the return expression, then assign to result ident inside do...end.
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+
+  const assignResult = tstl.createAssignmentStatement(
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
+    [substitutedReturn],
+  );
+
+  const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+  // Build field-access declarations for each binding element.
+  // `const { a: myA } = foo(x)` — key is `a`, local is `myA`.
+  const fieldDecls: tstl.VariableDeclarationStatement[] = [];
+  for (const element of pattern.elements) {
+    const bindingName = element.name as ts.Identifier;
+    // propertyName is defined for renamed bindings (a: myA); otherwise use element.name as key.
+    const keyNode = element.propertyName ?? element.name;
+    if (!ts.isIdentifier(keyNode)) return undefined;
+
+    // Resolve the local binding symbol to get its Lua symbolId.
+    const bindingSymbol = checker.getSymbolAtLocation(bindingName);
+    if (!bindingSymbol) return undefined;
+
+    // The binding symbol hasn't been transformed yet (handler intercepts before TSTL),
+    // so allocate a fresh symbolId for it.
+    const bindingSymId = context.nextSymbolId();
+    const localIdent = tstl.createIdentifier(bindingName.text, undefined, bindingSymId);
+
+    const fieldAccess = tstl.createTableIndexExpression(
+      tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
+      tstl.createStringLiteral(keyNode.text),
+    );
+
+    fieldDecls.push(tstl.createVariableDeclarationStatement([localIdent], [fieldAccess]));
+  }
+
+  return [resultDecl, ...tempDecls, doEnd, ...fieldDecls];
+}
+
 function handleVariableStatement(
   node: ts.VariableStatement,
   checker: ts.TypeChecker,
@@ -770,7 +858,12 @@ function handleVariableStatement(
     return buildVarDeclInline(decl.name, target, callNode, checker, context);
   }
 
-  // Object/array destructuring bindings are handled in Plan 03.
+  // Object destructuring: const { a, b } = foo(x)
+  if (ts.isObjectBindingPattern(decl.name)) {
+    return buildObjectDestructureInline(decl.name, target, callNode, checker, context) ?? undefined;
+  }
+
+  // Array destructuring: handled in buildArrayDestructureInline (below).
   return undefined;
 }
 
