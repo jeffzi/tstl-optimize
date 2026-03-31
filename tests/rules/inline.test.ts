@@ -1248,4 +1248,52 @@ describe("destructuring multi-statement inline", () => {
     // Original call preserved
     expect(lua).toContain("foo()");
   });
+
+  it("array destructuring: expands const [a, b] = foo(x) with result ident and unpack call", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): number[] {
+        const arr = [x, x + 1];
+        return arr;
+      }
+      declare const x: number;
+      const [a, b] = foo(x);
+    `);
+    // Fresh result identifier should appear
+    expect(lua).toMatch(/____inline_result_\d+/);
+    // do...end block for body
+    expect(lua).toMatch(/\bdo\b/);
+    // unpack call for array destructuring
+    expect(lua).toContain("unpack(");
+    // The inline call should not appear as a call site
+    expect(lua).not.toContain("= foo(");
+  });
+
+  it("array destructuring: binding identifiers appear in unpack assignment", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): number[] {
+        const arr = [x, x + 1];
+        return arr;
+      }
+      declare const x: number;
+      const [a, b] = foo(x);
+    `);
+    // a and b should appear in the output
+    expect(lua).toContain("a,");
+    expect(lua).toContain("b");
+    // unpack with count 2 for 2 elements
+    expect(lua).toContain("unpack(");
+  });
+
+  it("non-inline array destructuring passes through unchanged", () => {
+    const lua = compile(`
+      function foo(): number[] { return [1, 2]; }
+      const [a, b] = foo();
+    `);
+    // No inline expansion
+    expect(lua).not.toMatch(/____inline_result_\d+/);
+    // Original call preserved
+    expect(lua).toContain("foo()");
+  });
 });
