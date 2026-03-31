@@ -27,13 +27,19 @@ export interface ConstantDef {
 export interface ConditionalCompilationConfig {
   enabled: boolean;
   constants: Record<string, ConstantDef>;
+  strict?: boolean;
+}
+
+export interface InlineConfig {
+  enabled?: boolean;
+  strict?: boolean;
 }
 
 export interface RulesConfig {
   "conditional-compilation": boolean | ConditionalCompilationConfig;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
-  inline: boolean;
+  inline: boolean | InlineConfig;
   localizer: boolean | LocalizerConfig;
   "debug-strip": boolean | DebugStripConfig;
 }
@@ -43,6 +49,7 @@ export type InterpreterTarget = "puc" | "luajit";
 export interface PluginConfig {
   rules: RulesConfig;
   target?: InterpreterTarget;
+  strict?: boolean;
 }
 
 const DEFAULT_DEBUG_STRIP: DebugStripConfig = {
@@ -111,6 +118,44 @@ export function resolveConditionalCompilationConfig(
   return resolved;
 }
 
+export function resolveInlineConfig(value: boolean | InlineConfig | undefined): {
+  enabled: boolean;
+  strict: boolean;
+} {
+  if (value === false) return { enabled: false, strict: false };
+  if (value === undefined || value === true) return { enabled: true, strict: false };
+  return {
+    enabled: value.enabled !== false,
+    strict: value.strict === true,
+  };
+}
+
+/**
+ * Extracts the per-rule strict field from ConditionalCompilationConfig.
+ * Returns undefined when value is not an object (boolean or absent), meaning "not set".
+ */
+export function resolveConditionalCompilationStrict(
+  value: boolean | ConditionalCompilationConfig | undefined,
+): boolean | undefined {
+  if (value === undefined || value === true || value === false) return undefined;
+  // value is ConditionalCompilationConfig — object narrowing, no cast required
+  return value.strict;
+}
+
+/**
+ * Resolves the effective strict flag from global and per-rule overrides.
+ * Per-rule `false` always wins over global `true` (allows opting a rule out of global strict).
+ */
+export function resolveEffectiveStrict(
+  globalStrict: boolean,
+  perRuleStrict: boolean | undefined,
+): boolean {
+  // Per-rule false always wins over global true.
+  if (perRuleStrict === false) return false;
+  // Global true, or per-rule true, or both — strict is active.
+  return globalStrict || perRuleStrict === true;
+}
+
 export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boolean {
   const value = config[rule];
   if (typeof value === "boolean") return value;
@@ -125,6 +170,7 @@ function isRecord(val: unknown): val is Record<string, unknown> {
 
 const STRUCTURED_RULES: ReadonlySet<string> = new Set([
   "conditional-compilation",
+  "inline",
   "localizer",
   "debug-strip",
 ]);
@@ -148,8 +194,9 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   }
 
   const target = isInterpreterTarget(options?.target) ? options.target : undefined;
+  const strict = options?.strict === true;
 
-  return { rules, target };
+  return { rules, target, strict };
 }
 
 const INTERPRETER_TARGETS: ReadonlySet<string> = new Set(["puc", "luajit"]);

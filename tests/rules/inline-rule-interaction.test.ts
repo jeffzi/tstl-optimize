@@ -1,16 +1,3 @@
-/**
- * INFRA-07: Rule interaction verification.
- *
- * These tests verify that inlined code (including future do...end blocks from
- * multi-statement inline) is eligible for processing by the localizer and
- * math-intrinsics rules. The tests exercise existing behavior to establish a
- * baseline that Phase 5+ must preserve.
- *
- * Key findings (from research):
- * - Localizer's processFunctionBodies already recurses into DoStatement nodes
- * - Math-intrinsics operates at the TS AST level before Lua emission
- * - No adverse scope-boundary effects found
- */
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
@@ -58,7 +45,7 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
       expect(lua).toContain("____math_ceil");
     });
 
-    it("does not hoist chains rooted at block-local variables above the block", () => {
+    it("does not hoist chains rooted at block-local variables", () => {
       const lua = compile(
         `
         {
@@ -74,10 +61,13 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
           },
         },
       );
-      // obj is defined inside the do...end block, so localizer should recognize
-      // it as locally-defined and not hoist above the block. The hoist should
-      // still appear inside the block.
+      // obj is defined inside the do...end block. The module-scope pass sees obj in
+      // scopeDefs and correctly skips hoisting (it cannot safely insert a local alias
+      // before obj's own declaration). No ____obj_nested_value alias is emitted at all.
+      expect(lua).not.toContain("____obj");
+      // The do...end block structure is preserved and obj.nested.value is used directly.
       expect(lua).toContain("do");
+      expect(lua).toContain("obj.nested.value");
     });
   });
 

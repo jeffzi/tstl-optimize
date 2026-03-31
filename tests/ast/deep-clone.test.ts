@@ -110,6 +110,20 @@ describe("deepCloneExpression", () => {
     expect((clonedReturn.expressions[0] as tstl.Identifier).text).toBe("x");
   });
 
+  it("clones FunctionExpression with undefined body returns empty block (no crash)", () => {
+    // FunctionExpression.body is typed as Block but can be undefined at runtime
+    // (e.g. from partial AST nodes). The guard must prevent a crash.
+    const funcExpr = tstl.createFunctionExpression(tstl.createBlock([]));
+    // Force body to undefined to simulate the null-body case
+    (funcExpr as unknown as { body: undefined }).body = undefined;
+
+    const cloned = deepCloneExpression(funcExpr) as tstl.FunctionExpression;
+
+    expect(cloned).not.toBe(funcExpr);
+    expect(cloned.body).toBeDefined();
+    expect(cloned.body.statements).toHaveLength(0);
+  });
+
   it("clones UnaryExpression independently", () => {
     const operand = id("x");
     const unary = tstl.createUnaryExpression(operand, tstl.SyntaxKind.NegationOperator);
@@ -178,7 +192,7 @@ describe("deepCloneStatement", () => {
     expect(cloned).not.toBe(doStmt);
     expect(cloned.statements[0]).not.toBe(inner);
     const clonedReturn = cloned.statements[0] as tstl.ReturnStatement;
-    expect(clonedReturn.expressions[0]).not.toBe((inner as tstl.ReturnStatement).expressions[0]);
+    expect(clonedReturn.expressions[0]).not.toBe(inner.expressions[0]);
   });
 
   it("clones VariableDeclarationStatement independently", () => {
