@@ -851,3 +851,60 @@ describe("conditional-compilation strict mode (code 90002)", () => {
     });
   });
 });
+
+describe("strict mode", () => {
+  it("promotes partial-folding warning to error when global strict: true", () => {
+    const { diagnostics } = compileWithDiagnostics(
+      `
+      declare const UNKNOWN: boolean;
+      if (UNKNOWN && DEBUG) {
+        console.log("conditional");
+      }
+      `,
+      {
+        pluginOptions: {
+          strict: true,
+          rules: {
+            "conditional-compilation": {
+              constants: {
+                DEBUG: { env: "DEBUG", default: false },
+              },
+            },
+          },
+        },
+      },
+    );
+    // UNKNOWN is not a known constant, so the condition cannot be fully resolved
+    // → partial-folding warning should be promoted to error under strict
+    const strictDiag = diagnostics.filter((d) => d.code === 90002);
+    expect(strictDiag.length).toBeGreaterThanOrEqual(1);
+    expect(strictDiag[0].category).toBe(ts.DiagnosticCategory.Error);
+  });
+
+  it("keeps warning when per-rule conditional-compilation.strict: false overrides global", () => {
+    const { diagnostics } = compileWithDiagnostics(
+      `
+      declare const UNKNOWN: boolean;
+      if (UNKNOWN && DEBUG) {
+        console.log("conditional");
+      }
+      `,
+      {
+        pluginOptions: {
+          strict: true,
+          rules: {
+            "conditional-compilation": {
+              constants: {
+                DEBUG: { env: "DEBUG", default: false },
+              },
+              strict: false,
+            },
+          },
+        },
+      },
+    );
+    const ccDiag = diagnostics.filter((d) => d.code === 90002);
+    expect(ccDiag.length).toBeGreaterThanOrEqual(1);
+    expect(ccDiag[0].category).toBe(ts.DiagnosticCategory.Warning);
+  });
+});
