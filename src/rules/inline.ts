@@ -2,6 +2,9 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+// ScopeType is not exported from the typescript-to-lua public index; import from internal path.
+// Function = 2 (verified against TSTL source).
+import { ScopeType } from "typescript-to-lua/dist/transformation/utils/scope";
 import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
@@ -537,9 +540,6 @@ function canInlineStatements(
   return true;
 }
 
-// TSTL ScopeType.Function = 2 (not part of public API, using numeric value)
-const SCOPE_TYPE_FUNCTION = 2;
-
 function buildDoEndBlock(
   target: StatementInlineTarget,
   callNode: ts.CallExpression,
@@ -567,7 +567,7 @@ function buildDoEndBlock(
 
   // 2. Transform body statements via TSTL in a function scope so that
   //    local variable declarations produce `local` in Lua (not global assignments).
-  context.pushScope(SCOPE_TYPE_FUNCTION, declaration);
+  context.pushScope(ScopeType.Function, declaration);
   const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
   context.popScope();
 
