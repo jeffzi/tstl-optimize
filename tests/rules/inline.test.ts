@@ -710,6 +710,34 @@ describe("statementsWithReturn data model (Task 1)", () => {
   });
 });
 
+describe("STATEMENT_KINDS_WITH_FALLBACK (Task 2)", () => {
+  it("non-inline VariableStatement is preserved when inline rule is active", () => {
+    // When the inline rule's VariableStatement visitor (registered in Plan 02) returns
+    // undefined for a non-inline variable, it must fall through to TSTL's default
+    // transform — not erase the statement. This test confirms the basic compile works.
+    // Note: TSTL emits module-level vars without `local`; function-level vars use `local`.
+    const lua = compile(`
+      function makeLocals(): void {
+        const x = 5;
+        const r = x + 1;
+      }
+    `);
+    expect(lua).toContain("local x = 5");
+  });
+
+  it("non-inline ReturnStatement is preserved when inline rule is active", () => {
+    // Same invariant for ReturnStatement visitor (registered in Plan 02): undefined
+    // must fall through, not erase.
+    const lua = compile(`
+      function getVal(): number {
+        declare const y: number;
+        return 42;
+      }
+    `);
+    expect(lua).toContain("return 42");
+  });
+});
+
 describe("mapLuaStatements (unit)", () => {
   /** leafFn that replaces any Identifier with text "x" with one named "replaced". */
   const leafFn = (n: tstl.Expression): tstl.Expression | undefined => {
