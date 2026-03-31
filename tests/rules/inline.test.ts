@@ -449,6 +449,93 @@ describe("inline", () => {
       expect(diagnostics[0].messageText).toContain("non-parameter");
     });
   });
+
+  describe("cross-module: multi-statement statement bodies", () => {
+    it("inlines cross-module void multi-statement with self-contained body", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export function log(x: number): void {
+            const y = x + 1;
+            const z = y * 2;
+          }
+        `,
+        "main.ts": `
+          import { log } from "./utils";
+          declare const a: number;
+          log(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("log(");
+    });
+
+    it("rejects cross-module void multi-statement with module-scope free variable", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const factor = 10;
+          /** @inline */
+          export function scale(x: number): void {
+            const y = x * factor;
+          }
+        `,
+        "main.ts": `
+          import { scale } from "./utils";
+          declare const a: number;
+          scale(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(lua).toContain("scale(");
+    });
+
+    it("rejects cross-module var-decl statementsWithReturn with free variable", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const offset = 5;
+          /** @inline */
+          export function compute(x: number): number {
+            const temp = x + offset;
+            return temp * 2;
+          }
+        `,
+        "main.ts": `
+          import { compute } from "./utils";
+          declare const a: number;
+          const r = compute(a);
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(lua).toContain("compute(");
+    });
+
+    it("rejects cross-module return-statement statementsWithReturn with free variable", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          const multiplier = 3;
+          /** @inline */
+          export function triple(x: number): number {
+            const temp = x * multiplier;
+            return temp;
+          }
+        `,
+        "main.ts": `
+          import { triple } from "./utils";
+          declare const a: number;
+          function wrapper(x: number) { return triple(x); }
+        `,
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("non-parameter");
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+      expect(lua).toContain("triple(");
+    });
+  });
 });
 
 describe("ExpressionStatement visitor", () => {
