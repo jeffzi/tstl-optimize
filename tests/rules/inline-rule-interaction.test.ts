@@ -162,3 +162,50 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
     });
   });
 });
+
+describe("rule interaction: inline multi-statement + localizer", () => {
+  it("localizer hoists repeated chain from inside inlined do...end block", () => {
+    // Use LuaJIT target so math-intrinsics doesn't replace math.floor → keeps
+    // math.floor visible for the localizer threshold check (3 occurrences).
+    const lua = compile(
+      `
+      /** @inline */
+      function doWork(x: number): void {
+        const a = Math.floor(x);
+        const b = Math.floor(x + 1);
+        const c = Math.floor(x + 2);
+      }
+      declare const v: number;
+      doWork(v);
+      `,
+      {
+        pluginOptions: { rules: { localizer: { scope: "module" } } },
+        luaTarget: tstl.LuaTarget.LuaJIT,
+      },
+    );
+    // Localizer should hoist math.floor since it appears 3 times inside the inlined do...end
+    expect(lua).toContain("____math_floor");
+    // The call site should be inlined (no standalone doWork(v) call in Lua output)
+    expect(lua).not.toContain("doWork(v)");
+  });
+});
+
+describe("rule interaction: inline multi-statement + math-intrinsics", () => {
+  it("math-intrinsics replaces Math.floor inside inlined do...end block", () => {
+    const lua = compile(`
+      /** @inline */
+      function doFloor(x: number): void {
+        const y = Math.floor(x);
+        const z = y + 1;
+      }
+      declare const v: number;
+      doFloor(v);
+    `);
+    // Math.floor should be replaced by the x - x % 1 intrinsic inside the inlined block
+    expect(lua).toContain("% 1");
+    // math.floor should not appear — replaced by intrinsic
+    expect(lua).not.toContain("math.floor");
+    // The call site should be inlined (no standalone doFloor(v) call in Lua output)
+    expect(lua).not.toContain("doFloor(v)");
+  });
+});

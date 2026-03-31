@@ -695,7 +695,11 @@ function handleCallExpression(
     const paramIds = new Set(paramMap.keys());
     if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
       context.diagnostics.push(
-        createInlineWarning(node, "cross-module function references non-parameter identifiers", strict),
+        createInlineWarning(
+          node,
+          "cross-module function references non-parameter identifiers",
+          strict,
+        ),
       );
       return undefined;
     }
@@ -963,7 +967,11 @@ function handleVariableStatement(
     )
   ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module function references non-parameter identifiers", strict),
+      createInlineWarning(
+        callNode,
+        "cross-module function references non-parameter identifiers",
+        strict,
+      ),
     );
     return undefined;
   }
@@ -1052,7 +1060,11 @@ function handleReturnStatement(
     )
   ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module function references non-parameter identifiers", strict),
+      createInlineWarning(
+        callNode,
+        "cross-module function references non-parameter identifiers",
+        strict,
+      ),
     );
     return undefined;
   }
@@ -1214,7 +1226,11 @@ function handleExpressionStatement(
     hasCrossModuleFreeVariable(target.bodyStmts, target.params, target.declaration, checker)
   ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module function references non-parameter identifiers", strict),
+      createInlineWarning(
+        callNode,
+        "cross-module function references non-parameter identifiers",
+        strict,
+      ),
     );
     return undefined;
   }
