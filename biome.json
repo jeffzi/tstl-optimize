@@ -52,16 +52,6 @@
           }
         }
       }
-    },
-    {
-      "includes": ["tests/audit/**"],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noConsole": "off"
-          }
-        }
-      }
     }
   ]
 }
