@@ -358,6 +358,7 @@ export function mapLuaStatements(
   });
 }
 
+// biome-ignore lint/correctness/noUnusedVariables: prepared for Phase 5 multi-statement inline
 function substituteParamsInStatements(
   statements: readonly tstl.Statement[],
   paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>,

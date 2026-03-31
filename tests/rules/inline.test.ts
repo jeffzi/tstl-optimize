@@ -482,7 +482,7 @@ describe("mapLuaStatements (unit)", () => {
     const [result] = mapLuaStatements([stmt], leafFn);
     const varDecl = result as tstl.VariableDeclarationStatement;
     expect(varDecl.right).toBeDefined();
-    expect((varDecl.right![0] as tstl.Identifier).text).toBe("replaced");
+    expect((varDecl.right?.[0] as tstl.Identifier).text).toBe("replaced");
   });
 
   it("substitutes in AssignmentStatement right side", () => {
