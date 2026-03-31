@@ -35,14 +35,12 @@ type ClassifiedBody =
 function classifyBody(
   func: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction,
 ): ClassifiedBody | undefined {
-  // Arrow with expression body
   if (ts.isArrowFunction(func) && !ts.isBlock(func.body)) {
     return { kind: "expression", expr: func.body };
   }
   const body = ts.isArrowFunction(func) ? (func.body as ts.Block) : func.body;
   if (!body || body.statements.length === 0) return undefined;
 
-  // Single return statement -> expression path (preserves existing behavior)
   if (body.statements.length === 1) {
     const stmt = body.statements[0];
     if (ts.isReturnStatement(stmt) && stmt.expression) {
@@ -50,11 +48,36 @@ function classifyBody(
     }
   }
 
-  // Multi-statement body or single non-return statement -> statements path
   return { kind: "statements", stmts: body.statements };
 }
 
 type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
+
+function makeTargetResult(
+  classified: ClassifiedBody | undefined,
+  params: readonly ts.ParameterDeclaration[],
+  declaration: ts.Node,
+  resolvedSymbol: ts.Symbol,
+): { target: InlineTarget } {
+  if (!classified) {
+    // Empty body: ExpressionStatement handler erases silently; expression handler rejects.
+    return { target: { kind: "statements", bodyStmts: [], params, declaration, resolvedSymbol } };
+  }
+  if (classified.kind === "statements") {
+    return {
+      target: {
+        kind: "statements",
+        bodyStmts: classified.stmts,
+        params,
+        declaration,
+        resolvedSymbol,
+      },
+    };
+  }
+  return {
+    target: { kind: "expression", bodyExpr: classified.expr, params, declaration, resolvedSymbol },
+  };
+}
 
 function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): InlineTargetResult {
   const symbol = checker.getSymbolAtLocation(node.expression);
@@ -67,40 +90,7 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
   for (const decl of declarations) {
     if (ts.isFunctionDeclaration(decl)) {
       if (!hasInlineTag(decl)) continue;
-      const classified = classifyBody(decl);
-      if (!classified) {
-        // Empty body: treat as statement target with zero statements.
-        // ExpressionStatement handler erases silently; expression handler rejects.
-        return {
-          target: {
-            kind: "statements",
-            bodyStmts: [],
-            params: decl.parameters,
-            declaration: decl,
-            resolvedSymbol: resolved,
-          },
-        };
-      }
-      if (classified.kind === "statements") {
-        return {
-          target: {
-            kind: "statements",
-            bodyStmts: classified.stmts,
-            params: decl.parameters,
-            declaration: decl,
-            resolvedSymbol: resolved,
-          },
-        };
-      }
-      return {
-        target: {
-          kind: "expression",
-          bodyExpr: classified.expr,
-          params: decl.parameters,
-          declaration: decl,
-          resolvedSymbol: resolved,
-        },
-      };
+      return makeTargetResult(classifyBody(decl), decl.parameters, decl, resolved);
     }
 
     if (ts.isVariableDeclaration(decl) && decl.initializer) {
@@ -110,38 +100,7 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
 
       const init = decl.initializer;
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
-        const classified = classifyBody(init);
-        if (!classified) {
-          return {
-            target: {
-              kind: "statements",
-              bodyStmts: [],
-              params: init.parameters,
-              declaration: decl,
-              resolvedSymbol: resolved,
-            },
-          };
-        }
-        if (classified.kind === "statements") {
-          return {
-            target: {
-              kind: "statements",
-              bodyStmts: classified.stmts,
-              params: init.parameters,
-              declaration: decl,
-              resolvedSymbol: resolved,
-            },
-          };
-        }
-        return {
-          target: {
-            kind: "expression",
-            bodyExpr: classified.expr,
-            params: init.parameters,
-            declaration: decl,
-            resolvedSymbol: resolved,
-          },
-        };
+        return makeTargetResult(classifyBody(init), init.parameters, decl, resolved);
       }
     }
   }
@@ -175,11 +134,7 @@ function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeCheck
   return count;
 }
 
-function isParamWritten(
-  body: ts.Expression,
-  paramSymbol: ts.Symbol,
-  checker: ts.TypeChecker,
-): boolean {
+function isParamWritten(body: ts.Node, paramSymbol: ts.Symbol, checker: ts.TypeChecker): boolean {
   let written = false;
   function visit(n: ts.Node): void {
     if (written) return;
@@ -214,16 +169,13 @@ function canInline(
 
   if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
 
-  // Reject recursion: body references the function itself
   if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
     return "recursive functions cannot be inlined";
 
   for (let i = 0; i < params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
     if (!paramSymbol) return "parameter symbol could not be resolved";
-    // Reject if any reference to this param is a write (assignment inside body)
     if (isParamWritten(bodyExpr, paramSymbol, checker)) return "parameter is written inside body";
-    // Reject side-effect duplication: param used >1 times with side-effecting arg
     const usageCount = countReferences(bodyExpr, paramSymbol, checker);
     if (usageCount > 1 && hasSideEffects(callNode.arguments[i]))
       return "argument with side effects is used multiple times";
@@ -308,7 +260,7 @@ function substituteParams(
     if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
     const id = n as tstl.Identifier;
     const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
-    return mapped ? tstl.cloneNode(mapped) : n;
+    return mapped ? tstl.cloneNode(mapped) : undefined;
   });
 }
 
@@ -403,10 +355,6 @@ export function mapLuaStatements(
         const exprStmt = stmt as tstl.ExpressionStatement;
         return tstl.createExpressionStatement(recurse(exprStmt.expression));
       }
-      case tstl.SyntaxKind.GotoStatement:
-      case tstl.SyntaxKind.LabelStatement:
-      case tstl.SyntaxKind.BreakStatement:
-        return tstl.cloneNode(stmt);
       default:
         return tstl.cloneNode(stmt);
     }
@@ -434,53 +382,50 @@ function someLuaIdentifier(
   node: tstl.Expression,
   predicate: (symbolId: tstl.SymbolId) => boolean,
 ): boolean {
+  const some = (n: tstl.Expression) => someLuaIdentifier(n, predicate);
   if (node.kind === tstl.SyntaxKind.Identifier) {
     const symbolId = (node as tstl.Identifier).symbolId;
     return symbolId !== undefined && predicate(symbolId);
   }
-  return luaExprChildren(node).some((child) => someLuaIdentifier(child, predicate));
+  switch (node.kind) {
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      return some(bin.left) || some(bin.right);
+    }
+    case tstl.SyntaxKind.UnaryExpression:
+      return some((node as tstl.UnaryExpression).operand);
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      return some(call.expression) || call.params.some(some);
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      return some(method.prefixExpression) || method.params.some(some);
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      return some(tbl.table) || some(tbl.index);
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return some((node as tstl.ParenthesizedExpression).expression);
+    case tstl.SyntaxKind.TableExpression:
+      return (node as tstl.TableExpression).fields.some(
+        (f) => some(f.value) || (f.key !== undefined && some(f.key)),
+      );
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      return some(cond.condition) || some(cond.whenTrue) || some(cond.whenFalse);
+    }
+    default:
+      return false;
+  }
 }
 
 function collectSymbolIds(node: tstl.Expression, ids: Set<tstl.SymbolId>): void {
   someLuaIdentifier(node, (id) => {
     ids.add(id);
-    return false; // keep walking
+    return false;
   });
-}
-
-function luaExprChildren(node: tstl.Expression): tstl.Expression[] {
-  switch (node.kind) {
-    case tstl.SyntaxKind.BinaryExpression: {
-      const bin = node as tstl.BinaryExpression;
-      return [bin.left, bin.right];
-    }
-    case tstl.SyntaxKind.UnaryExpression:
-      return [(node as tstl.UnaryExpression).operand];
-    case tstl.SyntaxKind.CallExpression: {
-      const call = node as tstl.CallExpression;
-      return [call.expression, ...call.params];
-    }
-    case tstl.SyntaxKind.MethodCallExpression: {
-      const method = node as tstl.MethodCallExpression;
-      return [method.prefixExpression, ...method.params];
-    }
-    case tstl.SyntaxKind.TableIndexExpression: {
-      const tbl = node as tstl.TableIndexExpression;
-      return [tbl.table, tbl.index];
-    }
-    case tstl.SyntaxKind.ParenthesizedExpression:
-      return [(node as tstl.ParenthesizedExpression).expression];
-    case tstl.SyntaxKind.TableExpression:
-      return (node as tstl.TableExpression).fields.flatMap((f) =>
-        f.key !== undefined ? [f.value, f.key] : [f.value],
-      );
-    case tstl.SyntaxKind.ConditionalExpression: {
-      const cond = node as tstl.ConditionalExpression;
-      return [cond.condition, cond.whenTrue, cond.whenFalse];
-    }
-    default:
-      return [];
-  }
 }
 
 function needsParentheses(node: tstl.Expression): boolean {
@@ -508,7 +453,29 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[]): true | string {
     if (ts.isReturnStatement(stmt)) return "early return in body";
     if (ts.isBreakStatement(stmt)) return "break in body";
     if (ts.isContinueStatement(stmt)) return "continue in body";
-    // Per CONTEXT.md: do NOT recurse into if/while/for blocks
+    // Recurse into nested blocks: a return/break/continue inside an if/while/for
+    // becomes a return/break/continue inside a do...end in Lua, which returns from
+    // the enclosing function rather than just the inlined block, changing semantics.
+    if (ts.isIfStatement(stmt)) {
+      const thenResult = hasLinearControlFlow(stmt.thenStatement ? [stmt.thenStatement] : []);
+      if (thenResult !== true) return thenResult;
+      if (stmt.elseStatement) {
+        const elseResult = hasLinearControlFlow([stmt.elseStatement]);
+        if (elseResult !== true) return elseResult;
+      }
+    } else if (ts.isWhileStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement]);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isForStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement]);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isForInStatement(stmt) || ts.isForOfStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement]);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isBlock(stmt)) {
+      const blockResult = hasLinearControlFlow(stmt.statements);
+      if (blockResult !== true) return blockResult;
+    }
   }
   return true;
 }
@@ -516,9 +483,9 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[]): true | string {
 function canInlineStatements(
   target: StatementInlineTarget,
   callNode: ts.CallExpression,
-  _checker: ts.TypeChecker,
+  checker: ts.TypeChecker,
 ): true | string {
-  const { bodyStmts, params, declaration } = target;
+  const { bodyStmts, params, declaration, resolvedSymbol } = target;
 
   for (const param of params) {
     if (param.dotDotDotToken) return "rest parameters are not supported";
@@ -530,6 +497,19 @@ function canInlineStatements(
     return "argument count does not match parameter count";
 
   if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
+
+  for (const stmt of bodyStmts) {
+    if (countReferences(stmt, resolvedSymbol, checker) > 0)
+      return "recursive functions cannot be inlined";
+  }
+
+  for (const param of params) {
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
+    if (!paramSymbol) return "parameter symbol could not be resolved";
+    for (const stmt of bodyStmts) {
+      if (isParamWritten(stmt, paramSymbol, checker)) return "parameter is written inside body";
+    }
+  }
 
   const controlFlow = hasLinearControlFlow(bodyStmts);
   if (controlFlow !== true) return controlFlow;
@@ -548,7 +528,6 @@ function buildDoEndBlock(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  // 1. Transform arguments and create temp identifiers
   const tempDecls: tstl.VariableDeclarationStatement[] = [];
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
 
@@ -565,19 +544,14 @@ function buildDoEndBlock(
     paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
   }
 
-  // 2. Transform body statements via TSTL in a function scope so that
-  //    local variable declarations produce `local` in Lua (not global assignments).
+  // Push a function scope so local declarations in the body produce `local` in Lua.
   context.pushScope(SCOPE_TYPE_FUNCTION, declaration);
   const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
   context.popScope();
 
   const substituted = substituteParamsInStatements(luaBody, paramMap);
 
-  // 3. Wrap in do...end
-  const doBlock = tstl.createDoStatement(substituted);
-
-  // 4. Return temp declarations + do...end
-  return [...tempDecls, doBlock];
+  return [...tempDecls, tstl.createDoStatement(substituted)];
 }
 
 function handleCallExpression(
@@ -594,8 +568,8 @@ function handleCallExpression(
   const { target } = result;
 
   if (target.kind === "statements") {
-    // Skip diagnostic if parent is ExpressionStatement -- the statement-level handler
-    // already emits the appropriate diagnostic or inlines. This prevents double diagnostics.
+    // Suppress here when parent is ExpressionStatement: the statement-level handler owns
+    // the diagnostic for that call site, avoiding double-reporting.
     if (!ts.isExpressionStatement(node.parent)) {
       context.diagnostics.push(
         createInlineWarning(
@@ -677,14 +651,11 @@ function handleExpressionStatement(
   const { target } = result;
 
   if (target.kind === "expression") {
-    // Delegate to existing expression handler and wrap result in ExpressionStatement
     const inlined = handleCallExpression(callNode, checker, context);
     if (inlined === undefined) return undefined;
     return [tstl.createExpressionStatement(inlined)];
   }
 
-  // target.kind === "statements"
-  // Empty body: silently erase (no do...end, no output)
   if (target.bodyStmts.length === 0) return [];
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
@@ -693,7 +664,6 @@ function handleExpressionStatement(
     return undefined;
   }
 
-  // Cross-module check: reject statement bodies with free variables
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
   if (isCrossModule) {
@@ -707,8 +677,8 @@ function handleExpressionStatement(
 }
 
 export const createVisitors: RuleFactory = (checker, _config) => {
-  // Returns undefined to signal "not handled" to the merge wrapper in index.ts;
-  // the strict tstl.Visitors type doesn't model this protocol, so we cast here
+  // Returning undefined signals "not handled" to the merge wrapper; the strict
+  // tstl.Visitors type doesn't model this protocol, so we cast here.
   type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
   const visitors: Record<number, LooseVisitor> = {
     [ts.SyntaxKind.CallExpression]: (node, context) =>

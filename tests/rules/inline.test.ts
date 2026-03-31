@@ -262,37 +262,33 @@ describe("inline", () => {
       expect(diagnostics[0].messageText).toContain("argument count");
     });
 
-    it("warns on rest parameters", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+    it("warns on unsupported parameter features (rest, optional, default)", () => {
+      const { lua: lua1, diagnostics: d1 } = compileWithDiagnostics(`
         /** @inline */
         function first(...args: number[]) { return args[0]; }
         const r = first(1, 2, 3);
       `);
-      expect(lua).toContain("first(");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("rest parameters");
-    });
+      expect(lua1).toContain("first(");
+      expect(d1).toHaveLength(1);
+      expect(d1[0].messageText).toContain("rest parameters");
 
-    it("warns on optional parameters", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua: lua2, diagnostics: d2 } = compileWithDiagnostics(`
         /** @inline */
         function maybe(x?: number) { return x; }
         const r = maybe(5);
       `);
-      expect(lua).toContain("maybe(");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("optional parameters");
-    });
+      expect(lua2).toContain("maybe(");
+      expect(d2).toHaveLength(1);
+      expect(d2[0].messageText).toContain("optional parameters");
 
-    it("warns on default parameters", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua: lua3, diagnostics: d3 } = compileWithDiagnostics(`
         /** @inline */
         function withDefault(x: number = 0) { return x; }
         const r = withDefault(5);
       `);
-      expect(lua).toContain("withDefault(");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("default parameters");
+      expect(lua3).toContain("withDefault(");
+      expect(d3).toHaveLength(1);
+      expect(d3[0].messageText).toContain("default parameters");
     });
 
     it("warns on non-module scope", () => {
@@ -452,15 +448,6 @@ describe("inline", () => {
 });
 
 describe("ExpressionStatement visitor", () => {
-  it("non-inline expression statement is not erased from Lua output", () => {
-    const lua = compile(`
-      declare function someFunc(x: number): void;
-      declare const a: number;
-      someFunc(a);
-    `);
-    expect(lua).toContain("someFunc(a)");
-  });
-
   it("non-inline expression statement preserved with both inline and debug-strip enabled", () => {
     const lua = compile(
       `
@@ -542,31 +529,29 @@ describe("void multi-statement inline", () => {
     expect(diagnostics[0].messageText).toContain("early return");
   });
 
-  it("rejects @inline function with top-level break", () => {
-    const { diagnostics } = compileWithDiagnostics(`
+  it("rejects @inline function with top-level break or continue", () => {
+    const { diagnostics: breakDiags } = compileWithDiagnostics(`
       /** @inline */
       function stopLoop() { break; }
       for (let i = 0; i < 10; i++) {
         stopLoop();
       }
     `);
-    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+    expect(breakDiags.length).toBeGreaterThanOrEqual(1);
     expect(
-      diagnostics.some((d) => typeof d.messageText === "string" && d.messageText.includes("break")),
+      breakDiags.some((d) => typeof d.messageText === "string" && d.messageText.includes("break")),
     ).toBe(true);
-  });
 
-  it("rejects @inline function with top-level continue", () => {
-    const { diagnostics } = compileWithDiagnostics(`
+    const { diagnostics: continueDiags } = compileWithDiagnostics(`
       /** @inline */
       function skipIter() { continue; }
       for (let i = 0; i < 10; i++) {
         skipIter();
       }
     `);
-    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+    expect(continueDiags.length).toBeGreaterThanOrEqual(1);
     expect(
-      diagnostics.some(
+      continueDiags.some(
         (d) => typeof d.messageText === "string" && d.messageText.includes("continue"),
       ),
     ).toBe(true);
@@ -630,16 +615,14 @@ describe("mapLuaStatements (unit)", () => {
 
   it("returns empty array for empty input", () => {
     const result = mapLuaStatements([], leafFn);
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("substitutes in ExpressionStatement", () => {
     const stmt = tstl.createExpressionStatement(tstl.createIdentifier("x"));
     const [result] = mapLuaStatements([stmt], leafFn);
-    expect((result as tstl.ExpressionStatement).expression).toSatisfy(
-      (e: tstl.Expression) =>
-        e.kind === tstl.SyntaxKind.Identifier && (e as tstl.Identifier).text === "replaced",
-    );
+    const expr = (result as tstl.ExpressionStatement).expression as tstl.Identifier;
+    expect(expr.text).toBe("replaced");
   });
 
   it("substitutes in VariableDeclarationStatement right side", () => {
@@ -794,23 +777,19 @@ describe("mapLuaStatements (unit)", () => {
     expect(stmts).toHaveLength(1);
   });
 
-  it("passes through BreakStatement unchanged", () => {
-    const stmt = tstl.createBreakStatement();
-    const [result] = mapLuaStatements([stmt], leafFn);
-    expect(result.kind).toBe(tstl.SyntaxKind.BreakStatement);
-  });
+  it("passes through leaf statements (break, goto, label) unchanged", () => {
+    const breakStmt = tstl.createBreakStatement();
+    const [breakResult] = mapLuaStatements([breakStmt], leafFn);
+    expect(breakResult.kind).toBe(tstl.SyntaxKind.BreakStatement);
 
-  it("passes through GotoStatement unchanged", () => {
-    const stmt = tstl.createGotoStatement("lbl");
-    const [result] = mapLuaStatements([stmt], leafFn);
-    expect(result.kind).toBe(tstl.SyntaxKind.GotoStatement);
-    expect((result as tstl.GotoStatement).label).toBe("lbl");
-  });
+    const gotoStmt = tstl.createGotoStatement("lbl");
+    const [gotoResult] = mapLuaStatements([gotoStmt], leafFn);
+    expect(gotoResult.kind).toBe(tstl.SyntaxKind.GotoStatement);
+    expect((gotoResult as tstl.GotoStatement).label).toBe("lbl");
 
-  it("passes through LabelStatement unchanged", () => {
-    const stmt = tstl.createLabelStatement("lbl");
-    const [result] = mapLuaStatements([stmt], leafFn);
-    expect(result.kind).toBe(tstl.SyntaxKind.LabelStatement);
-    expect((result as tstl.LabelStatement).name).toBe("lbl");
+    const labelStmt = tstl.createLabelStatement("lbl");
+    const [labelResult] = mapLuaStatements([labelStmt], leafFn);
+    expect(labelResult.kind).toBe(tstl.SyntaxKind.LabelStatement);
+    expect((labelResult as tstl.LabelStatement).name).toBe("lbl");
   });
 });

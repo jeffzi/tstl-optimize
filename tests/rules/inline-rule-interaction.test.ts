@@ -1,16 +1,3 @@
-/**
- * INFRA-07: Rule interaction verification.
- *
- * These tests verify that inlined code (including future do...end blocks from
- * multi-statement inline) is eligible for processing by the localizer and
- * math-intrinsics rules. The tests exercise existing behavior to establish a
- * baseline that Phase 5+ must preserve.
- *
- * Key findings (from research):
- * - Localizer's processFunctionBodies already recurses into DoStatement nodes
- * - Math-intrinsics operates at the TS AST level before Lua emission
- * - No adverse scope-boundary effects found
- */
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";

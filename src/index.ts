@@ -77,7 +77,6 @@ class OptimizePlugin implements tstl.Plugin {
         const fn: AnyVisitor = typeof visitor === "function" ? visitor : visitor.transform;
         const existing = merged[kind];
         if (existing) {
-          // Multiple rules registered for the same SyntaxKind.
           // Chain: higher-priority visitor (fn) runs first; returning
           // undefined signals "not handled" and falls through to the
           // lower-priority visitor (existing). If ALL visitors return
@@ -93,22 +92,18 @@ class OptimizePlugin implements tstl.Plugin {
             const existingResult = existing(node, context);
             if (existingResult !== undefined) return existingResult;
             if (isExpr) return context.superTransformExpression(node as ts.Expression);
-            if (isStatementWithFallback)
+            if (isStatementWithFallback) {
               return context.superTransformStatements(node as ts.Statement);
+            }
             return undefined;
           };
         } else if (EXPRESSION_KINDS.has(kind)) {
-          // Wrap sole expression visitors with a superTransformExpression
-          // fallback so they can return undefined to signal "not handled"
           merged[kind] = (node, context) => {
             const result = fn(node, context);
             if (result !== undefined) return result;
             return context.superTransformExpression(node as ts.Expression);
           };
         } else if (STATEMENT_KINDS_WITH_FALLBACK.has(kind)) {
-          // Wrap sole statement visitors with a superTransformStatements
-          // fallback so they can return undefined to signal "not handled"
-          // without erasing the statement
           merged[kind] = (node, context) => {
             const result = fn(node, context);
             if (result !== undefined) return result;

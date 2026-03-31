@@ -160,11 +160,7 @@ export function deepCloneStatement(stmt: tstl.Statement): tstl.Statement {
       const labelStmt = stmt as tstl.LabelStatement;
       return tstl.createLabelStatement(labelStmt.name);
     }
-    case tstl.SyntaxKind.BreakStatement:
-    case tstl.SyntaxKind.ContinueStatement:
-      return tstl.cloneNode(stmt);
     default:
-      // Safety fallback for unknown statement types
       return tstl.cloneNode(stmt);
   }
 }
