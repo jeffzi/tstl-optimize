@@ -2,6 +2,9 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+// ScopeType is not exported from the typescript-to-lua public index; import from internal path.
+// Function = 2 (verified against TSTL source).
+import { ScopeType } from "typescript-to-lua/dist/transformation/utils/scope";
 import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
@@ -517,9 +520,6 @@ function canInlineStatements(
   return true;
 }
 
-// TSTL ScopeType.Function = 2 (not part of public API, using numeric value)
-const SCOPE_TYPE_FUNCTION = 2;
-
 function buildDoEndBlock(
   target: StatementInlineTarget,
   callNode: ts.CallExpression,
@@ -545,7 +545,7 @@ function buildDoEndBlock(
   }
 
   // Push a function scope so local declarations in the body produce `local` in Lua.
-  context.pushScope(SCOPE_TYPE_FUNCTION, declaration);
+  context.pushScope(ScopeType.Function, declaration);
   const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
   context.popScope();
 
@@ -651,9 +651,56 @@ function handleExpressionStatement(
   const { target } = result;
 
   if (target.kind === "expression") {
-    const inlined = handleCallExpression(callNode, checker, context);
-    if (inlined === undefined) return undefined;
-    return [tstl.createExpressionStatement(inlined)];
+    const canInlineResult = canInline(target, callNode, checker);
+    if (canInlineResult !== true) {
+      context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+      return undefined;
+    }
+
+    const luaBody = context.transformExpression(target.bodyExpr);
+
+    const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+    for (let i = 0; i < target.params.length; i++) {
+      const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+      if (!paramSymbol) return undefined;
+      const symbolId = context.symbolIdMaps.get(paramSymbol);
+      if (symbolId === undefined) return undefined;
+      const luaArg = context.transformExpression(callNode.arguments[i]);
+      paramMap.set(symbolId, luaArg);
+    }
+
+    // Cross-module check: expression-body only; statement-body cross-module is blocked separately.
+    const isCrossModule =
+      callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+    if (isCrossModule) {
+      const paramIds = new Set(paramMap.keys());
+      if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
+        context.diagnostics.push(
+          createInlineWarning(
+            callNode,
+            "cross-module function references non-parameter identifiers",
+          ),
+        );
+        return undefined;
+      }
+    }
+
+    const substituted = substituteParams(luaBody, paramMap);
+
+    if (isCrossModule) {
+      const callerIds = new Set<tstl.SymbolId>();
+      for (const arg of paramMap.values()) {
+        collectSymbolIds(arg, callerIds);
+      }
+      if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
+        return undefined;
+      }
+    }
+
+    const result2 = needsParentheses(substituted)
+      ? tstl.createParenthesizedExpression(substituted)
+      : substituted;
+    return [tstl.createExpressionStatement(result2)];
   }
 
   if (target.bodyStmts.length === 0) return [];
