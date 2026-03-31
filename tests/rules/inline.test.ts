@@ -152,6 +152,18 @@ describe("inline", () => {
       expect(lua).toContain("process(a)");
       expect(lua).not.toContain("= wrap(");
     });
+
+    it("inlines expression-body @inline at statement position", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a);
+      `);
+      expect(lua).toContain("a * 2");
+      // The call double(a) at statement position should be inlined
+      expect(lua).not.toContain("double(a)");
+    });
   });
 
   describe("comment cleanup", () => {
@@ -210,7 +222,7 @@ describe("inline", () => {
   });
 
   describe("warnings", () => {
-    it("warns on multi-statement body", () => {
+    it("warns on multi-statement body at expression position", () => {
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function compute(x: number) {
@@ -222,21 +234,9 @@ describe("inline", () => {
       `);
       expect(lua).toContain("compute(");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("single return statement");
-    });
-
-    it("warns on single non-return statement body", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
-        /** @inline */
-        function sideEffect(x: number) {
-          console.log(x);
-        }
-        declare const a: number;
-        sideEffect(a);
-      `);
-      expect(lua).toContain("sideEffect(");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("single return statement");
+      expect(diagnostics[0].messageText).toContain(
+        "multi-statement body cannot be inlined at expression position",
+      );
     });
 
     it("warns on empty body", () => {
@@ -451,7 +451,7 @@ describe("inline", () => {
   });
 });
 
-describe("ExpressionStatement preservation", () => {
+describe("ExpressionStatement visitor", () => {
   it("non-inline expression statement is not erased from Lua output", () => {
     const lua = compile(`
       declare function someFunc(x: number): void;
@@ -471,6 +471,16 @@ describe("ExpressionStatement preservation", () => {
       { pluginOptions: { rules: { inline: true, "debug-strip": { functions: ["debug"] } } } },
     );
     expect(lua).toContain("someFunc(a)");
+  });
+
+  it("non-@inline function call at statement position is preserved unchanged", () => {
+    const { lua, diagnostics } = compileWithDiagnostics(`
+      function notInlined(x: number) { return x * 2; }
+      declare const a: number;
+      notInlined(a);
+    `);
+    expect(lua).toContain("notInlined(a)");
+    expect(diagnostics).toHaveLength(0);
   });
 });
 
