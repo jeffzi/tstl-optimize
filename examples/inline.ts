@@ -22,15 +22,16 @@ function double(x: number) {
 }
 const doubled = double(hp);
 
-// Not inlined: multi-statement body (emits warning at compile time)
+// Multi-statement inline at statement site -- expanded into do...end block
 /** @inline */
-function clampedAdd(a: number, b: number) {
-  const sum = a + b;
-  return sum > 100 ? 100 : sum;
+function debugLog(prefix: string, value: number) {
+  const msg = prefix + ": " + value;
+  console.log(msg);
 }
-const total = clampedAdd(hp, 30);
+
+const playerHp = 75;
+debugLog("hp", playerHp);
 
 print(displayHp); // 75
 print(flipped); // -10
 print(doubled); // 100
-print(total); // 80

@@ -214,7 +214,7 @@ Multi-statement function bodies are supported at statement-level call sites and 
 The inlined statements are wrapped in a `do...end` block (except at return sites) to prevent
 local variable names from leaking into the caller's scope.
 
-**Pattern 1 — Void statement site**
+##### Pattern 1 — Void statement site
 
 ```typescript
 /** @inline */
@@ -234,7 +234,7 @@ do
 end
 ```
 
-**Pattern 2 — Variable-declaration site**
+##### Pattern 2 — Variable-declaration site
 
 ```typescript
 /** @inline */
@@ -255,7 +255,7 @@ do
 end
 ```
 
-**Pattern 3 — Return site**
+##### Pattern 3 — Return site
 
 ```typescript
 /** @inline */
@@ -276,7 +276,7 @@ local y = ____inline_arg_0 + 1
 return y * 2
 ```
 
-**Pattern 4 — Destructuring site**
+##### Pattern 4 — Destructuring site
 
 ```typescript
 /** @inline */
@@ -338,6 +338,50 @@ inlined body calls `Math.floor(x)` three or more times, the `localizer` rule hoi
 `____math_floor` local to module scope exactly as it would for non-inlined code. Similarly,
 `math-intrinsics` rewrites `Math.*` calls inside inlined bodies. Rules apply to the fully expanded
 output — inlined code receives the same optimizations as hand-written code.
+
+#### Strict mode
+
+By default, unresolvable inline and conditional-compilation diagnostics are emitted as warnings
+(code 90001 for inline, code 90002 for conditional-compilation). Set `strict: true` at the plugin
+level to promote all optimization warnings to compilation errors, causing the TypeScript compiler to
+fail the build whenever an optimization cannot be applied:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true
+      }
+    ]
+  }
+}
+```
+
+Use a per-rule `strict` override to exempt specific rules from the global setting. The example below
+enables global strict but keeps inline diagnostics as warnings:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true,
+        "rules": {
+          "inline": { "strict": false }
+        }
+      }
+    ]
+  }
+}
+```
+
+Precedence rules:
+
+- Per-rule `strict: false` always overrides global `strict: true` for that rule.
+- Per-rule `strict: true` promotes warnings to errors for that rule even when the global is `false`.
 
 ### `localizer`
 
@@ -464,10 +508,11 @@ Options:
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `strict` | `boolean` | `false` | Promote all optimization warnings (inline code 90001, conditional-compilation code 90002) to compilation errors globally |
 | `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants |
 | `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions |
 | `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based |
-| `rules.inline` | `boolean` | `true` | Inline `@inline` functions at call sites, including cross-module |
+| `rules.inline` | `boolean \| InlineConfig` | `true` | Inline `@inline` functions at call sites, including cross-module. Accepts `{ enabled?: boolean; strict?: boolean }` object to configure per-rule strict independently of the global `strict` setting. |
 | `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default — see `localizer` section for `include`/`exclude` options |
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |
