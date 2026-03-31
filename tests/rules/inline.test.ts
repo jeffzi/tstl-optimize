@@ -239,15 +239,15 @@ describe("inline", () => {
       );
     });
 
-    it("warns on empty body", () => {
+    it("warns on empty body at expression position", () => {
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function noop() {}
-        noop();
+        const r = noop();
       `);
       expect(lua).toContain("noop(");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("single return statement");
+      expect(diagnostics[0].messageText).toContain("@inline ignored");
     });
 
     it("warns on arity mismatch", () => {
@@ -481,6 +481,130 @@ describe("ExpressionStatement visitor", () => {
     `);
     expect(lua).toContain("notInlined(a)");
     expect(diagnostics).toHaveLength(0);
+  });
+});
+
+describe("void multi-statement inline", () => {
+  it("expands 2+ statement body into do...end block", () => {
+    const lua = compile(`
+      /** @inline */
+      function setup(x: number) { let a = x + 1; console.log(a); }
+      declare const n: number;
+      setup(n);
+    `);
+    expect(lua).toContain("do");
+    expect(lua).toContain("end");
+    expect(lua).not.toContain("setup(");
+  });
+
+  it("hoists all arguments to temporaries before do...end", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(a: number, b: number) { let x = a; let y = b; }
+      declare const p: number;
+      declare const q: number;
+      foo(p, q);
+    `);
+    expect(lua).toContain("____inline_arg_0");
+    expect(lua).toContain("____inline_arg_1");
+    // Temporaries should appear before do
+    const argIdx = lua.indexOf("____inline_arg_0");
+    const doIdx = lua.indexOf("do", argIdx);
+    expect(argIdx).toBeLessThan(doIdx);
+  });
+
+  it("preserves left-to-right evaluation order for side-effecting arguments", () => {
+    const lua = compile(`
+      /** @inline */
+      function bar(a: number, b: number) { let x = a + b; }
+      declare function sideEffect1(): number;
+      declare function sideEffect2(): number;
+      bar(sideEffect1(), sideEffect2());
+    `);
+    // sideEffect1 should be assigned to temp before sideEffect2
+    const idx1 = lua.indexOf("sideEffect1()");
+    const idx2 = lua.indexOf("sideEffect2()");
+    expect(idx1).toBeLessThan(idx2);
+    expect(lua).toContain("____inline_arg_0");
+    expect(lua).toContain("____inline_arg_1");
+  });
+
+  it("rejects @inline function with top-level early return", () => {
+    const { lua, diagnostics } = compileWithDiagnostics(`
+      /** @inline */
+      function bail(x: number) { if (x > 0) { console.log(x); } return; }
+      bail(1);
+    `);
+    expect(lua).toContain("bail(");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("@inline ignored");
+    expect(diagnostics[0].messageText).toContain("early return");
+  });
+
+  it("rejects @inline function with top-level break", () => {
+    const { diagnostics } = compileWithDiagnostics(`
+      /** @inline */
+      function stopLoop() { break; }
+      for (let i = 0; i < 10; i++) {
+        stopLoop();
+      }
+    `);
+    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.some((d) =>
+      typeof d.messageText === "string" && d.messageText.includes("break")
+    )).toBe(true);
+  });
+
+  it("rejects @inline function with top-level continue", () => {
+    const { diagnostics } = compileWithDiagnostics(`
+      /** @inline */
+      function skipIter() { continue; }
+      for (let i = 0; i < 10; i++) {
+        skipIter();
+      }
+    `);
+    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.some((d) =>
+      typeof d.messageText === "string" && d.messageText.includes("continue")
+    )).toBe(true);
+  });
+
+  it("erases empty @inline function body at statement site (no do end)", () => {
+    const { lua, diagnostics } = compileWithDiagnostics(`
+      /** @inline */
+      function noop() {}
+      noop();
+    `);
+    expect(lua).not.toContain("do");
+    expect(lua).not.toContain("noop");
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it("isolates inlined locals from caller scope via do...end", () => {
+    const lua = compile(`
+      /** @inline */
+      function setX() { let x = 42; }
+      let x = 10;
+      setX();
+      console.log(x);
+    `);
+    // The inlined body should be inside do...end
+    expect(lua).toContain("do");
+    expect(lua).toContain("end");
+    // Caller's x should be unaffected (print(x) still references caller's x)
+    expect(lua).toContain("print(x)");
+  });
+
+  it("inlines zero-parameter void multi-statement function (no temporaries)", () => {
+    const lua = compile(`
+      /** @inline */
+      function init() { let a = 1; let b = 2; }
+      init();
+    `);
+    expect(lua).toContain("do");
+    expect(lua).toContain("end");
+    expect(lua).not.toContain("____inline_arg");
+    expect(lua).not.toContain("init(");
   });
 });
 
