@@ -604,6 +604,110 @@ describe("void multi-statement inline", () => {
   });
 });
 
+describe("statementsWithReturn data model (Task 1)", () => {
+  describe("classifyBody: statementsWithReturn variant", () => {
+    it("multi-statement body with terminal return emits statementsWithReturn diagnostic (D-10) at void site", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+        declare const a: number;
+        compute(a);
+      `);
+      // void call site: D-10 warns, does not inline
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("return-value function called at void site");
+      expect(lua).toContain("compute(a)");
+    });
+
+    it("multi-statement body with no terminal return still produces statements target (no regression)", () => {
+      // A void multi-statement function (no terminal return) should still inline
+      const lua = compile(`
+        /** @inline */
+        function setup(x: number): void {
+          let a = x + 1;
+          let b = a + 2;
+        }
+        declare const n: number;
+        setup(n);
+      `);
+      expect(lua).toContain("do");
+      expect(lua).not.toContain("setup(n)");
+    });
+
+    it("single-statement return still produces expression target (no regression)", () => {
+      const lua = compile(`
+        /** @inline */
+        function double(x: number): number { return x * 2; }
+        declare const a: number;
+        const r = double(a);
+      `);
+      expect(lua).toContain("a * 2");
+      // function declaration has double( in it; verify no standalone call "= double("
+      expect(lua).not.toContain("= double(");
+    });
+  });
+
+  describe("handleCallExpression: statementsWithReturn at expression position", () => {
+    it("warns multi-statement body cannot be inlined at expression position for return-value function", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+        declare const a: number;
+        const r = compute(a);
+      `);
+      expect(lua).toContain("compute(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain(
+        "multi-statement body cannot be inlined at expression position",
+      );
+    });
+  });
+
+  describe("canInlineStatements: statementsWithReturn validation", () => {
+    it("rejects return-value function with early return in pre-return stmts", () => {
+      // This has an early return inside the body stmts (before the terminal return)
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function f(x: number): number {
+          if (x > 0) { return 0; }
+          const y = x + 1;
+          return y;
+        }
+        declare const a: number;
+        f(a);
+      `);
+      // early return in body should still be rejected
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("@inline ignored");
+      expect(lua).toContain("f(a)");
+    });
+
+    it("rejects return-value function with recursive call in return expression", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function fib(n: number): number {
+          const a = n - 1;
+          return fib(a);
+        }
+        declare const x: number;
+        fib(x);
+      `);
+      expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+      expect(
+        diagnostics.some(
+          (d) => typeof d.messageText === "string" && d.messageText.includes("recursive"),
+        ),
+      ).toBe(true);
+    });
+  });
+});
+
 describe("mapLuaStatements (unit)", () => {
   /** leafFn that replaces any Identifier with text "x" with one named "replaced". */
   const leafFn = (n: tstl.Expression): tstl.Expression | undefined => {
