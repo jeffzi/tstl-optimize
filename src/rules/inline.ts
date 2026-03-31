@@ -774,6 +774,75 @@ function handleVariableStatement(
   return undefined;
 }
 
+function buildReturnSiteInline(
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  const { bodyStmts, params, declaration } = target;
+
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+
+  // Transform body statements inside a function scope.
+  context.pushScope(ScopeType.Function, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  // Transform and substitute params in the return expression.
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+
+  // Flat emission: arg temps + body statements + return. No do...end per D-01/D-02.
+  return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
+}
+
+function handleReturnStatement(
+  node: ts.ReturnStatement,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
+
+  const callNode = node.expression;
+
+  const result = getInlineTarget(callNode, checker);
+  if (!result) return undefined;
+  if ("reason" in result) {
+    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    return undefined;
+  }
+
+  const { target } = result;
+
+  // Only handle statementsWithReturn targets here.
+  if (target.kind !== "statementsWithReturn") return undefined;
+
+  const canInlineResult = canInlineStatements(target, callNode, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    return undefined;
+  }
+
+  return buildReturnSiteInline(target, callNode, checker, context);
+}
+
 function handleExpressionStatement(
   node: ts.ExpressionStatement,
   checker: ts.TypeChecker,
@@ -882,6 +951,8 @@ export const createVisitors: RuleFactory = (checker, _config) => {
       handleExpressionStatement(node as ts.ExpressionStatement, checker, context),
     [ts.SyntaxKind.VariableStatement]: (node, context) =>
       handleVariableStatement(node as ts.VariableStatement, checker, context),
+    [ts.SyntaxKind.ReturnStatement]: (node, context) =>
+      handleReturnStatement(node as ts.ReturnStatement, checker, context),
   };
   return visitors as tstl.Visitors;
 };

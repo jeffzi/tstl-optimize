@@ -1094,8 +1094,11 @@ describe("return-statement multi-statement inline", () => {
         return compute(a);
       }
     `);
-    const argIdx = lua.indexOf("____inline_arg_0");
-    const bodyIdx = lua.indexOf("local y");
+    // Search for arg temp and body var within the caller function body.
+    // The caller function body starts after the compute declaration.
+    const callerIdx = lua.indexOf("caller");
+    const argIdx = lua.indexOf("____inline_arg_0", callerIdx);
+    const bodyIdx = lua.indexOf("local y", argIdx);
     expect(argIdx).toBeGreaterThan(-1);
     expect(argIdx).toBeLessThan(bodyIdx);
   });
