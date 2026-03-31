@@ -32,6 +32,16 @@ const EXPRESSION_KINDS: ReadonlySet<number> = new Set([
   ts.SyntaxKind.CallExpression,
 ]);
 
+// Statement SyntaxKinds where returning undefined should fall through to
+// TSTL's default transform instead of erasing the statement. Without this,
+// a visitor returning undefined (meaning "not handled") for ExpressionStatement
+// would silently erase it — unlike expression kinds which have the
+// superTransformExpression fallback, and unlike conditional-compilation's
+// statement kinds where erasure is the intended semantics.
+const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
+  ts.SyntaxKind.ExpressionStatement,
+]);
+
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;
   private config: PluginConfig;
@@ -72,15 +82,19 @@ class OptimizePlugin implements tstl.Plugin {
           // undefined signals "not handled" and falls through to the
           // lower-priority visitor (existing). If ALL visitors return
           // undefined, the wrapper calls TSTL's default transformation
-          // for expression kinds; for statement kinds undefined means
-          // "erase" which is the intended semantics.
+          // for expression kinds; for statement kinds with fallback it
+          // calls superTransformStatements; for other statement kinds
+          // undefined means "erase" which is the intended semantics.
           const isExpr = EXPRESSION_KINDS.has(kind);
+          const isStatementWithFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
           merged[kind] = (node, context) => {
             const fnResult = fn(node, context);
             if (fnResult !== undefined) return fnResult;
             const existingResult = existing(node, context);
             if (existingResult !== undefined) return existingResult;
             if (isExpr) return context.superTransformExpression(node as ts.Expression);
+            if (isStatementWithFallback)
+              return context.superTransformStatements(node as ts.Statement);
             return undefined;
           };
         } else if (EXPRESSION_KINDS.has(kind)) {
@@ -90,6 +104,15 @@ class OptimizePlugin implements tstl.Plugin {
             const result = fn(node, context);
             if (result !== undefined) return result;
             return context.superTransformExpression(node as ts.Expression);
+          };
+        } else if (STATEMENT_KINDS_WITH_FALLBACK.has(kind)) {
+          // Wrap sole statement visitors with a superTransformStatements
+          // fallback so they can return undefined to signal "not handled"
+          // without erasing the statement
+          merged[kind] = (node, context) => {
+            const result = fn(node, context);
+            if (result !== undefined) return result;
+            return context.superTransformStatements(node as ts.Statement);
           };
         } else {
           merged[kind] = fn;

@@ -451,6 +451,29 @@ describe("inline", () => {
   });
 });
 
+describe("ExpressionStatement preservation", () => {
+  it("non-inline expression statement is not erased from Lua output", () => {
+    const lua = compile(`
+      declare function someFunc(x: number): void;
+      declare const a: number;
+      someFunc(a);
+    `);
+    expect(lua).toContain("someFunc(a)");
+  });
+
+  it("non-inline expression statement preserved with both inline and debug-strip enabled", () => {
+    const lua = compile(
+      `
+      declare function someFunc(x: number): void;
+      declare const a: number;
+      someFunc(a);
+    `,
+      { pluginOptions: { rules: { inline: true, "debug-strip": { functions: ["debug"] } } } },
+    );
+    expect(lua).toContain("someFunc(a)");
+  });
+});
+
 describe("mapLuaStatements (unit)", () => {
   /** leafFn that replaces any Identifier with text "x" with one named "replaced". */
   const leafFn = (n: tstl.Expression): tstl.Expression | undefined => {
