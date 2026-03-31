@@ -7,7 +7,7 @@ import * as tstl from "typescript-to-lua";
 import { ScopeType } from "typescript-to-lua/dist/transformation/utils/scope";
 import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
-import type { RuleFactory } from "../config";
+import { type RuleFactory, resolveEffectiveStrict, resolveInlineConfig } from "../config";
 
 interface ExpressionInlineTarget {
   kind: "expression";
@@ -470,13 +470,17 @@ function needsParentheses(node: tstl.Expression): boolean {
   );
 }
 
-function createInlineWarning(node: ts.CallExpression, reason: string): ts.Diagnostic {
+function createInlineWarning(
+  node: ts.CallExpression,
+  reason: string,
+  strict: boolean,
+): ts.Diagnostic {
   return {
     file: node.getSourceFile(),
     start: node.getStart(),
     length: node.getWidth(),
     messageText: `@inline ignored: ${reason}`,
-    category: ts.DiagnosticCategory.Warning,
+    category: strict ? ts.DiagnosticCategory.Error : ts.DiagnosticCategory.Warning,
     code: 90001,
     source: "tstl-optimize",
   };
@@ -632,11 +636,12 @@ function handleCallExpression(
   node: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  strict: boolean,
 ): tstl.Expression | undefined {
   const result = getInlineTarget(node, checker);
   if (!result) return undefined;
   if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(node, result.reason));
+    context.diagnostics.push(createInlineWarning(node, result.reason, strict));
     return undefined;
   }
   const { target } = result;
@@ -658,6 +663,7 @@ function handleCallExpression(
           node,
           "multi-statement body cannot be inlined at expression position" +
             " (only statement-position calls supported)",
+          strict,
         ),
       );
     }
@@ -666,7 +672,7 @@ function handleCallExpression(
 
   const canInlineResult = canInline(target, node, checker);
   if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(node, canInlineResult));
+    context.diagnostics.push(createInlineWarning(node, canInlineResult, strict));
     return undefined;
   }
 
@@ -689,7 +695,7 @@ function handleCallExpression(
     const paramIds = new Set(paramMap.keys());
     if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
       context.diagnostics.push(
-        createInlineWarning(node, "cross-module function references non-parameter identifiers"),
+        createInlineWarning(node, "cross-module function references non-parameter identifiers", strict),
       );
       return undefined;
     }
@@ -912,6 +918,7 @@ function handleVariableStatement(
   node: ts.VariableStatement,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  strict: boolean,
 ): tstl.Statement[] | undefined {
   const decls = node.declarationList.declarations;
   // Multi-declaration statements (const a = 1, b = 2) are not handled here.
@@ -926,7 +933,7 @@ function handleVariableStatement(
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
   if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
     return undefined;
   }
 
@@ -939,7 +946,7 @@ function handleVariableStatement(
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
     return undefined;
   }
 
@@ -956,7 +963,7 @@ function handleVariableStatement(
     )
   ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers", strict),
     );
     return undefined;
   }
@@ -1008,6 +1015,7 @@ function handleReturnStatement(
   node: ts.ReturnStatement,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  strict: boolean,
 ): tstl.Statement[] | undefined {
   if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
 
@@ -1016,7 +1024,7 @@ function handleReturnStatement(
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
   if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
     return undefined;
   }
 
@@ -1027,7 +1035,7 @@ function handleReturnStatement(
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
     return undefined;
   }
 
@@ -1044,7 +1052,7 @@ function handleReturnStatement(
     )
   ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers", strict),
     );
     return undefined;
   }
@@ -1115,6 +1123,7 @@ function handleExpressionStatement(
   node: ts.ExpressionStatement,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  strict: boolean,
 ): tstl.Statement[] | undefined {
   if (!ts.isCallExpression(node.expression)) return undefined;
   const callNode = node.expression;
@@ -1122,7 +1131,7 @@ function handleExpressionStatement(
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
   if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
     return undefined;
   }
 
@@ -1131,7 +1140,7 @@ function handleExpressionStatement(
   if (target.kind === "expression") {
     const canInlineResult = canInline(target, callNode, checker);
     if (canInlineResult !== true) {
-      context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+      context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
       return undefined;
     }
 
@@ -1157,6 +1166,7 @@ function handleExpressionStatement(
           createInlineWarning(
             callNode,
             "cross-module function references non-parameter identifiers",
+            strict,
           ),
         );
         return undefined;
@@ -1183,7 +1193,7 @@ function handleExpressionStatement(
 
   if (target.kind === "statementsWithReturn") {
     context.diagnostics.push(
-      createInlineWarning(callNode, "return-value function called at void site"),
+      createInlineWarning(callNode, "return-value function called at void site", strict),
     );
     return undefined;
   }
@@ -1192,7 +1202,7 @@ function handleExpressionStatement(
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
     return undefined;
   }
 
@@ -1204,7 +1214,7 @@ function handleExpressionStatement(
     hasCrossModuleFreeVariable(target.bodyStmts, target.params, target.declaration, checker)
   ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers", strict),
     );
     return undefined;
   }
@@ -1212,19 +1222,28 @@ function handleExpressionStatement(
   return buildDoEndBlock(target, callNode, checker, context);
 }
 
-export const createVisitors: RuleFactory = (checker, _config) => {
+export const createVisitors: RuleFactory = (checker, config) => {
+  const inlineCfg = resolveInlineConfig(config.rules.inline);
+  if (!inlineCfg.enabled) return {};
+  // Read per-rule strict directly from raw config to distinguish "not set" (undefined)
+  // from "explicitly disabled" (false). resolveInlineConfig normalizes both to false.
+  const rawInline = config.rules.inline;
+  const perRuleStrict =
+    typeof rawInline === "object" && rawInline !== null ? rawInline.strict : undefined;
+  const strictMode = resolveEffectiveStrict(config.strict ?? false, perRuleStrict);
+
   // Returning undefined signals "not handled" to the merge wrapper; the strict
   // tstl.Visitors type doesn't model this protocol, so we cast here.
   type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
   const visitors: Record<number, LooseVisitor> = {
     [ts.SyntaxKind.CallExpression]: (node, context) =>
-      handleCallExpression(node as ts.CallExpression, checker, context),
+      handleCallExpression(node as ts.CallExpression, checker, context, strictMode),
     [ts.SyntaxKind.ExpressionStatement]: (node, context) =>
-      handleExpressionStatement(node as ts.ExpressionStatement, checker, context),
+      handleExpressionStatement(node as ts.ExpressionStatement, checker, context, strictMode),
     [ts.SyntaxKind.VariableStatement]: (node, context) =>
-      handleVariableStatement(node as ts.VariableStatement, checker, context),
+      handleVariableStatement(node as ts.VariableStatement, checker, context, strictMode),
     [ts.SyntaxKind.ReturnStatement]: (node, context) =>
-      handleReturnStatement(node as ts.ReturnStatement, checker, context),
+      handleReturnStatement(node as ts.ReturnStatement, checker, context, strictMode),
   };
   return visitors as tstl.Visitors;
 };
