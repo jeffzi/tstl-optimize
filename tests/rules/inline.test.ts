@@ -222,6 +222,31 @@ describe("inline", () => {
       expect(diagnostics[0].messageText).toContain("single return statement");
     });
 
+    it("warns on single non-return statement body", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function sideEffect(x: number) {
+          console.log(x);
+        }
+        declare const a: number;
+        sideEffect(a);
+      `);
+      expect(lua).toContain("sideEffect(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("single return statement");
+    });
+
+    it("warns on empty body", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function noop() {}
+        noop();
+      `);
+      expect(lua).toContain("noop(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("single return statement");
+    });
+
     it("warns on arity mismatch", () => {
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
