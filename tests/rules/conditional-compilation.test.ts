@@ -1,3 +1,4 @@
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../src/config";
 import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
@@ -766,6 +767,87 @@ describe("conditional-compilation", () => {
       );
       expect(lua).not.toContain("print");
       expect(normalizeLua(lua)).toBe("a = x");
+    });
+  });
+});
+
+describe("conditional-compilation strict mode (code 90002)", () => {
+  const partialConditionSrc = [
+    "declare const PLATFORM: string;",
+    "declare const connected: boolean;",
+    'if (PLATFORM === "desktop" && connected) { print("ok"); }',
+  ].join("\n");
+
+  const baseConstants = { PLATFORM: { env: "CC_UNUSED", default: "desktop" } };
+
+  describe("global strict: true promotes 90002 to Error", () => {
+    it("emits Error when global strict: true and no per-rule override", () => {
+      const { diagnostics } = compileWithDiagnostics(partialConditionSrc, {
+        pluginOptions: {
+          strict: true,
+          rules: { "conditional-compilation": { constants: baseConstants } },
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90002);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      expect(diagnostics[0].source).toBe("tstl-optimize");
+    });
+
+    it("emits Warning when global strict: false (default)", () => {
+      const { diagnostics } = compileWithDiagnostics(partialConditionSrc, {
+        pluginOptions: {
+          strict: false,
+          rules: { "conditional-compilation": { constants: baseConstants } },
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90002);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    });
+  });
+
+  describe("per-rule conditional-compilation.strict override", () => {
+    it("emits Warning when global strict: true but rule strict: false", () => {
+      const { diagnostics } = compileWithDiagnostics(partialConditionSrc, {
+        pluginOptions: {
+          strict: true,
+          rules: {
+            "conditional-compilation": { constants: baseConstants, strict: false },
+          },
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90002);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    });
+
+    it("emits Error when global strict: false but rule strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(partialConditionSrc, {
+        pluginOptions: {
+          strict: false,
+          rules: {
+            "conditional-compilation": { constants: baseConstants, strict: true },
+          },
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90002);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+
+    it("emits Error when both global strict: true and rule strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(partialConditionSrc, {
+        pluginOptions: {
+          strict: true,
+          rules: {
+            "conditional-compilation": { constants: baseConstants, strict: true },
+          },
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90002);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
     });
   });
 });
