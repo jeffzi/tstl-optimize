@@ -1056,3 +1056,124 @@ describe("variable-declaration multi-statement inline", () => {
     expect(lua).toContain("doStuff(");
   });
 });
+
+describe("return-statement multi-statement inline", () => {
+  it("expands return foo(x) to flat sequence: arg temps + body + return", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      function caller(): number {
+        return compute(a);
+      }
+    `);
+    // arg temp emitted
+    expect(lua).toContain("____inline_arg_0");
+    // body statement emitted
+    expect(lua).toContain("local y");
+    // return statement emitted
+    expect(lua).toContain("return y");
+    // no do...end wrapping (flat emission per D-01)
+    expect(lua).not.toMatch(/\bdo\b/);
+    // no inlined call preserved
+    expect(lua).not.toContain("return compute(");
+  });
+
+  it("arg temps appear before body statements in flat sequence", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      function caller(): number {
+        return compute(a);
+      }
+    `);
+    const argIdx = lua.indexOf("____inline_arg_0");
+    const bodyIdx = lua.indexOf("local y");
+    expect(argIdx).toBeGreaterThan(-1);
+    expect(argIdx).toBeLessThan(bodyIdx);
+  });
+
+  it("handles zero-parameter return-value function at return site", () => {
+    const lua = compile(`
+      /** @inline */
+      function getVal(): number {
+        const x = 42;
+        return x;
+      }
+      function caller(): number {
+        return getVal();
+      }
+    `);
+    // no arg temps
+    expect(lua).not.toContain("____inline_arg");
+    // body and return emitted
+    expect(lua).toContain("local x = 42");
+    expect(lua).toContain("return x");
+    // no do...end
+    expect(lua).not.toMatch(/\bdo\b/);
+    // no call preserved
+    expect(lua).not.toContain("return getVal()");
+  });
+
+  it("non-inline return statement preserved unchanged", () => {
+    const lua = compile(`
+      function caller(x: number): number {
+        return x + 1;
+      }
+    `);
+    expect(lua).toContain("return x + 1");
+  });
+
+  it("return without call expression preserved unchanged", () => {
+    const lua = compile(`
+      function caller(): number {
+        const x = 42;
+        return x;
+      }
+    `);
+    expect(lua).toContain("return x");
+    expect(lua).not.toContain("____inline_arg");
+  });
+
+  it("warns on void-body @inline at return site: returns undefined, call preserved", () => {
+    // A void multi-statement @inline at return site: handler returns undefined for
+    // non-statementsWithReturn target.
+    const { lua } = compileWithDiagnostics(`
+      /** @inline */
+      function doStuff(x: number): void { let a = x + 1; let b = a + 2; }
+      declare const a: number;
+      function caller() {
+        return (doStuff as any)(a);
+      }
+    `);
+    // The call is preserved (handler returns undefined for statements target)
+    expect(lua).toContain("doStuff(");
+  });
+
+  // Intentional: at a return site, no code follows so body locals in caller scope is safe.
+  // Per D-01/D-02: no do...end needed since no caller code comes after a return statement.
+  it("body locals appear in caller scope (no do...end — intentional per D-01/D-02)", () => {
+    const lua = compile(`
+      /** @inline */
+      function compute(x: number): number {
+        const y = x * 10;
+        return y + 1;
+      }
+      declare const a: number;
+      function caller(): number {
+        return compute(a);
+      }
+    `);
+    // Flat emission: local y is in caller scope (no do...end)
+    expect(lua).toContain("local y");
+    expect(lua).not.toMatch(/\bdo\b/);
+    expect(lua).not.toContain("return compute(");
+  });
+});
