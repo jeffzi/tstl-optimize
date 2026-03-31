@@ -676,6 +676,104 @@ function handleCallExpression(
   return substituted;
 }
 
+function buildVarDeclInline(
+  nameIdent: ts.Identifier,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  // Allocate a fresh Lua symbolId for the result variable. We cannot use
+  // context.symbolIdMaps.get() here because TSTL hasn't transformed this
+  // VariableStatement yet — the result symbol has no Lua symbolId assigned.
+  const resultSymbolId = context.nextSymbolId();
+
+  const resultIdent = tstl.createIdentifier(nameIdent.text, undefined, resultSymbolId);
+  // Declare `local r` with no initializer.
+  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
+
+  const { bodyStmts, params, declaration } = target;
+
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+
+  // Transform body statements inside a function scope.
+  context.pushScope(ScopeType.Function, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  // Transform and substitute the return expression.
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+
+  // Assign the return expression to the result variable inside do...end.
+  const assignResult = tstl.createAssignmentStatement(
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymbolId)],
+    [substitutedReturn],
+  );
+
+  return [resultDecl, ...tempDecls, tstl.createDoStatement([...substitutedBody, assignResult])];
+}
+
+function handleVariableStatement(
+  node: ts.VariableStatement,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  const decls = node.declarationList.declarations;
+  // Multi-declaration statements (const a = 1, b = 2) are not handled here.
+  if (decls.length !== 1) return undefined;
+
+  const decl = decls[0];
+  // Only handle call-expression initializers.
+  if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
+
+  const callNode = decl.initializer;
+
+  const result = getInlineTarget(callNode, checker);
+  if (!result) return undefined;
+  if ("reason" in result) {
+    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    return undefined;
+  }
+
+  const { target } = result;
+
+  // Only handle statementsWithReturn targets here.
+  // expression-body targets are handled by the existing CallExpression visitor.
+  // statements (void-body) targets at var-decl sites fall through to superTransformStatements.
+  if (target.kind !== "statementsWithReturn") return undefined;
+
+  const canInlineResult = canInlineStatements(target, callNode, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    return undefined;
+  }
+
+  // Plain identifier binding: const r = foo(x)
+  if (ts.isIdentifier(decl.name)) {
+    return buildVarDeclInline(decl.name, target, callNode, checker, context);
+  }
+
+  // Object/array destructuring bindings are handled in Plan 03.
+  return undefined;
+}
+
 function handleExpressionStatement(
   node: ts.ExpressionStatement,
   checker: ts.TypeChecker,
@@ -782,6 +880,8 @@ export const createVisitors: RuleFactory = (checker, _config) => {
       handleCallExpression(node as ts.CallExpression, checker, context),
     [ts.SyntaxKind.ExpressionStatement]: (node, context) =>
       handleExpressionStatement(node as ts.ExpressionStatement, checker, context),
+    [ts.SyntaxKind.VariableStatement]: (node, context) =>
+      handleVariableStatement(node as ts.VariableStatement, checker, context),
   };
   return visitors as tstl.Visitors;
 };

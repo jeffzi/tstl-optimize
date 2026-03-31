@@ -223,6 +223,8 @@ describe("inline", () => {
 
   describe("warnings", () => {
     it("warns on multi-statement body at expression position", () => {
+      // Multi-statement inline cannot be spliced into an expression context.
+      // Use a nested call position (e.g., inside a binary expression) to trigger this.
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function compute(x: number) {
@@ -230,7 +232,7 @@ describe("inline", () => {
           return tmp + 1;
         }
         declare const a: number;
-        const r = compute(a);
+        const r = compute(a) + 1;
       `);
       expect(lua).toContain("compute(");
       expect(diagnostics).toHaveLength(1);
@@ -652,6 +654,9 @@ describe("statementsWithReturn data model (Task 1)", () => {
 
   describe("handleCallExpression: statementsWithReturn at expression position", () => {
     it("warns multi-statement body cannot be inlined at expression position for return-value function", () => {
+      // At a plain var-decl site (const r = compute(a)), Plan 02 now inlines successfully.
+      // The "expression position" warning applies when the call is truly in expression context,
+      // e.g., nested inside a binary expression where statements cannot be spliced.
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function compute(x: number): number {
@@ -659,7 +664,7 @@ describe("statementsWithReturn data model (Task 1)", () => {
           return tmp + 1;
         }
         declare const a: number;
-        const r = compute(a);
+        const r = compute(a) + 1;
       `);
       expect(lua).toContain("compute(");
       expect(diagnostics).toHaveLength(1);
