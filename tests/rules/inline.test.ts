@@ -1198,3 +1198,145 @@ describe("destructuring multi-statement inline", () => {
     expect(lua).toContain("foo()");
   });
 });
+
+describe("cross-module statement body: void multi-statement", () => {
+  it("allows cross-module void multi-statement inline when body is self-contained (param-only)", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        /** @inline */
+        export function setup(x: number): void {
+          let a = x + 1;
+          let b = a * 2;
+        }
+      `,
+      "main.ts": `
+        import { setup } from "./utils";
+        declare const n: number;
+        setup(n);
+      `,
+    });
+    // Body is self-contained: all identifiers come from params — should be inlined
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).not.toContain("setup(n)");
+    expect(lua).toMatch(/\bdo\b/);
+  });
+
+  it("rejects cross-module void multi-statement inline when body references free variable", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        const factor = 10;
+        /** @inline */
+        export function scale(x: number): void {
+          let a = x * factor;
+          let b = a + 1;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        declare const n: number;
+        scale(n);
+      `,
+    });
+    // factor is a free variable from the source module — should be rejected
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("non-parameter");
+    expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    expect(diagnostics[0].code).toBe(90001);
+    expect(lua).toContain("scale(n)");
+  });
+});
+
+describe("cross-module statement body: var-decl statementsWithReturn", () => {
+  it("allows cross-module var-decl multi-statement inline when body is self-contained", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        /** @inline */
+        export function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { compute } from "./utils";
+        declare const a: number;
+        const r = compute(a);
+      `,
+    });
+    // Self-contained: tmp is a local, x comes from params — should be inlined
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).not.toContain("= compute(");
+    expect(lua).toMatch(/____inline_result_\d+/);
+  });
+
+  it("rejects cross-module var-decl multi-statement inline when body references free variable", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        const factor = 10;
+        /** @inline */
+        export function scale(x: number): number {
+          const tmp = x * factor;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        declare const a: number;
+        const r = scale(a);
+      `,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("non-parameter");
+    expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    expect(diagnostics[0].code).toBe(90001);
+    expect(lua).toContain("scale(a)");
+  });
+});
+
+describe("cross-module statement body: return-statement statementsWithReturn", () => {
+  it("allows cross-module return-statement multi-statement inline when body is self-contained", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        /** @inline */
+        export function compute(x: number): number {
+          const tmp = x * 2;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { compute } from "./utils";
+        declare const a: number;
+        function caller(): number {
+          return compute(a);
+        }
+      `,
+    });
+    // Self-contained: should be inlined at return site
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).not.toContain("return compute(");
+  });
+
+  it("rejects cross-module return-statement multi-statement inline when body references free variable", () => {
+    const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      "utils.ts": `
+        const factor = 10;
+        /** @inline */
+        export function scale(x: number): number {
+          const tmp = x * factor;
+          return tmp + 1;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        declare const a: number;
+        function caller(): number {
+          return scale(a);
+        }
+      `,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain("non-parameter");
+    expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    expect(diagnostics[0].code).toBe(90001);
+    expect(lua).toContain("return scale(a)");
+  });
+});
