@@ -17,17 +17,30 @@ function hasInlineTag(node: ts.Node): boolean {
   return ts.getJSDocTags(node).some((tag) => tag.tagName.text === "inline");
 }
 
-function getBodyExpression(
+type ClassifiedBody =
+  | { kind: "expression"; expr: ts.Expression }
+  | { kind: "statements"; stmts: readonly ts.Statement[] };
+
+function classifyBody(
   func: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction,
-): ts.Expression | undefined {
+): ClassifiedBody | undefined {
+  // Arrow with expression body
   if (ts.isArrowFunction(func) && !ts.isBlock(func.body)) {
-    return func.body;
+    return { kind: "expression", expr: func.body };
   }
   const body = ts.isArrowFunction(func) ? (func.body as ts.Block) : func.body;
-  if (!body || body.statements.length !== 1) return undefined;
-  const stmt = body.statements[0];
-  if (!ts.isReturnStatement(stmt) || !stmt.expression) return undefined;
-  return stmt.expression;
+  if (!body || body.statements.length === 0) return undefined;
+
+  // Single return statement -> expression path (preserves existing behavior)
+  if (body.statements.length === 1) {
+    const stmt = body.statements[0];
+    if (ts.isReturnStatement(stmt) && stmt.expression) {
+      return { kind: "expression", expr: stmt.expression };
+    }
+  }
+
+  // Multi-statement body or single non-return statement -> statements path
+  return { kind: "statements", stmts: body.statements };
 }
 
 type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
@@ -43,12 +56,12 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
   for (const decl of declarations) {
     if (ts.isFunctionDeclaration(decl)) {
       if (!hasInlineTag(decl)) continue;
-      const bodyExpr = getBodyExpression(decl);
-      if (!bodyExpr)
+      const classified = classifyBody(decl);
+      if (!classified || classified.kind === "statements")
         return { reason: "body must be a single return statement or arrow expression" };
       return {
         target: {
-          bodyExpr,
+          bodyExpr: classified.expr,
           params: decl.parameters,
           declaration: decl,
           resolvedSymbol: resolved,
@@ -63,12 +76,12 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
 
       const init = decl.initializer;
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
-        const bodyExpr = getBodyExpression(init);
-        if (!bodyExpr)
+        const classified = classifyBody(init);
+        if (!classified || classified.kind === "statements")
           return { reason: "body must be a single return statement or arrow expression" };
         return {
           target: {
-            bodyExpr,
+            bodyExpr: classified.expr,
             params: init.parameters,
             declaration: decl,
             resolvedSymbol: resolved,
