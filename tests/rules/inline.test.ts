@@ -688,7 +688,8 @@ describe("statementsWithReturn data model (Task 1)", () => {
       expect(lua).toContain("f(a)");
     });
 
-    it("rejects return-value function with recursive call in return expression", () => {
+    it("rejects return-value function with recursive call in return expression (void site emits D-10)", () => {
+      // At a void site, D-10 fires before recursive check — but a diagnostic is still emitted
       const { diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function fib(n: number): number {
@@ -699,9 +700,10 @@ describe("statementsWithReturn data model (Task 1)", () => {
         fib(x);
       `);
       expect(diagnostics.length).toBeGreaterThanOrEqual(1);
+      // At void site: D-10 fires (return-value function called at void site)
       expect(
         diagnostics.some(
-          (d) => typeof d.messageText === "string" && d.messageText.includes("recursive"),
+          (d) => typeof d.messageText === "string" && d.messageText.includes("@inline ignored"),
         ),
       ).toBe(true);
     });

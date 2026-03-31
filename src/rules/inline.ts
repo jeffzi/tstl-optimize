@@ -25,7 +25,16 @@ interface StatementInlineTarget {
   resolvedSymbol: ts.Symbol;
 }
 
-type InlineTarget = ExpressionInlineTarget | StatementInlineTarget;
+interface ReturnValueInlineTarget {
+  kind: "statementsWithReturn";
+  bodyStmts: readonly ts.Statement[];
+  returnExpr: ts.Expression;
+  params: readonly ts.ParameterDeclaration[];
+  declaration: ts.Node;
+  resolvedSymbol: ts.Symbol;
+}
+
+type InlineTarget = ExpressionInlineTarget | StatementInlineTarget | ReturnValueInlineTarget;
 
 function hasInlineTag(node: ts.Node): boolean {
   return ts.getJSDocTags(node).some((tag) => tag.tagName.text === "inline");
@@ -33,7 +42,8 @@ function hasInlineTag(node: ts.Node): boolean {
 
 type ClassifiedBody =
   | { kind: "expression"; expr: ts.Expression }
-  | { kind: "statements"; stmts: readonly ts.Statement[] };
+  | { kind: "statements"; stmts: readonly ts.Statement[] }
+  | { kind: "statementsWithReturn"; stmts: readonly ts.Statement[]; returnExpr: ts.Expression };
 
 function classifyBody(
   func: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction,
@@ -49,6 +59,15 @@ function classifyBody(
     if (ts.isReturnStatement(stmt) && stmt.expression) {
       return { kind: "expression", expr: stmt.expression };
     }
+  }
+
+  const lastStmt = body.statements[body.statements.length - 1];
+  if (ts.isReturnStatement(lastStmt) && lastStmt.expression) {
+    return {
+      kind: "statementsWithReturn",
+      stmts: body.statements.slice(0, -1),
+      returnExpr: lastStmt.expression,
+    };
   }
 
   return { kind: "statements", stmts: body.statements };
@@ -71,6 +90,18 @@ function makeTargetResult(
       target: {
         kind: "statements",
         bodyStmts: classified.stmts,
+        params,
+        declaration,
+        resolvedSymbol,
+      },
+    };
+  }
+  if (classified.kind === "statementsWithReturn") {
+    return {
+      target: {
+        kind: "statementsWithReturn",
+        bodyStmts: classified.stmts,
+        returnExpr: classified.returnExpr,
         params,
         declaration,
         resolvedSymbol,
@@ -484,7 +515,7 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[]): true | string {
 }
 
 function canInlineStatements(
-  target: StatementInlineTarget,
+  target: StatementInlineTarget | ReturnValueInlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
 ): true | string {
@@ -506,14 +537,26 @@ function canInlineStatements(
       return "recursive functions cannot be inlined";
   }
 
+  // For return-value targets, also check the return expression for recursion and param writes
+  if (target.kind === "statementsWithReturn") {
+    if (countReferences(target.returnExpr, resolvedSymbol, checker) > 0)
+      return "recursive functions cannot be inlined";
+  }
+
   for (const param of params) {
     const paramSymbol = checker.getSymbolAtLocation(param.name);
     if (!paramSymbol) return "parameter symbol could not be resolved";
     for (const stmt of bodyStmts) {
       if (isParamWritten(stmt, paramSymbol, checker)) return "parameter is written inside body";
     }
+    if (target.kind === "statementsWithReturn") {
+      if (isParamWritten(target.returnExpr, paramSymbol, checker))
+        return "parameter is written inside body";
+    }
   }
 
+  // For statementsWithReturn: pass only pre-return statements to hasLinearControlFlow.
+  // The terminal return is NOT in bodyStmts, so no early-return check needed for it.
   const controlFlow = hasLinearControlFlow(bodyStmts);
   if (controlFlow !== true) return controlFlow;
 
@@ -567,7 +610,7 @@ function handleCallExpression(
   }
   const { target } = result;
 
-  if (target.kind === "statements") {
+  if (target.kind === "statements" || target.kind === "statementsWithReturn") {
     // Suppress here when parent is ExpressionStatement: the statement-level handler owns
     // the diagnostic for that call site, avoiding double-reporting.
     if (!ts.isExpressionStatement(node.parent)) {
@@ -701,6 +744,13 @@ function handleExpressionStatement(
       ? tstl.createParenthesizedExpression(substituted)
       : substituted;
     return [tstl.createExpressionStatement(result2)];
+  }
+
+  if (target.kind === "statementsWithReturn") {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "return-value function called at void site"),
+    );
+    return undefined;
   }
 
   if (target.bodyStmts.length === 0) return [];
