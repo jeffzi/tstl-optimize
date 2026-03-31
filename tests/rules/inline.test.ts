@@ -1180,3 +1180,72 @@ describe("return-statement multi-statement inline", () => {
     expect(lua).not.toContain("return compute(");
   });
 });
+
+describe("destructuring multi-statement inline", () => {
+  it("object destructuring: expands const { a, b } = foo(x) with result ident and field-access assignments", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): { a: number; b: number } {
+        const obj = { a: x, b: x + 1 };
+        return obj;
+      }
+      declare const x: number;
+      const { a, b } = foo(x);
+    `);
+    // Fresh result identifier should appear
+    expect(lua).toMatch(/____inline_result_\d+/);
+    // do...end block should appear for body
+    expect(lua).toMatch(/\bdo\b/);
+    // Field-access assignments for each binding
+    expect(lua).toMatch(/\.a\b/);
+    expect(lua).toMatch(/\.b\b/);
+    // The original call should not appear
+    expect(lua).not.toContain("foo(");
+  });
+
+  it("object destructuring: field-access assignments appear outside the do...end block", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): { a: number; b: number } {
+        const obj = { a: x, b: x + 1 };
+        return obj;
+      }
+      declare const x: number;
+      const { a, b } = foo(x);
+    `);
+    // 'end' from do...end should appear before the field accesses
+    const endIdx = lua.lastIndexOf("end");
+    const fieldAIdx = lua.indexOf(".a", endIdx);
+    const fieldBIdx = lua.indexOf(".b", endIdx);
+    expect(fieldAIdx).toBeGreaterThan(endIdx);
+    expect(fieldBIdx).toBeGreaterThan(endIdx);
+  });
+
+  it("object destructuring: renamed binding uses propertyName as key and binding name as local", () => {
+    const lua = compile(`
+      /** @inline */
+      function foo(x: number): { a: number } {
+        const obj = { a: x };
+        return obj;
+      }
+      declare const x: number;
+      const { a: myA } = foo(x);
+    `);
+    // Local binding should use 'myA', access via .a key
+    expect(lua).toContain("myA");
+    expect(lua).toMatch(/\.a\b/);
+    // No field named 'myA' — only field key 'a'
+    expect(lua).not.toMatch(/\.myA\b/);
+  });
+
+  it("non-inline object destructuring passes through unchanged", () => {
+    const lua = compile(`
+      function foo(): { a: number; b: number } { return { a: 1, b: 2 }; }
+      const { a, b } = foo();
+    `);
+    // No inline expansion
+    expect(lua).not.toMatch(/____inline_result_\d+/);
+    // Original call preserved
+    expect(lua).toContain("foo()");
+  });
+});
