@@ -192,7 +192,7 @@ describe("deepCloneStatement", () => {
     expect(cloned).not.toBe(doStmt);
     expect(cloned.statements[0]).not.toBe(inner);
     const clonedReturn = cloned.statements[0] as tstl.ReturnStatement;
-    expect(clonedReturn.expressions[0]).not.toBe((inner as tstl.ReturnStatement).expressions[0]);
+    expect(clonedReturn.expressions[0]).not.toBe(inner.expressions[0]);
   });
 
   it("clones VariableDeclarationStatement independently", () => {

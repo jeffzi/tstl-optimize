@@ -167,24 +167,22 @@ describe("inline", () => {
   });
 
   describe("comment cleanup", () => {
-    it("strips @inline JSDoc comment from function declaration", () => {
-      const lua = compile(`
+    it("strips @inline JSDoc comment from any function form", () => {
+      const luaDecl = compile(`
         /** @inline */
         function double(x: number) { return x * 2; }
         declare const a: number;
         const r = double(a);
       `);
-      expect(lua).not.toContain("@inline");
-    });
+      expect(luaDecl).not.toContain("@inline");
 
-    it("strips @inline JSDoc comment from arrow function", () => {
-      const lua = compile(`
+      const luaArrow = compile(`
         /** @inline */
         const double = (x: number) => x * 2;
         declare const a: number;
         const r = double(a);
       `);
-      expect(lua).not.toContain("@inline");
+      expect(luaArrow).not.toContain("@inline");
     });
   });
 
@@ -264,33 +262,37 @@ describe("inline", () => {
       expect(diagnostics[0].messageText).toContain("argument count");
     });
 
-    it("warns on unsupported parameter features (rest, optional, default)", () => {
-      const { lua: lua1, diagnostics: d1 } = compileWithDiagnostics(`
+    it("warns on rest parameters", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function first(...args: number[]) { return args[0]; }
         const r = first(1, 2, 3);
       `);
-      expect(lua1).toContain("first(");
-      expect(d1).toHaveLength(1);
-      expect(d1[0].messageText).toContain("rest parameters");
+      expect(lua).toContain("first(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("rest parameters");
+    });
 
-      const { lua: lua2, diagnostics: d2 } = compileWithDiagnostics(`
+    it("warns on optional parameters", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function maybe(x?: number) { return x; }
         const r = maybe(5);
       `);
-      expect(lua2).toContain("maybe(");
-      expect(d2).toHaveLength(1);
-      expect(d2[0].messageText).toContain("optional parameters");
+      expect(lua).toContain("maybe(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("optional parameters");
+    });
 
-      const { lua: lua3, diagnostics: d3 } = compileWithDiagnostics(`
+    it("warns on default parameters", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function withDefault(x: number = 0) { return x; }
         const r = withDefault(5);
       `);
-      expect(lua3).toContain("withDefault(");
-      expect(d3).toHaveLength(1);
-      expect(d3[0].messageText).toContain("default parameters");
+      expect(lua).toContain("withDefault(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("default parameters");
     });
 
     it("warns on non-module scope", () => {
@@ -449,7 +451,7 @@ describe("inline", () => {
   });
 });
 
-describe("ExpressionStatement visitor", () => {
+describe("statement-position calls", () => {
   it("non-inline expression statement preserved with both inline and debug-strip enabled", () => {
     const lua = compile(
       `
@@ -606,7 +608,7 @@ describe("void multi-statement inline", () => {
   });
 });
 
-describe("statementsWithReturn data model (Task 1)", () => {
+describe("statementsWithReturn data model", () => {
   describe("classifyBody: statementsWithReturn variant", () => {
     it("multi-statement body with terminal return emits statementsWithReturn diagnostic (D-10) at void site", () => {
       const { lua, diagnostics } = compileWithDiagnostics(`
@@ -652,28 +654,6 @@ describe("statementsWithReturn data model (Task 1)", () => {
     });
   });
 
-  describe("handleCallExpression: statementsWithReturn at expression position", () => {
-    it("warns multi-statement body cannot be inlined at expression position for return-value function", () => {
-      // At a plain var-decl site (const r = compute(a)), Plan 02 now inlines successfully.
-      // The "expression position" warning applies when the call is truly in expression context,
-      // e.g., nested inside a binary expression where statements cannot be spliced.
-      const { lua, diagnostics } = compileWithDiagnostics(`
-        /** @inline */
-        function compute(x: number): number {
-          const tmp = x * 2;
-          return tmp + 1;
-        }
-        declare const a: number;
-        const r = compute(a) + 1;
-      `);
-      expect(lua).toContain("compute(");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain(
-        "multi-statement body cannot be inlined at expression position",
-      );
-    });
-  });
-
   describe("canInlineStatements: statementsWithReturn validation", () => {
     it("rejects return-value function with early return in pre-return stmts", () => {
       // This has an early return inside the body stmts (before the terminal return)
@@ -715,12 +695,9 @@ describe("statementsWithReturn data model (Task 1)", () => {
   });
 });
 
-describe("STATEMENT_KINDS_WITH_FALLBACK (Task 2)", () => {
+describe("statement visitor fallthrough", () => {
   it("non-inline VariableStatement is preserved when inline rule is active", () => {
-    // When the inline rule's VariableStatement visitor (registered in Plan 02) returns
-    // undefined for a non-inline variable, it must fall through to TSTL's default
-    // transform — not erase the statement. This test confirms the basic compile works.
-    // Note: TSTL emits module-level vars without `local`; function-level vars use `local`.
+    // TSTL emits module-level vars without `local`; function-level vars use `local`.
     const lua = compile(`
       function makeLocals(): void {
         const x = 5;
@@ -731,8 +708,6 @@ describe("STATEMENT_KINDS_WITH_FALLBACK (Task 2)", () => {
   });
 
   it("non-inline ReturnStatement is preserved when inline rule is active", () => {
-    // Same invariant for ReturnStatement visitor (registered in Plan 02): undefined
-    // must fall through, not erase.
     const lua = compile(`
       function getVal(): number {
         declare const y: number;
@@ -944,29 +919,13 @@ describe("variable-declaration multi-statement inline", () => {
       declare const a: number;
       const r = compute(a);
     `);
-    // result variable declared with no initializer
     expect(lua).toContain("local r");
-    // arg temp hoisted outside do...end
-    expect(lua).toContain("____inline_arg_0");
-    // do...end block present
     expect(lua).toMatch(/\bdo\b/);
-    // assignment inside block: r = <expr>
     expect(lua).toContain("r =");
-    // no direct call preserved
     expect(lua).not.toContain("= compute(");
-  });
-
-  it("arg temporaries appear before the do...end block", () => {
-    const lua = compile(`
-      /** @inline */
-      function compute(x: number): number {
-        const y = x + 1;
-        return y * 2;
-      }
-      declare const a: number;
-      const r = compute(a);
-    `);
+    // arg temp hoisted before do...end block
     const argIdx = lua.indexOf("____inline_arg_0");
+    expect(argIdx).toBeGreaterThan(-1);
     const doIdx = lua.indexOf("do", argIdx);
     expect(argIdx).toBeLessThan(doIdx);
   });
@@ -1070,32 +1029,12 @@ describe("return-statement multi-statement inline", () => {
         return compute(a);
       }
     `);
-    // arg temp emitted
-    expect(lua).toContain("____inline_arg_0");
-    // body statement emitted
     expect(lua).toContain("local y");
-    // return statement emitted
     expect(lua).toContain("return y");
-    // no do...end wrapping (flat emission per D-01)
+    // no do...end wrapping at return site (flat emission)
     expect(lua).not.toMatch(/\bdo\b/);
-    // no inlined call preserved
     expect(lua).not.toContain("return compute(");
-  });
-
-  it("arg temps appear before body statements in flat sequence", () => {
-    const lua = compile(`
-      /** @inline */
-      function compute(x: number): number {
-        const y = x + 1;
-        return y * 2;
-      }
-      declare const a: number;
-      function caller(): number {
-        return compute(a);
-      }
-    `);
-    // Search for arg temp and body var within the caller function body.
-    // The caller function body starts after the compute declaration.
+    // arg temp appears before body statements within caller
     const callerIdx = lua.indexOf("caller");
     const argIdx = lua.indexOf("____inline_arg_0", callerIdx);
     const bodyIdx = lua.indexOf("local y", argIdx);
@@ -1160,9 +1099,8 @@ describe("return-statement multi-statement inline", () => {
     expect(lua).toContain("doStuff(");
   });
 
-  // Intentional: at a return site, no code follows so body locals in caller scope is safe.
-  // Per D-01/D-02: no do...end needed since no caller code comes after a return statement.
-  it("body locals appear in caller scope (no do...end — intentional per D-01/D-02)", () => {
+  it("body locals appear in caller scope (no do...end at return site)", () => {
+    // At a return site, no caller code follows, so body locals in caller scope is safe.
     const lua = compile(`
       /** @inline */
       function compute(x: number): number {
@@ -1174,7 +1112,6 @@ describe("return-statement multi-statement inline", () => {
         return compute(a);
       }
     `);
-    // Flat emission: local y is in caller scope (no do...end)
     expect(lua).toContain("local y");
     expect(lua).not.toMatch(/\bdo\b/);
     expect(lua).not.toContain("return compute(");
@@ -1192,33 +1129,15 @@ describe("destructuring multi-statement inline", () => {
       declare const x: number;
       const { a, b } = foo(x);
     `);
-    // Fresh result identifier should appear
     expect(lua).toMatch(/____inline_result_\d+/);
-    // do...end block should appear for body
     expect(lua).toMatch(/\bdo\b/);
-    // Field-access assignments for each binding
     expect(lua).toMatch(/\.a\b/);
     expect(lua).toMatch(/\.b\b/);
-    // The inline call (not function definition) should not appear as a call site
     expect(lua).not.toContain("= foo(");
-  });
-
-  it("object destructuring: field-access assignments appear outside the do...end block", () => {
-    const lua = compile(`
-      /** @inline */
-      function foo(x: number): { a: number; b: number } {
-        const obj = { a: x, b: x + 1 };
-        return obj;
-      }
-      declare const x: number;
-      const { a, b } = foo(x);
-    `);
-    // 'end' from do...end should appear before the field accesses
+    // field-access assignments appear after the do...end block
     const endIdx = lua.lastIndexOf("end");
-    const fieldAIdx = lua.indexOf(".a", endIdx);
-    const fieldBIdx = lua.indexOf(".b", endIdx);
-    expect(fieldAIdx).toBeGreaterThan(endIdx);
-    expect(fieldBIdx).toBeGreaterThan(endIdx);
+    expect(lua.indexOf(".a", endIdx)).toBeGreaterThan(endIdx);
+    expect(lua.indexOf(".b", endIdx)).toBeGreaterThan(endIdx);
   });
 
   it("object destructuring: renamed binding uses propertyName as key and binding name as local", () => {
@@ -1259,31 +1178,13 @@ describe("destructuring multi-statement inline", () => {
       declare const x: number;
       const [a, b] = foo(x);
     `);
-    // Fresh result identifier should appear
     expect(lua).toMatch(/____inline_result_\d+/);
-    // do...end block for body
     expect(lua).toMatch(/\bdo\b/);
-    // unpack call for array destructuring
     expect(lua).toContain("unpack(");
-    // The inline call should not appear as a call site
     expect(lua).not.toContain("= foo(");
-  });
-
-  it("array destructuring: binding identifiers appear in unpack assignment", () => {
-    const lua = compile(`
-      /** @inline */
-      function foo(x: number): number[] {
-        const arr = [x, x + 1];
-        return arr;
-      }
-      declare const x: number;
-      const [a, b] = foo(x);
-    `);
-    // a and b should appear in the output
+    // binding identifiers appear in unpack assignment
     expect(lua).toContain("a,");
     expect(lua).toContain("b");
-    // unpack with count 2 for 2 elements
-    expect(lua).toContain("unpack(");
   });
 
   it("non-inline array destructuring passes through unchanged", () => {

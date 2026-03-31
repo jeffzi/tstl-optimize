@@ -482,32 +482,36 @@ function createInlineWarning(node: ts.CallExpression, reason: string): ts.Diagno
   };
 }
 
-function hasLinearControlFlow(stmts: readonly ts.Statement[]): true | string {
+function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false): true | string {
   for (const stmt of stmts) {
     if (ts.isReturnStatement(stmt)) return "early return in body";
-    if (ts.isBreakStatement(stmt)) return "break in body";
-    if (ts.isContinueStatement(stmt)) return "continue in body";
+    // break/continue inside a loop are scoped to that loop, not to the surrounding
+    // do...end inline wrapper in Lua, so only reject them at the top level.
+    if (!loopBody) {
+      if (ts.isBreakStatement(stmt)) return "break in body";
+      if (ts.isContinueStatement(stmt)) return "continue in body";
+    }
     // Recurse into nested blocks: a return/break/continue inside an if/while/for
     // becomes a return/break/continue inside a do...end in Lua, which returns from
     // the enclosing function rather than just the inlined block, changing semantics.
     if (ts.isIfStatement(stmt)) {
-      const thenResult = hasLinearControlFlow(stmt.thenStatement ? [stmt.thenStatement] : []);
+      const thenResult = hasLinearControlFlow([stmt.thenStatement], loopBody);
       if (thenResult !== true) return thenResult;
       if (stmt.elseStatement) {
-        const elseResult = hasLinearControlFlow([stmt.elseStatement]);
+        const elseResult = hasLinearControlFlow([stmt.elseStatement], loopBody);
         if (elseResult !== true) return elseResult;
       }
     } else if (ts.isWhileStatement(stmt)) {
-      const bodyResult = hasLinearControlFlow([stmt.statement]);
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
       if (bodyResult !== true) return bodyResult;
     } else if (ts.isForStatement(stmt)) {
-      const bodyResult = hasLinearControlFlow([stmt.statement]);
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
       if (bodyResult !== true) return bodyResult;
     } else if (ts.isForInStatement(stmt) || ts.isForOfStatement(stmt)) {
-      const bodyResult = hasLinearControlFlow([stmt.statement]);
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
       if (bodyResult !== true) return bodyResult;
     } else if (ts.isBlock(stmt)) {
-      const blockResult = hasLinearControlFlow(stmt.statements);
+      const blockResult = hasLinearControlFlow(stmt.statements, loopBody);
       if (blockResult !== true) return blockResult;
     }
   }
@@ -563,6 +567,47 @@ function canInlineStatements(
   return true;
 }
 
+interface ParamMapResult {
+  tempDecls: tstl.VariableDeclarationStatement[];
+  paramMap: Map<tstl.SymbolId, tstl.Expression>;
+}
+
+/** Build temp-var declarations and a symbolId→expression map for each call argument.
+ *  Returns undefined if any param symbol or Lua symbolId cannot be resolved. */
+function buildParamMap(
+  params: readonly ts.ParameterDeclaration[],
+  callArgs: ts.NodeArray<ts.Expression>,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): ParamMapResult | undefined {
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+    const luaArg = context.transformExpression(callArgs[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+  return { tempDecls, paramMap };
+}
+
+/** Transform body statements inside a fresh function scope so locals produce `local` in Lua. */
+function transformBodyStatements(
+  bodyStmts: readonly ts.Statement[],
+  declaration: ts.Node,
+  context: tstl.TransformationContext,
+): tstl.Statement[] {
+  context.pushScope(ScopeType.Function, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+  return luaBody;
+}
+
 function buildDoEndBlock(
   target: StatementInlineTarget,
   callNode: ts.CallExpression,
@@ -571,27 +616,11 @@ function buildDoEndBlock(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  const tempDecls: tstl.VariableDeclarationStatement[] = [];
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
 
-  for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return undefined;
-    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) return undefined;
-
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
-    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
-    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
-  }
-
-  // Push a function scope so local declarations in the body produce `local` in Lua.
-  context.pushScope(ScopeType.Function, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
-
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substituted = substituteParamsInStatements(luaBody, paramMap);
 
   return [...tempDecls, tstl.createDoStatement(substituted)];
@@ -683,43 +712,26 @@ function buildVarDeclInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
 ): tstl.Statement[] | undefined {
+  const { bodyStmts, params, declaration } = target;
+
   // Allocate a fresh Lua symbolId for the result variable. We cannot use
   // context.symbolIdMaps.get() here because TSTL hasn't transformed this
   // VariableStatement yet — the result symbol has no Lua symbolId assigned.
   const resultSymbolId = context.nextSymbolId();
-
   const resultIdent = tstl.createIdentifier(nameIdent.text, undefined, resultSymbolId);
-  // Declare `local r` with no initializer.
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const { bodyStmts, params, declaration } = target;
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
 
-  const tempDecls: tstl.VariableDeclarationStatement[] = [];
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
-
-  for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return undefined;
-    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) return undefined;
-
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
-    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
-    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
-  }
-
-  // Transform body statements inside a function scope.
-  context.pushScope(ScopeType.Function, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
-
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
-  // Transform and substitute the return expression.
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
 
   // Assign the return expression to the result variable inside do...end.
   const assignResult = tstl.createAssignmentStatement(
@@ -744,6 +756,8 @@ function buildObjectDestructureInline(
     if (!ts.isIdentifier(element.name)) return undefined;
   }
 
+  const { bodyStmts, params, declaration } = target;
+
   // Generate fresh result identifier: ____inline_result_N
   const resultSymId = context.nextSymbolId();
   const resultIdent = tstl.createIdentifier(
@@ -753,34 +767,18 @@ function buildObjectDestructureInline(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const { bodyStmts, params, declaration } = target;
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
 
-  const tempDecls: tstl.VariableDeclarationStatement[] = [];
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
-
-  for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return undefined;
-    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) return undefined;
-
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
-    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
-    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
-  }
-
-  // Transform body statements inside a function scope.
-  context.pushScope(ScopeType.Function, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
-
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
   // Transform and substitute the return expression, then assign to result ident inside do...end.
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
 
   const assignResult = tstl.createAssignmentStatement(
     [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
@@ -797,10 +795,6 @@ function buildObjectDestructureInline(
     // propertyName is defined for renamed bindings (a: myA); otherwise use element.name as key.
     const keyNode = element.propertyName ?? element.name;
     if (!ts.isIdentifier(keyNode)) return undefined;
-
-    // Resolve the local binding symbol to get its Lua symbolId.
-    const bindingSymbol = checker.getSymbolAtLocation(bindingName);
-    if (!bindingSymbol) return undefined;
 
     // The binding symbol hasn't been transformed yet (handler intercepts before TSTL),
     // so allocate a fresh symbolId for it.
@@ -832,6 +826,8 @@ function buildArrayDestructureInline(
     if (!ts.isIdentifier(element.name)) return undefined;
   }
 
+  const { bodyStmts, params, declaration } = target;
+
   // Generate fresh result identifier: ____inline_result_N
   const resultSymId = context.nextSymbolId();
   const resultIdent = tstl.createIdentifier(
@@ -841,34 +837,18 @@ function buildArrayDestructureInline(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const { bodyStmts, params, declaration } = target;
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
 
-  const tempDecls: tstl.VariableDeclarationStatement[] = [];
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
-
-  for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return undefined;
-    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) return undefined;
-
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
-    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
-    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
-  }
-
-  // Transform body statements inside a function scope.
-  context.pushScope(ScopeType.Function, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
-
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
   // Transform and substitute the return expression, then assign to result ident inside do...end.
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
 
   const assignResult = tstl.createAssignmentStatement(
     [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
@@ -892,10 +872,9 @@ function buildArrayDestructureInline(
 
   if (isMultiReturn) {
     // LuaMultiReturn: emit `a, b = <resultIdent>` (multi-left assignment, no unpack).
-    const assignStmt = tstl.createAssignmentStatement(
-      bindingIdents as unknown as tstl.AssignmentLeftHandSideExpression[],
-      [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
-    );
+    const assignStmt = tstl.createAssignmentStatement(bindingIdents, [
+      tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
+    ]);
     return [resultDecl, ...tempDecls, doEnd, assignStmt];
   }
 
@@ -956,12 +935,12 @@ function handleVariableStatement(
 
   // Object destructuring: const { a, b } = foo(x)
   if (ts.isObjectBindingPattern(decl.name)) {
-    return buildObjectDestructureInline(decl.name, target, callNode, checker, context) ?? undefined;
+    return buildObjectDestructureInline(decl.name, target, callNode, checker, context);
   }
 
   // Array destructuring: const [a, b] = foo(x)
   if (ts.isArrayBindingPattern(decl.name)) {
-    return buildArrayDestructureInline(decl.name, target, callNode, checker, context) ?? undefined;
+    return buildArrayDestructureInline(decl.name, target, callNode, checker, context);
   }
 
   return undefined;
@@ -975,34 +954,19 @@ function buildReturnSiteInline(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  const tempDecls: tstl.VariableDeclarationStatement[] = [];
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
 
-  for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return undefined;
-    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) return undefined;
-
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
-    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
-    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
-  }
-
-  // Transform body statements inside a function scope.
-  context.pushScope(ScopeType.Function, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
-
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
-  // Transform and substitute params in the return expression.
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
 
-  // Flat emission: arg temps + body statements + return. No do...end per D-01/D-02.
+  // Flat emission: arg temps + body statements + return (no do...end wrapper needed).
   return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
 }
 

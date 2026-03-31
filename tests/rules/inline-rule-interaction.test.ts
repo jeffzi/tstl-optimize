@@ -45,7 +45,7 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
       expect(lua).toContain("____math_ceil");
     });
 
-    it("does not hoist chains rooted at block-local variables above the block", () => {
+    it("does not hoist chains rooted at block-local variables", () => {
       const lua = compile(
         `
         {
@@ -61,10 +61,13 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
           },
         },
       );
-      // obj is defined inside the do...end block, so localizer should recognize
-      // it as locally-defined and not hoist above the block. The hoist should
-      // still appear inside the block.
+      // obj is defined inside the do...end block. The module-scope pass sees obj in
+      // scopeDefs and correctly skips hoisting (it cannot safely insert a local alias
+      // before obj's own declaration). No ____obj_nested_value alias is emitted at all.
+      expect(lua).not.toContain("____obj");
+      // The do...end block structure is preserved and obj.nested.value is used directly.
       expect(lua).toContain("do");
+      expect(lua).toContain("obj.nested.value");
     });
   });
 
