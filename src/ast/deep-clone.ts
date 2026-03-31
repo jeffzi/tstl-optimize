@@ -64,17 +64,10 @@ export function deepCloneExpression(node: tstl.Expression): tstl.Expression {
     }
     case tstl.SyntaxKind.FunctionExpression: {
       const func = node as tstl.FunctionExpression;
-      const clonedParams = func.params?.map(
-        (p) => deepCloneExpression(p) as tstl.Identifier,
-      );
+      const clonedParams = func.params?.map((p) => deepCloneExpression(p) as tstl.Identifier);
       const clonedDots = func.dots ? (tstl.cloneNode(func.dots) as tstl.DotsLiteral) : undefined;
       const clonedBody = tstl.createBlock(deepCloneStatements(func.body.statements));
-      return tstl.createFunctionExpression(
-        clonedBody,
-        clonedParams,
-        clonedDots,
-        func.flags,
-      );
+      return tstl.createFunctionExpression(clonedBody, clonedParams, clonedDots, func.flags);
     }
     case tstl.SyntaxKind.Identifier: {
       const ident = node as tstl.Identifier;
@@ -112,10 +105,7 @@ export function deepCloneStatement(stmt: tstl.Statement): tstl.Statement {
     case tstl.SyntaxKind.AssignmentStatement: {
       const assign = stmt as tstl.AssignmentStatement;
       return tstl.createAssignmentStatement(
-        assign.left.map(
-          (l) =>
-            deepCloneExpression(l) as tstl.AssignmentLeftHandSideExpression,
-        ),
+        assign.left.map((l) => deepCloneExpression(l) as tstl.AssignmentLeftHandSideExpression),
         assign.right.map(deepCloneExpression),
       );
     }

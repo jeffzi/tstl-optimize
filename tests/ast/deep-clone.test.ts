@@ -25,11 +25,7 @@ describe("deepCloneExpression", () => {
 
   it("clones nested expression tree (binary containing call)", () => {
     const callExpr = tstl.createCallExpression(id("foo"), [id("x")]);
-    const bin = tstl.createBinaryExpression(
-      callExpr,
-      id("y"),
-      tstl.SyntaxKind.AdditionOperator,
-    );
+    const bin = tstl.createBinaryExpression(callExpr, id("y"), tstl.SyntaxKind.AdditionOperator);
 
     const cloned = deepCloneExpression(bin) as tstl.BinaryExpression;
     const clonedCall = cloned.left as tstl.CallExpression;
@@ -182,9 +178,7 @@ describe("deepCloneStatement", () => {
     expect(cloned).not.toBe(doStmt);
     expect(cloned.statements[0]).not.toBe(inner);
     const clonedReturn = cloned.statements[0] as tstl.ReturnStatement;
-    expect(clonedReturn.expressions[0]).not.toBe(
-      (inner as tstl.ReturnStatement).expressions[0],
-    );
+    expect(clonedReturn.expressions[0]).not.toBe((inner as tstl.ReturnStatement).expressions[0]);
   });
 
   it("clones VariableDeclarationStatement independently", () => {
@@ -198,8 +192,8 @@ describe("deepCloneStatement", () => {
     expect(cloned.left[0]).not.toBe(leftId);
     expect((cloned.left[0] as tstl.Identifier).text).toBe("x");
     expect((cloned.left[0] as tstl.Identifier).symbolId).toBe(1);
-    expect(cloned.right![0]).not.toBe(rightExpr);
-    expect((cloned.right![0] as tstl.NumericLiteral).value).toBe(42);
+    expect(cloned.right?.[0]).not.toBe(rightExpr);
+    expect((cloned.right?.[0] as tstl.NumericLiteral).value).toBe(42);
   });
 
   it("clones AssignmentStatement independently", () => {
