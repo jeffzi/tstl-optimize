@@ -131,6 +131,18 @@ export function resolveInlineConfig(value: boolean | InlineConfig | undefined): 
 }
 
 /**
+ * Extracts the per-rule strict field from ConditionalCompilationConfig.
+ * Returns undefined when value is not an object (boolean or absent), meaning "not set".
+ */
+export function resolveConditionalCompilationStrict(
+  value: boolean | ConditionalCompilationConfig | undefined,
+): boolean | undefined {
+  if (value === undefined || value === true || value === false) return undefined;
+  // value is ConditionalCompilationConfig — object narrowing, no cast required
+  return value.strict;
+}
+
+/**
  * Resolves the effective strict flag from global and per-rule overrides.
  * Per-rule `false` always wins over global `true` (allows opting a rule out of global strict).
  */

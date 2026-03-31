@@ -5,6 +5,8 @@ import {
   type ConstantValue,
   type RuleFactory,
   resolveConditionalCompilationConfig,
+  resolveConditionalCompilationStrict,
+  resolveEffectiveStrict,
 } from "../config";
 
 function isTruthy(value: ConstantValue): boolean {
@@ -91,20 +93,6 @@ function referencesKnownConstants(
   return false;
 }
 
-function createPartialFoldingWarning(node: ts.Node): ts.Diagnostic {
-  return {
-    file: node.getSourceFile(),
-    start: node.getStart(),
-    length: node.getWidth(),
-    messageText:
-      "conditional-compilation: condition references compile-time constants " +
-      "but could not be fully resolved — the entire branch is preserved at runtime",
-    category: ts.DiagnosticCategory.Warning,
-    code: 90002,
-    source: "tstl-optimize",
-  };
-}
-
 function constantToLuaLiteral(value: ConstantValue): tstl.Expression {
   if (typeof value === "boolean") return tstl.createBooleanLiteral(value);
   if (typeof value === "number") return tstl.createNumericLiteral(value);
@@ -118,6 +106,26 @@ export const createVisitors: RuleFactory = (_checker, config) => {
   if (maybeResolved === false || maybeResolved.size === 0) return {};
   // Rebind after guard so TypeScript narrows the type inside closures below
   const resolved = maybeResolved;
+
+  // Resolve strict: per-rule override wins over global (same D-06 precedence as inline).
+  const perRuleStrict = resolveConditionalCompilationStrict(
+    config.rules["conditional-compilation"],
+  );
+  const effectiveStrict = resolveEffectiveStrict(config.strict ?? false, perRuleStrict);
+
+  function createPartialFoldingWarning(node: ts.Node): ts.Diagnostic {
+    return {
+      file: node.getSourceFile(),
+      start: node.getStart(),
+      length: node.getWidth(),
+      messageText:
+        "conditional-compilation: condition references compile-time constants " +
+        "but could not be fully resolved — the entire branch is preserved at runtime",
+      category: effectiveStrict ? ts.DiagnosticCategory.Error : ts.DiagnosticCategory.Warning,
+      code: 90002,
+      source: "tstl-optimize",
+    };
+  }
 
   function tryFoldExpression(
     node: ts.Expression,
