@@ -677,10 +677,56 @@ function handleExpressionStatement(
   const { target } = result;
 
   if (target.kind === "expression") {
-    // Delegate to existing expression handler and wrap result in ExpressionStatement
-    const inlined = handleCallExpression(callNode, checker, context);
-    if (inlined === undefined) return undefined;
-    return [tstl.createExpressionStatement(inlined)];
+    const canInlineResult = canInline(target, callNode, checker);
+    if (canInlineResult !== true) {
+      context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+      return undefined;
+    }
+
+    const luaBody = context.transformExpression(target.bodyExpr);
+
+    const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+    for (let i = 0; i < target.params.length; i++) {
+      const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+      if (!paramSymbol) return undefined;
+      const symbolId = context.symbolIdMaps.get(paramSymbol);
+      if (symbolId === undefined) return undefined;
+      const luaArg = context.transformExpression(callNode.arguments[i]);
+      paramMap.set(symbolId, luaArg);
+    }
+
+    // Cross-module check: expression-body only; statement-body cross-module is blocked separately.
+    const isCrossModule =
+      callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+    if (isCrossModule) {
+      const paramIds = new Set(paramMap.keys());
+      if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
+        context.diagnostics.push(
+          createInlineWarning(
+            callNode,
+            "cross-module function references non-parameter identifiers",
+          ),
+        );
+        return undefined;
+      }
+    }
+
+    const substituted = substituteParams(luaBody, paramMap);
+
+    if (isCrossModule) {
+      const callerIds = new Set<tstl.SymbolId>();
+      for (const arg of paramMap.values()) {
+        collectSymbolIds(arg, callerIds);
+      }
+      if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
+        return undefined;
+      }
+    }
+
+    const result2 = needsParentheses(substituted)
+      ? tstl.createParenthesizedExpression(substituted)
+      : substituted;
+    return [tstl.createExpressionStatement(result2)];
   }
 
   // target.kind === "statements"
