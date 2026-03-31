@@ -1342,3 +1342,117 @@ describe("cross-module statement body: return-statement statementsWithReturn", (
     expect(lua).toContain("return scale(a)");
   });
 });
+
+describe("inline strict mode", () => {
+  describe("global strict: true promotes warnings to errors (code 90001)", () => {
+    it("emits Error when global strict: true and no per-rule override (expression body)", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+
+    it("emits Warning when global strict: false (default)", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: false } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    });
+
+    it("emits Error for statement-body inline warning when global strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function greet(x: number) { let y = x + 1; y = y + 1; }
+        declare const a: number;
+        const r = greet(a);
+        `,
+        { pluginOptions: { strict: true } },
+      );
+      // statementsWithReturn or statements at expression position -> Warning/Error
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+  });
+
+  describe("per-rule inline.strict override", () => {
+    it("emits Warning when global strict: true but inline.strict: false", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true, rules: { inline: { strict: false } } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
+    });
+
+    it("emits Error when global strict: false but inline.strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: false, rules: { inline: { strict: true } } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+
+    it("emits Error when both global strict: true and inline.strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true, rules: { inline: { strict: true } } } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+  });
+
+  describe("diagnostic code 90001 still correct regardless of strict mode", () => {
+    it("code is 90001 with global strict: true", () => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        declare const a: number;
+        double(a + 1, a);
+        `,
+        { pluginOptions: { strict: true } },
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].source).toBe("tstl-optimize");
+    });
+  });
+});
