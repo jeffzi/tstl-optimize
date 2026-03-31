@@ -1,5 +1,8 @@
 import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { mapLuaStatements } from "../../src/rules/inline";
 import { compile, compileMultiFileWithDiagnostics, compileWithDiagnostics } from "../helpers";
 
 describe("inline", () => {
@@ -420,5 +423,201 @@ describe("inline", () => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("non-parameter");
     });
+  });
+});
+
+describe("mapLuaStatements (unit)", () => {
+  /** leafFn that replaces any Identifier with text "x" with one named "replaced". */
+  const leafFn = (n: tstl.Expression): tstl.Expression | undefined => {
+    if (n.kind === tstl.SyntaxKind.Identifier && (n as tstl.Identifier).text === "x") {
+      return tstl.createIdentifier("replaced");
+    }
+    return undefined;
+  };
+
+  it("returns empty array for empty input", () => {
+    const result = mapLuaStatements([], leafFn);
+    expect(result).toEqual([]);
+  });
+
+  it("substitutes in ExpressionStatement", () => {
+    const stmt = tstl.createExpressionStatement(tstl.createIdentifier("x"));
+    const [result] = mapLuaStatements([stmt], leafFn);
+    expect((result as tstl.ExpressionStatement).expression).toSatisfy(
+      (e: tstl.Expression) =>
+        e.kind === tstl.SyntaxKind.Identifier && (e as tstl.Identifier).text === "replaced",
+    );
+  });
+
+  it("substitutes in VariableDeclarationStatement right side", () => {
+    const stmt = tstl.createVariableDeclarationStatement(
+      [tstl.createIdentifier("y")],
+      [tstl.createIdentifier("x")],
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const varDecl = result as tstl.VariableDeclarationStatement;
+    expect(varDecl.right).toBeDefined();
+    expect((varDecl.right![0] as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in AssignmentStatement right side", () => {
+    const stmt = tstl.createAssignmentStatement(
+      [tstl.createIdentifier("y") as tstl.AssignmentLeftHandSideExpression],
+      [tstl.createIdentifier("x")],
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const assign = result as tstl.AssignmentStatement;
+    expect((assign.right[0] as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in AssignmentStatement TableIndexExpression left side", () => {
+    const tblIndex = tstl.createTableIndexExpression(
+      tstl.createIdentifier("x"),
+      tstl.createIdentifier("key"),
+    );
+    const stmt = tstl.createAssignmentStatement(
+      [tblIndex as tstl.AssignmentLeftHandSideExpression],
+      [tstl.createNumericLiteral(1)],
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const assign = result as tstl.AssignmentStatement;
+    const lhs = assign.left[0] as tstl.TableIndexExpression;
+    expect((lhs.table as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("recurses into DoStatement", () => {
+    const inner = tstl.createExpressionStatement(tstl.createIdentifier("x"));
+    const stmt = tstl.createDoStatement([inner]);
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const doStmt = result as tstl.DoStatement;
+    const innerResult = doStmt.statements[0] as tstl.ExpressionStatement;
+    expect((innerResult.expression as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in IfStatement condition and blocks", () => {
+    const stmt = tstl.createIfStatement(
+      tstl.createIdentifier("x"),
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const ifStmt = result as tstl.IfStatement;
+    expect((ifStmt.condition as tstl.Identifier).text).toBe("replaced");
+    const ifBlock = ifStmt.ifBlock.statements[0] as tstl.ExpressionStatement;
+    expect((ifBlock.expression as tstl.Identifier).text).toBe("replaced");
+    const elseBlock = (ifStmt.elseBlock as tstl.Block).statements[0] as tstl.ExpressionStatement;
+    expect((elseBlock.expression as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in chained IfStatement (elseif)", () => {
+    const elseIf = tstl.createIfStatement(
+      tstl.createIdentifier("x"),
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("y"))]),
+    );
+    const stmt = tstl.createIfStatement(
+      tstl.createIdentifier("y"),
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("y"))]),
+      elseIf,
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const ifStmt = result as tstl.IfStatement;
+    const elseIfStmt = ifStmt.elseBlock as tstl.IfStatement;
+    expect((elseIfStmt.condition as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in WhileStatement condition and body", () => {
+    const stmt = tstl.createWhileStatement(
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
+      tstl.createIdentifier("x"),
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const whileStmt = result as tstl.WhileStatement;
+    expect((whileStmt.condition as tstl.Identifier).text).toBe("replaced");
+    const bodyExpr = whileStmt.body.statements[0] as tstl.ExpressionStatement;
+    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in RepeatStatement body and condition", () => {
+    const stmt = tstl.createRepeatStatement(
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
+      tstl.createIdentifier("x"),
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const repeatStmt = result as tstl.RepeatStatement;
+    expect((repeatStmt.condition as tstl.Identifier).text).toBe("replaced");
+    const bodyExpr = repeatStmt.body.statements[0] as tstl.ExpressionStatement;
+    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in ForStatement expressions but not controlVariable", () => {
+    const stmt = tstl.createForStatement(
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
+      tstl.createIdentifier("i"),
+      tstl.createIdentifier("x"), // controlVariableInitializer
+      tstl.createIdentifier("x"), // limitExpression
+      tstl.createIdentifier("x"), // stepExpression
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const forStmt = result as tstl.ForStatement;
+    // controlVariable should NOT be substituted
+    expect((forStmt.controlVariable as tstl.Identifier).text).toBe("i");
+    // Expressions should be substituted
+    expect((forStmt.controlVariableInitializer as tstl.Identifier).text).toBe("replaced");
+    expect((forStmt.limitExpression as tstl.Identifier).text).toBe("replaced");
+    expect((forStmt.stepExpression as tstl.Identifier).text).toBe("replaced");
+    const bodyExpr = forStmt.body.statements[0] as tstl.ExpressionStatement;
+    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in ForInStatement expressions but not names", () => {
+    const stmt = tstl.createForInStatement(
+      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
+      [tstl.createIdentifier("k")],
+      [tstl.createIdentifier("x")],
+    );
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const forInStmt = result as tstl.ForInStatement;
+    // names should NOT be substituted
+    expect(forInStmt.names[0].text).toBe("k");
+    // expressions should be substituted
+    expect((forInStmt.expressions[0] as tstl.Identifier).text).toBe("replaced");
+    const bodyExpr = forInStmt.body.statements[0] as tstl.ExpressionStatement;
+    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("substitutes in ReturnStatement expressions", () => {
+    const stmt = tstl.createReturnStatement([tstl.createIdentifier("x")]);
+    const [result] = mapLuaStatements([stmt], leafFn);
+    const retStmt = result as tstl.ReturnStatement;
+    expect((retStmt.expressions[0] as tstl.Identifier).text).toBe("replaced");
+  });
+
+  it("does not mutate original statements", () => {
+    const original = tstl.createExpressionStatement(tstl.createIdentifier("x"));
+    const stmts = [original];
+    mapLuaStatements(stmts, leafFn);
+    // Original should be unchanged
+    expect((original.expression as tstl.Identifier).text).toBe("x");
+    expect(stmts).toHaveLength(1);
+  });
+
+  it("passes through BreakStatement unchanged", () => {
+    const stmt = tstl.createBreakStatement();
+    const [result] = mapLuaStatements([stmt], leafFn);
+    expect(result.kind).toBe(tstl.SyntaxKind.BreakStatement);
+  });
+
+  it("passes through GotoStatement unchanged", () => {
+    const stmt = tstl.createGotoStatement("lbl");
+    const [result] = mapLuaStatements([stmt], leafFn);
+    expect(result.kind).toBe(tstl.SyntaxKind.GotoStatement);
+    expect((result as tstl.GotoStatement).label).toBe("lbl");
+  });
+
+  it("passes through LabelStatement unchanged", () => {
+    const stmt = tstl.createLabelStatement("lbl");
+    const [result] = mapLuaStatements([stmt], leafFn);
+    expect(result.kind).toBe(tstl.SyntaxKind.LabelStatement);
+    expect((result as tstl.LabelStatement).name).toBe("lbl");
   });
 });

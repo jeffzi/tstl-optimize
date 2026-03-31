@@ -2,6 +2,7 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
 
@@ -240,6 +241,119 @@ function substituteParams(
     const id = n as tstl.Identifier;
     const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
     return mapped ? tstl.cloneNode(mapped) : n;
+  });
+}
+
+/**
+ * Recursively transform a Lua statement list. `leafFn` is called on each expression
+ * node via `mapLuaExpression`; if it returns a value, that replaces the expression.
+ * Produces new statement arrays without mutating originals.
+ * @internal Exported for testing only.
+ */
+export function mapLuaStatements(
+  statements: readonly tstl.Statement[],
+  leafFn: (n: tstl.Expression) => tstl.Expression | undefined,
+): tstl.Statement[] {
+  const recurse = (n: tstl.Expression) => mapLuaExpression(n, leafFn);
+  const recurseStmts = (stmts: readonly tstl.Statement[]) => mapLuaStatements(stmts, leafFn);
+
+  function mapIfStatement(stmt: tstl.IfStatement): tstl.IfStatement {
+    let elseBlock: tstl.Block | tstl.IfStatement | undefined;
+    if (stmt.elseBlock) {
+      if (tstl.isIfStatement(stmt.elseBlock)) {
+        elseBlock = mapIfStatement(stmt.elseBlock);
+      } else {
+        elseBlock = tstl.createBlock(recurseStmts(stmt.elseBlock.statements));
+      }
+    }
+    return tstl.createIfStatement(
+      recurse(stmt.condition),
+      tstl.createBlock(recurseStmts(stmt.ifBlock.statements)),
+      elseBlock,
+    );
+  }
+
+  return statements.map((stmt): tstl.Statement => {
+    switch (stmt.kind) {
+      case tstl.SyntaxKind.DoStatement: {
+        const doStmt = stmt as tstl.DoStatement;
+        return tstl.createDoStatement(recurseStmts(doStmt.statements));
+      }
+      case tstl.SyntaxKind.VariableDeclarationStatement: {
+        const varDecl = stmt as tstl.VariableDeclarationStatement;
+        return tstl.createVariableDeclarationStatement(
+          varDecl.left.map((id) => recurse(id) as tstl.Identifier),
+          varDecl.right?.map(recurse),
+        );
+      }
+      case tstl.SyntaxKind.AssignmentStatement: {
+        const assign = stmt as tstl.AssignmentStatement;
+        return tstl.createAssignmentStatement(
+          assign.left.map((l) => recurse(l) as tstl.AssignmentLeftHandSideExpression),
+          assign.right.map(recurse),
+        );
+      }
+      case tstl.SyntaxKind.IfStatement:
+        return mapIfStatement(stmt as tstl.IfStatement);
+      case tstl.SyntaxKind.WhileStatement: {
+        const whileStmt = stmt as tstl.WhileStatement;
+        return tstl.createWhileStatement(
+          tstl.createBlock(recurseStmts(whileStmt.body.statements)),
+          recurse(whileStmt.condition),
+        );
+      }
+      case tstl.SyntaxKind.RepeatStatement: {
+        const repeatStmt = stmt as tstl.RepeatStatement;
+        return tstl.createRepeatStatement(
+          tstl.createBlock(recurseStmts(repeatStmt.body.statements)),
+          recurse(repeatStmt.condition),
+        );
+      }
+      case tstl.SyntaxKind.ForStatement: {
+        const forStmt = stmt as tstl.ForStatement;
+        return tstl.createForStatement(
+          tstl.createBlock(recurseStmts(forStmt.body.statements)),
+          forStmt.controlVariable,
+          recurse(forStmt.controlVariableInitializer),
+          recurse(forStmt.limitExpression),
+          forStmt.stepExpression ? recurse(forStmt.stepExpression) : undefined,
+        );
+      }
+      case tstl.SyntaxKind.ForInStatement: {
+        const forIn = stmt as tstl.ForInStatement;
+        return tstl.createForInStatement(
+          tstl.createBlock(recurseStmts(forIn.body.statements)),
+          forIn.names,
+          forIn.expressions.map(recurse),
+        );
+      }
+      case tstl.SyntaxKind.ReturnStatement: {
+        const ret = stmt as tstl.ReturnStatement;
+        return tstl.createReturnStatement(ret.expressions.map(recurse));
+      }
+      case tstl.SyntaxKind.ExpressionStatement: {
+        const exprStmt = stmt as tstl.ExpressionStatement;
+        return tstl.createExpressionStatement(recurse(exprStmt.expression));
+      }
+      case tstl.SyntaxKind.GotoStatement:
+      case tstl.SyntaxKind.LabelStatement:
+      case tstl.SyntaxKind.BreakStatement:
+        return tstl.cloneNode(stmt);
+      default:
+        return tstl.cloneNode(stmt);
+    }
+  });
+}
+
+function substituteParamsInStatements(
+  statements: readonly tstl.Statement[],
+  paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>,
+): tstl.Statement[] {
+  return mapLuaStatements(statements, (n) => {
+    if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
+    const id = n as tstl.Identifier;
+    const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
+    return mapped ? deepCloneExpression(mapped) : undefined;
   });
 }
 
