@@ -2,6 +2,9 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+// ScopeType is not exported from the typescript-to-lua public index; import from internal path.
+// Function = 2 (verified against TSTL source).
+import { ScopeType } from "typescript-to-lua/dist/transformation/utils/scope";
 import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
@@ -22,7 +25,16 @@ interface StatementInlineTarget {
   resolvedSymbol: ts.Symbol;
 }
 
-type InlineTarget = ExpressionInlineTarget | StatementInlineTarget;
+interface ReturnValueInlineTarget {
+  kind: "statementsWithReturn";
+  bodyStmts: readonly ts.Statement[];
+  returnExpr: ts.Expression;
+  params: readonly ts.ParameterDeclaration[];
+  declaration: ts.Node;
+  resolvedSymbol: ts.Symbol;
+}
+
+type InlineTarget = ExpressionInlineTarget | StatementInlineTarget | ReturnValueInlineTarget;
 
 function hasInlineTag(node: ts.Node): boolean {
   return ts.getJSDocTags(node).some((tag) => tag.tagName.text === "inline");
@@ -30,19 +42,18 @@ function hasInlineTag(node: ts.Node): boolean {
 
 type ClassifiedBody =
   | { kind: "expression"; expr: ts.Expression }
-  | { kind: "statements"; stmts: readonly ts.Statement[] };
+  | { kind: "statements"; stmts: readonly ts.Statement[] }
+  | { kind: "statementsWithReturn"; stmts: readonly ts.Statement[]; returnExpr: ts.Expression };
 
 function classifyBody(
   func: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction,
 ): ClassifiedBody | undefined {
-  // Arrow with expression body
   if (ts.isArrowFunction(func) && !ts.isBlock(func.body)) {
     return { kind: "expression", expr: func.body };
   }
   const body = ts.isArrowFunction(func) ? (func.body as ts.Block) : func.body;
   if (!body || body.statements.length === 0) return undefined;
 
-  // Single return statement -> expression path (preserves existing behavior)
   if (body.statements.length === 1) {
     const stmt = body.statements[0];
     if (ts.isReturnStatement(stmt) && stmt.expression) {
@@ -50,11 +61,57 @@ function classifyBody(
     }
   }
 
-  // Multi-statement body or single non-return statement -> statements path
+  const lastStmt = body.statements[body.statements.length - 1];
+  if (ts.isReturnStatement(lastStmt) && lastStmt.expression) {
+    return {
+      kind: "statementsWithReturn",
+      stmts: body.statements.slice(0, -1),
+      returnExpr: lastStmt.expression,
+    };
+  }
+
   return { kind: "statements", stmts: body.statements };
 }
 
 type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
+
+function makeTargetResult(
+  classified: ClassifiedBody | undefined,
+  params: readonly ts.ParameterDeclaration[],
+  declaration: ts.Node,
+  resolvedSymbol: ts.Symbol,
+): { target: InlineTarget } {
+  if (!classified) {
+    // Empty body: ExpressionStatement handler erases silently; expression handler rejects.
+    return { target: { kind: "statements", bodyStmts: [], params, declaration, resolvedSymbol } };
+  }
+  if (classified.kind === "statements") {
+    return {
+      target: {
+        kind: "statements",
+        bodyStmts: classified.stmts,
+        params,
+        declaration,
+        resolvedSymbol,
+      },
+    };
+  }
+  if (classified.kind === "statementsWithReturn") {
+    return {
+      target: {
+        kind: "statementsWithReturn",
+        bodyStmts: classified.stmts,
+        returnExpr: classified.returnExpr,
+        params,
+        declaration,
+        resolvedSymbol,
+      },
+    };
+  }
+  return {
+    target: { kind: "expression", bodyExpr: classified.expr, params, declaration, resolvedSymbol },
+  };
+}
 
 function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): InlineTargetResult {
   const symbol = checker.getSymbolAtLocation(node.expression);
@@ -67,40 +124,7 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
   for (const decl of declarations) {
     if (ts.isFunctionDeclaration(decl)) {
       if (!hasInlineTag(decl)) continue;
-      const classified = classifyBody(decl);
-      if (!classified) {
-        // Empty body: treat as statement target with zero statements.
-        // ExpressionStatement handler erases silently; expression handler rejects.
-        return {
-          target: {
-            kind: "statements",
-            bodyStmts: [],
-            params: decl.parameters,
-            declaration: decl,
-            resolvedSymbol: resolved,
-          },
-        };
-      }
-      if (classified.kind === "statements") {
-        return {
-          target: {
-            kind: "statements",
-            bodyStmts: classified.stmts,
-            params: decl.parameters,
-            declaration: decl,
-            resolvedSymbol: resolved,
-          },
-        };
-      }
-      return {
-        target: {
-          kind: "expression",
-          bodyExpr: classified.expr,
-          params: decl.parameters,
-          declaration: decl,
-          resolvedSymbol: resolved,
-        },
-      };
+      return makeTargetResult(classifyBody(decl), decl.parameters, decl, resolved);
     }
 
     if (ts.isVariableDeclaration(decl) && decl.initializer) {
@@ -110,38 +134,7 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
 
       const init = decl.initializer;
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
-        const classified = classifyBody(init);
-        if (!classified) {
-          return {
-            target: {
-              kind: "statements",
-              bodyStmts: [],
-              params: init.parameters,
-              declaration: decl,
-              resolvedSymbol: resolved,
-            },
-          };
-        }
-        if (classified.kind === "statements") {
-          return {
-            target: {
-              kind: "statements",
-              bodyStmts: classified.stmts,
-              params: init.parameters,
-              declaration: decl,
-              resolvedSymbol: resolved,
-            },
-          };
-        }
-        return {
-          target: {
-            kind: "expression",
-            bodyExpr: classified.expr,
-            params: init.parameters,
-            declaration: decl,
-            resolvedSymbol: resolved,
-          },
-        };
+        return makeTargetResult(classifyBody(init), init.parameters, decl, resolved);
       }
     }
   }
@@ -175,11 +168,7 @@ function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeCheck
   return count;
 }
 
-function isParamWritten(
-  body: ts.Expression,
-  paramSymbol: ts.Symbol,
-  checker: ts.TypeChecker,
-): boolean {
+function isParamWritten(body: ts.Node, paramSymbol: ts.Symbol, checker: ts.TypeChecker): boolean {
   let written = false;
   function visit(n: ts.Node): void {
     if (written) return;
@@ -214,16 +203,13 @@ function canInline(
 
   if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
 
-  // Reject recursion: body references the function itself
   if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
     return "recursive functions cannot be inlined";
 
   for (let i = 0; i < params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
     if (!paramSymbol) return "parameter symbol could not be resolved";
-    // Reject if any reference to this param is a write (assignment inside body)
     if (isParamWritten(bodyExpr, paramSymbol, checker)) return "parameter is written inside body";
-    // Reject side-effect duplication: param used >1 times with side-effecting arg
     const usageCount = countReferences(bodyExpr, paramSymbol, checker);
     if (usageCount > 1 && hasSideEffects(callNode.arguments[i]))
       return "argument with side effects is used multiple times";
@@ -308,7 +294,7 @@ function substituteParams(
     if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
     const id = n as tstl.Identifier;
     const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
-    return mapped ? tstl.cloneNode(mapped) : n;
+    return mapped ? tstl.cloneNode(mapped) : undefined;
   });
 }
 
@@ -403,10 +389,6 @@ export function mapLuaStatements(
         const exprStmt = stmt as tstl.ExpressionStatement;
         return tstl.createExpressionStatement(recurse(exprStmt.expression));
       }
-      case tstl.SyntaxKind.GotoStatement:
-      case tstl.SyntaxKind.LabelStatement:
-      case tstl.SyntaxKind.BreakStatement:
-        return tstl.cloneNode(stmt);
       default:
         return tstl.cloneNode(stmt);
     }
@@ -434,53 +416,50 @@ function someLuaIdentifier(
   node: tstl.Expression,
   predicate: (symbolId: tstl.SymbolId) => boolean,
 ): boolean {
+  const some = (n: tstl.Expression) => someLuaIdentifier(n, predicate);
   if (node.kind === tstl.SyntaxKind.Identifier) {
     const symbolId = (node as tstl.Identifier).symbolId;
     return symbolId !== undefined && predicate(symbolId);
   }
-  return luaExprChildren(node).some((child) => someLuaIdentifier(child, predicate));
+  switch (node.kind) {
+    case tstl.SyntaxKind.BinaryExpression: {
+      const bin = node as tstl.BinaryExpression;
+      return some(bin.left) || some(bin.right);
+    }
+    case tstl.SyntaxKind.UnaryExpression:
+      return some((node as tstl.UnaryExpression).operand);
+    case tstl.SyntaxKind.CallExpression: {
+      const call = node as tstl.CallExpression;
+      return some(call.expression) || call.params.some(some);
+    }
+    case tstl.SyntaxKind.MethodCallExpression: {
+      const method = node as tstl.MethodCallExpression;
+      return some(method.prefixExpression) || method.params.some(some);
+    }
+    case tstl.SyntaxKind.TableIndexExpression: {
+      const tbl = node as tstl.TableIndexExpression;
+      return some(tbl.table) || some(tbl.index);
+    }
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return some((node as tstl.ParenthesizedExpression).expression);
+    case tstl.SyntaxKind.TableExpression:
+      return (node as tstl.TableExpression).fields.some(
+        (f) => some(f.value) || (f.key !== undefined && some(f.key)),
+      );
+    case tstl.SyntaxKind.ConditionalExpression: {
+      const cond = node as tstl.ConditionalExpression;
+      return some(cond.condition) || some(cond.whenTrue) || some(cond.whenFalse);
+    }
+    default:
+      return false;
+  }
 }
 
 function collectSymbolIds(node: tstl.Expression, ids: Set<tstl.SymbolId>): void {
   someLuaIdentifier(node, (id) => {
     ids.add(id);
-    return false; // keep walking
+    return false;
   });
-}
-
-function luaExprChildren(node: tstl.Expression): tstl.Expression[] {
-  switch (node.kind) {
-    case tstl.SyntaxKind.BinaryExpression: {
-      const bin = node as tstl.BinaryExpression;
-      return [bin.left, bin.right];
-    }
-    case tstl.SyntaxKind.UnaryExpression:
-      return [(node as tstl.UnaryExpression).operand];
-    case tstl.SyntaxKind.CallExpression: {
-      const call = node as tstl.CallExpression;
-      return [call.expression, ...call.params];
-    }
-    case tstl.SyntaxKind.MethodCallExpression: {
-      const method = node as tstl.MethodCallExpression;
-      return [method.prefixExpression, ...method.params];
-    }
-    case tstl.SyntaxKind.TableIndexExpression: {
-      const tbl = node as tstl.TableIndexExpression;
-      return [tbl.table, tbl.index];
-    }
-    case tstl.SyntaxKind.ParenthesizedExpression:
-      return [(node as tstl.ParenthesizedExpression).expression];
-    case tstl.SyntaxKind.TableExpression:
-      return (node as tstl.TableExpression).fields.flatMap((f) =>
-        f.key !== undefined ? [f.value, f.key] : [f.value],
-      );
-    case tstl.SyntaxKind.ConditionalExpression: {
-      const cond = node as tstl.ConditionalExpression;
-      return [cond.condition, cond.whenTrue, cond.whenFalse];
-    }
-    default:
-      return [];
-  }
 }
 
 function needsParentheses(node: tstl.Expression): boolean {
@@ -503,22 +482,48 @@ function createInlineWarning(node: ts.CallExpression, reason: string): ts.Diagno
   };
 }
 
-function hasLinearControlFlow(stmts: readonly ts.Statement[]): true | string {
+function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false): true | string {
   for (const stmt of stmts) {
     if (ts.isReturnStatement(stmt)) return "early return in body";
-    if (ts.isBreakStatement(stmt)) return "break in body";
-    if (ts.isContinueStatement(stmt)) return "continue in body";
-    // Per CONTEXT.md: do NOT recurse into if/while/for blocks
+    // break/continue inside a loop are scoped to that loop, not to the surrounding
+    // do...end inline wrapper in Lua, so only reject them at the top level.
+    if (!loopBody) {
+      if (ts.isBreakStatement(stmt)) return "break in body";
+      if (ts.isContinueStatement(stmt)) return "continue in body";
+    }
+    // Recurse into nested blocks: a return/break/continue inside an if/while/for
+    // becomes a return/break/continue inside a do...end in Lua, which returns from
+    // the enclosing function rather than just the inlined block, changing semantics.
+    if (ts.isIfStatement(stmt)) {
+      const thenResult = hasLinearControlFlow([stmt.thenStatement], loopBody);
+      if (thenResult !== true) return thenResult;
+      if (stmt.elseStatement) {
+        const elseResult = hasLinearControlFlow([stmt.elseStatement], loopBody);
+        if (elseResult !== true) return elseResult;
+      }
+    } else if (ts.isWhileStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isForStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isForInStatement(stmt) || ts.isForOfStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isBlock(stmt)) {
+      const blockResult = hasLinearControlFlow(stmt.statements, loopBody);
+      if (blockResult !== true) return blockResult;
+    }
   }
   return true;
 }
 
 function canInlineStatements(
-  target: StatementInlineTarget,
+  target: StatementInlineTarget | ReturnValueInlineTarget,
   callNode: ts.CallExpression,
-  _checker: ts.TypeChecker,
+  checker: ts.TypeChecker,
 ): true | string {
-  const { bodyStmts, params, declaration } = target;
+  const { bodyStmts, params, declaration, resolvedSymbol } = target;
 
   for (const param of params) {
     if (param.dotDotDotToken) return "rest parameters are not supported";
@@ -531,14 +536,77 @@ function canInlineStatements(
 
   if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
 
+  for (const stmt of bodyStmts) {
+    if (countReferences(stmt, resolvedSymbol, checker) > 0)
+      return "recursive functions cannot be inlined";
+  }
+
+  // For return-value targets, also check the return expression for recursion and param writes
+  if (target.kind === "statementsWithReturn") {
+    if (countReferences(target.returnExpr, resolvedSymbol, checker) > 0)
+      return "recursive functions cannot be inlined";
+  }
+
+  for (const param of params) {
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
+    if (!paramSymbol) return "parameter symbol could not be resolved";
+    for (const stmt of bodyStmts) {
+      if (isParamWritten(stmt, paramSymbol, checker)) return "parameter is written inside body";
+    }
+    if (target.kind === "statementsWithReturn") {
+      if (isParamWritten(target.returnExpr, paramSymbol, checker))
+        return "parameter is written inside body";
+    }
+  }
+
+  // For statementsWithReturn: pass only pre-return statements to hasLinearControlFlow.
+  // The terminal return is NOT in bodyStmts, so no early-return check needed for it.
   const controlFlow = hasLinearControlFlow(bodyStmts);
   if (controlFlow !== true) return controlFlow;
 
   return true;
 }
 
-// TSTL ScopeType.Function = 2 (not part of public API, using numeric value)
-const SCOPE_TYPE_FUNCTION = 2;
+interface ParamMapResult {
+  tempDecls: tstl.VariableDeclarationStatement[];
+  paramMap: Map<tstl.SymbolId, tstl.Expression>;
+}
+
+/** Build temp-var declarations and a symbolId→expression map for each call argument.
+ *  Returns undefined if any param symbol or Lua symbolId cannot be resolved. */
+function buildParamMap(
+  params: readonly ts.ParameterDeclaration[],
+  callArgs: ts.NodeArray<ts.Expression>,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): ParamMapResult | undefined {
+  const tempDecls: tstl.VariableDeclarationStatement[] = [];
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  for (let i = 0; i < params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) return undefined;
+    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    if (paramSymbolId === undefined) return undefined;
+    const luaArg = context.transformExpression(callArgs[i]);
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
+    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
+  }
+  return { tempDecls, paramMap };
+}
+
+/** Transform body statements inside a fresh function scope so locals produce `local` in Lua. */
+function transformBodyStatements(
+  bodyStmts: readonly ts.Statement[],
+  declaration: ts.Node,
+  context: tstl.TransformationContext,
+): tstl.Statement[] {
+  context.pushScope(ScopeType.Function, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  context.popScope();
+  return luaBody;
+}
 
 function buildDoEndBlock(
   target: StatementInlineTarget,
@@ -548,36 +616,16 @@ function buildDoEndBlock(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  // 1. Transform arguments and create temp identifiers
-  const tempDecls: tstl.VariableDeclarationStatement[] = [];
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
 
-  for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return undefined;
-    const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) return undefined;
-
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
-    tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
-    paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
-  }
-
-  // 2. Transform body statements via TSTL in a function scope so that
-  //    local variable declarations produce `local` in Lua (not global assignments).
-  context.pushScope(SCOPE_TYPE_FUNCTION, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
 
   const substituted = substituteParamsInStatements(luaBody, paramMap);
 
-  // 3. Wrap in do...end
-  const doBlock = tstl.createDoStatement(substituted);
-
-  // 4. Return temp declarations + do...end
-  return [...tempDecls, doBlock];
+  return [...tempDecls, tstl.createDoStatement(substituted)];
 }
 
 function handleCallExpression(
@@ -593,10 +641,18 @@ function handleCallExpression(
   }
   const { target } = result;
 
-  if (target.kind === "statements") {
-    // Skip diagnostic if parent is ExpressionStatement -- the statement-level handler
-    // already emits the appropriate diagnostic or inlines. This prevents double diagnostics.
-    if (!ts.isExpressionStatement(node.parent)) {
+  if (target.kind === "statements" || target.kind === "statementsWithReturn") {
+    // Suppress when the statement-level handler owns the diagnostic for this call site:
+    //   - ExpressionStatement parent → handleExpressionStatement handles it
+    //   - VariableDeclaration parent → handleVariableStatement handles it (statementsWithReturn only)
+    //   - ReturnStatement parent → handleReturnStatement handles it (statementsWithReturn only)
+    // NOTE: handleVariableStatement and handleReturnStatement only handle statementsWithReturn
+    // targets, so suppress VariableDeclaration/ReturnStatement parents only for that target kind.
+    const parentOwned =
+      ts.isExpressionStatement(node.parent) ||
+      (target.kind === "statementsWithReturn" &&
+        (ts.isVariableDeclaration(node.parent) || ts.isReturnStatement(node.parent)));
+    if (!parentOwned) {
       context.diagnostics.push(
         createInlineWarning(
           node,
@@ -659,6 +715,402 @@ function handleCallExpression(
   return substituted;
 }
 
+function buildVarDeclInline(
+  nameIdent: ts.Identifier,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  const { bodyStmts, params, declaration } = target;
+
+  // Allocate a fresh Lua symbolId for the result variable. We cannot use
+  // context.symbolIdMaps.get() here because TSTL hasn't transformed this
+  // VariableStatement yet — the result symbol has no Lua symbolId assigned.
+  const resultSymbolId = context.nextSymbolId();
+  const resultIdent = tstl.createIdentifier(nameIdent.text, undefined, resultSymbolId);
+  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
+
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
+
+  // Assign the return expression to the result variable inside do...end.
+  const assignResult = tstl.createAssignmentStatement(
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymbolId)],
+    [substitutedReturn],
+  );
+
+  return [resultDecl, ...tempDecls, tstl.createDoStatement([...substitutedBody, assignResult])];
+}
+
+function buildObjectDestructureInline(
+  pattern: ts.ObjectBindingPattern,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  // Reject rest elements — too complex to support.
+  for (const element of pattern.elements) {
+    if (element.dotDotDotToken) return undefined;
+    // Only simple identifier bindings are supported (no nested destructuring).
+    if (!ts.isIdentifier(element.name)) return undefined;
+  }
+
+  const { bodyStmts, params, declaration } = target;
+
+  // Generate fresh result identifier: ____inline_result_N
+  const resultSymId = context.nextSymbolId();
+  const resultIdent = tstl.createIdentifier(
+    `____inline_result_${resultSymId}`,
+    undefined,
+    resultSymId,
+  );
+  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
+
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
+
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  // Transform and substitute the return expression, then assign to result ident inside do...end.
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
+
+  const assignResult = tstl.createAssignmentStatement(
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
+    [substitutedReturn],
+  );
+
+  const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+  // Build field-access declarations for each binding element.
+  // `const { a: myA } = foo(x)` — key is `a`, local is `myA`.
+  const fieldDecls: tstl.VariableDeclarationStatement[] = [];
+  for (const element of pattern.elements) {
+    const bindingName = element.name as ts.Identifier;
+    // propertyName is defined for renamed bindings (a: myA); otherwise use element.name as key.
+    const keyNode = element.propertyName ?? element.name;
+    if (!ts.isIdentifier(keyNode)) return undefined;
+
+    // The binding symbol hasn't been transformed yet (handler intercepts before TSTL),
+    // so allocate a fresh symbolId for it.
+    const bindingSymId = context.nextSymbolId();
+    const localIdent = tstl.createIdentifier(bindingName.text, undefined, bindingSymId);
+
+    const fieldAccess = tstl.createTableIndexExpression(
+      tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
+      tstl.createStringLiteral(keyNode.text),
+    );
+
+    fieldDecls.push(tstl.createVariableDeclarationStatement([localIdent], [fieldAccess]));
+  }
+
+  return [resultDecl, ...tempDecls, doEnd, ...fieldDecls];
+}
+
+function buildArrayDestructureInline(
+  pattern: ts.ArrayBindingPattern,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  // Only handle simple binding elements (no rest, no nested patterns, no omitted elements).
+  for (const element of pattern.elements) {
+    if (ts.isOmittedExpression(element)) return undefined;
+    if (element.dotDotDotToken) return undefined;
+    if (!ts.isIdentifier(element.name)) return undefined;
+  }
+
+  const { bodyStmts, params, declaration } = target;
+
+  // Generate fresh result identifier: ____inline_result_N
+  const resultSymId = context.nextSymbolId();
+  const resultIdent = tstl.createIdentifier(
+    `____inline_result_${resultSymId}`,
+    undefined,
+    resultSymId,
+  );
+  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
+
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
+
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  // Transform and substitute the return expression, then assign to result ident inside do...end.
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
+
+  const assignResult = tstl.createAssignmentStatement(
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
+    [substitutedReturn],
+  );
+
+  const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+  // Detect LuaMultiReturn return type: if the function returns LuaMultiReturn, no unpack needed.
+  const signature = checker.getResolvedSignature(callNode);
+  const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
+  const isMultiReturn = returnType?.symbol?.name === "LuaMultiReturn";
+
+  // Build binding element identifiers (fresh symbolIds since TSTL hasn't processed them yet).
+  const bindingIdents: tstl.Identifier[] = pattern.elements
+    .filter((e): e is ts.BindingElement => !ts.isOmittedExpression(e))
+    .map((element) => {
+      const bindingSymId = context.nextSymbolId();
+      return tstl.createIdentifier((element.name as ts.Identifier).text, undefined, bindingSymId);
+    });
+
+  if (isMultiReturn) {
+    // LuaMultiReturn: emit `a, b = <resultIdent>` (multi-left assignment, no unpack).
+    const assignStmt = tstl.createAssignmentStatement(bindingIdents, [
+      tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
+    ]);
+    return [resultDecl, ...tempDecls, doEnd, assignStmt];
+  }
+
+  // Plain array: emit `local a, b = unpack(resultId, 1, N)`.
+  const unpackCall = tstl.createCallExpression(tstl.createIdentifier("unpack"), [
+    tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
+    tstl.createNumericLiteral(1),
+    tstl.createNumericLiteral(pattern.elements.length),
+  ]);
+
+  return [
+    resultDecl,
+    ...tempDecls,
+    doEnd,
+    tstl.createVariableDeclarationStatement(bindingIdents, [unpackCall]),
+  ];
+}
+
+function handleVariableStatement(
+  node: ts.VariableStatement,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  const decls = node.declarationList.declarations;
+  // Multi-declaration statements (const a = 1, b = 2) are not handled here.
+  if (decls.length !== 1) return undefined;
+
+  const decl = decls[0];
+  // Only handle call-expression initializers.
+  if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
+
+  const callNode = decl.initializer;
+
+  const result = getInlineTarget(callNode, checker);
+  if (!result) return undefined;
+  if ("reason" in result) {
+    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    return undefined;
+  }
+
+  const { target } = result;
+
+  // Only handle statementsWithReturn targets here.
+  // expression-body targets are handled by the existing CallExpression visitor.
+  // statements (void-body) targets at var-decl sites fall through to superTransformStatements.
+  if (target.kind !== "statementsWithReturn") return undefined;
+
+  const canInlineResult = canInlineStatements(target, callNode, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    return undefined;
+  }
+
+  // Cross-module free-variable check (mirrors handleExpressionStatement statement branch).
+  const isCrossModule =
+    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+  if (
+    isCrossModule &&
+    hasCrossModuleFreeVariable(
+      [...target.bodyStmts, target.returnExpr],
+      target.params,
+      target.declaration,
+      checker,
+    )
+  ) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+    );
+    return undefined;
+  }
+
+  // Plain identifier binding: const r = foo(x)
+  if (ts.isIdentifier(decl.name)) {
+    return buildVarDeclInline(decl.name, target, callNode, checker, context);
+  }
+
+  // Object destructuring: const { a, b } = foo(x)
+  if (ts.isObjectBindingPattern(decl.name)) {
+    return buildObjectDestructureInline(decl.name, target, callNode, checker, context);
+  }
+
+  // Array destructuring: const [a, b] = foo(x)
+  if (ts.isArrayBindingPattern(decl.name)) {
+    return buildArrayDestructureInline(decl.name, target, callNode, checker, context);
+  }
+
+  return undefined;
+}
+
+function buildReturnSiteInline(
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  const { bodyStmts, params, declaration } = target;
+
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+
+  const substitutedReturn = substituteParams(
+    context.transformExpression(target.returnExpr),
+    paramMap,
+  );
+
+  // Flat emission: arg temps + body statements + return (no do...end wrapper needed).
+  return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
+}
+
+function handleReturnStatement(
+  node: ts.ReturnStatement,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
+
+  const callNode = node.expression;
+
+  const result = getInlineTarget(callNode, checker);
+  if (!result) return undefined;
+  if ("reason" in result) {
+    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    return undefined;
+  }
+
+  const { target } = result;
+
+  // Only handle statementsWithReturn targets here.
+  if (target.kind !== "statementsWithReturn") return undefined;
+
+  const canInlineResult = canInlineStatements(target, callNode, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+    return undefined;
+  }
+
+  // Cross-module free-variable check (mirrors handleExpressionStatement statement branch).
+  const isCrossModule =
+    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+  if (
+    isCrossModule &&
+    hasCrossModuleFreeVariable(
+      [...target.bodyStmts, target.returnExpr],
+      target.params,
+      target.declaration,
+      checker,
+    )
+  ) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+    );
+    return undefined;
+  }
+
+  return buildReturnSiteInline(target, callNode, checker, context);
+}
+
+/**
+ * Check whether any identifier in the given TypeScript nodes references a symbol that is
+ * declared inside `sourceDeclaration`'s source file but outside `sourceDeclaration` itself
+ * (i.e., a free variable from the source module), and is not one of the given params.
+ *
+ * Returns true if a cross-module free variable is found.
+ */
+function hasCrossModuleFreeVariable(
+  nodes: readonly ts.Node[],
+  params: readonly ts.ParameterDeclaration[],
+  sourceDeclaration: ts.Node,
+  checker: ts.TypeChecker,
+): boolean {
+  const sourceFile = sourceDeclaration.getSourceFile();
+  const paramSymbols = new Set(
+    params
+      .map((p) => checker.getSymbolAtLocation(p.name))
+      .filter((s): s is ts.Symbol => s !== undefined),
+  );
+
+  let found = false;
+
+  function walk(node: ts.Node): void {
+    if (found) return;
+    if (ts.isIdentifier(node)) {
+      const sym = checker.getSymbolAtLocation(node);
+      if (sym && !paramSymbols.has(sym)) {
+        const resolved = sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym;
+        const decls = resolved.getDeclarations();
+        if (decls) {
+          for (const decl of decls) {
+            if (decl.getSourceFile() === sourceFile && !isDescendant(decl, sourceDeclaration)) {
+              found = true;
+              return;
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, walk);
+  }
+
+  for (const node of nodes) {
+    walk(node);
+    if (found) break;
+  }
+  return found;
+}
+
+/** Returns true if `node` is a descendant of (or equal to) `ancestor`. */
+function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
+  let current: ts.Node | undefined = node;
+  while (current !== undefined) {
+    if (current === ancestor) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 function handleExpressionStatement(
   node: ts.ExpressionStatement,
   checker: ts.TypeChecker,
@@ -677,14 +1129,65 @@ function handleExpressionStatement(
   const { target } = result;
 
   if (target.kind === "expression") {
-    // Delegate to existing expression handler and wrap result in ExpressionStatement
-    const inlined = handleCallExpression(callNode, checker, context);
-    if (inlined === undefined) return undefined;
-    return [tstl.createExpressionStatement(inlined)];
+    const canInlineResult = canInline(target, callNode, checker);
+    if (canInlineResult !== true) {
+      context.diagnostics.push(createInlineWarning(callNode, canInlineResult));
+      return undefined;
+    }
+
+    const luaBody = context.transformExpression(target.bodyExpr);
+
+    const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+    for (let i = 0; i < target.params.length; i++) {
+      const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+      if (!paramSymbol) return undefined;
+      const symbolId = context.symbolIdMaps.get(paramSymbol);
+      if (symbolId === undefined) return undefined;
+      const luaArg = context.transformExpression(callNode.arguments[i]);
+      paramMap.set(symbolId, luaArg);
+    }
+
+    // Cross-module check: expression-body only; statement-body cross-module is blocked separately.
+    const isCrossModule =
+      callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+    if (isCrossModule) {
+      const paramIds = new Set(paramMap.keys());
+      if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
+        context.diagnostics.push(
+          createInlineWarning(
+            callNode,
+            "cross-module function references non-parameter identifiers",
+          ),
+        );
+        return undefined;
+      }
+    }
+
+    const substituted = substituteParams(luaBody, paramMap);
+
+    if (isCrossModule) {
+      const callerIds = new Set<tstl.SymbolId>();
+      for (const arg of paramMap.values()) {
+        collectSymbolIds(arg, callerIds);
+      }
+      if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
+        return undefined;
+      }
+    }
+
+    const result2 = needsParentheses(substituted)
+      ? tstl.createParenthesizedExpression(substituted)
+      : substituted;
+    return [tstl.createExpressionStatement(result2)];
   }
 
-  // target.kind === "statements"
-  // Empty body: silently erase (no do...end, no output)
+  if (target.kind === "statementsWithReturn") {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "return-value function called at void site"),
+    );
+    return undefined;
+  }
+
   if (target.bodyStmts.length === 0) return [];
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
@@ -693,12 +1196,15 @@ function handleExpressionStatement(
     return undefined;
   }
 
-  // Cross-module check: reject statement bodies with free variables
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
-  if (isCrossModule) {
+
+  if (
+    isCrossModule &&
+    hasCrossModuleFreeVariable(target.bodyStmts, target.params, target.declaration, checker)
+  ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module multi-statement inline is not supported"),
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
     );
     return undefined;
   }
@@ -707,14 +1213,18 @@ function handleExpressionStatement(
 }
 
 export const createVisitors: RuleFactory = (checker, _config) => {
-  // Returns undefined to signal "not handled" to the merge wrapper in index.ts;
-  // the strict tstl.Visitors type doesn't model this protocol, so we cast here
+  // Returning undefined signals "not handled" to the merge wrapper; the strict
+  // tstl.Visitors type doesn't model this protocol, so we cast here.
   type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
   const visitors: Record<number, LooseVisitor> = {
     [ts.SyntaxKind.CallExpression]: (node, context) =>
       handleCallExpression(node as ts.CallExpression, checker, context),
     [ts.SyntaxKind.ExpressionStatement]: (node, context) =>
       handleExpressionStatement(node as ts.ExpressionStatement, checker, context),
+    [ts.SyntaxKind.VariableStatement]: (node, context) =>
+      handleVariableStatement(node as ts.VariableStatement, checker, context),
+    [ts.SyntaxKind.ReturnStatement]: (node, context) =>
+      handleReturnStatement(node as ts.ReturnStatement, checker, context),
   };
   return visitors as tstl.Visitors;
 };

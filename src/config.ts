@@ -27,13 +27,19 @@ export interface ConstantDef {
 export interface ConditionalCompilationConfig {
   enabled: boolean;
   constants: Record<string, ConstantDef>;
+  strict?: boolean;
+}
+
+export interface InlineConfig {
+  enabled?: boolean;
+  strict?: boolean;
 }
 
 export interface RulesConfig {
   "conditional-compilation": boolean | ConditionalCompilationConfig;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
-  inline: boolean;
+  inline: boolean | InlineConfig;
   localizer: boolean | LocalizerConfig;
   "debug-strip": boolean | DebugStripConfig;
 }
@@ -43,6 +49,7 @@ export type InterpreterTarget = "puc" | "luajit";
 export interface PluginConfig {
   rules: RulesConfig;
   target?: InterpreterTarget;
+  strict?: boolean;
 }
 
 const DEFAULT_DEBUG_STRIP: DebugStripConfig = {
@@ -111,6 +118,18 @@ export function resolveConditionalCompilationConfig(
   return resolved;
 }
 
+export function resolveInlineConfig(value: boolean | InlineConfig | undefined): {
+  enabled: boolean;
+  strict: boolean;
+} {
+  if (value === false) return { enabled: false, strict: false };
+  if (value === undefined || value === true) return { enabled: true, strict: false };
+  return {
+    enabled: value.enabled !== false,
+    strict: value.strict === true,
+  };
+}
+
 export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boolean {
   const value = config[rule];
   if (typeof value === "boolean") return value;
@@ -125,6 +144,7 @@ function isRecord(val: unknown): val is Record<string, unknown> {
 
 const STRUCTURED_RULES: ReadonlySet<string> = new Set([
   "conditional-compilation",
+  "inline",
   "localizer",
   "debug-strip",
 ]);
@@ -148,8 +168,9 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   }
 
   const target = isInterpreterTarget(options?.target) ? options.target : undefined;
+  const strict = options?.strict === true;
 
-  return { rules, target };
+  return { rules, target, strict };
 }
 
 const INTERPRETER_TARGETS: ReadonlySet<string> = new Set(["puc", "luajit"]);
