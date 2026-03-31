@@ -6,12 +6,23 @@ import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
 
-interface InlineTarget {
+interface ExpressionInlineTarget {
+  kind: "expression";
   bodyExpr: ts.Expression;
   params: readonly ts.ParameterDeclaration[];
   declaration: ts.Node;
   resolvedSymbol: ts.Symbol;
 }
+
+interface StatementInlineTarget {
+  kind: "statements";
+  bodyStmts: readonly ts.Statement[];
+  params: readonly ts.ParameterDeclaration[];
+  declaration: ts.Node;
+  resolvedSymbol: ts.Symbol;
+}
+
+type InlineTarget = ExpressionInlineTarget | StatementInlineTarget;
 
 function hasInlineTag(node: ts.Node): boolean {
   return ts.getJSDocTags(node).some((tag) => tag.tagName.text === "inline");
@@ -57,10 +68,22 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
     if (ts.isFunctionDeclaration(decl)) {
       if (!hasInlineTag(decl)) continue;
       const classified = classifyBody(decl);
-      if (!classified || classified.kind === "statements")
+      if (!classified)
         return { reason: "body must be a single return statement or arrow expression" };
+      if (classified.kind === "statements") {
+        return {
+          target: {
+            kind: "statements",
+            bodyStmts: classified.stmts,
+            params: decl.parameters,
+            declaration: decl,
+            resolvedSymbol: resolved,
+          },
+        };
+      }
       return {
         target: {
+          kind: "expression",
           bodyExpr: classified.expr,
           params: decl.parameters,
           declaration: decl,
@@ -77,10 +100,22 @@ function getInlineTarget(node: ts.CallExpression, checker: ts.TypeChecker): Inli
       const init = decl.initializer;
       if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
         const classified = classifyBody(init);
-        if (!classified || classified.kind === "statements")
+        if (!classified)
           return { reason: "body must be a single return statement or arrow expression" };
+        if (classified.kind === "statements") {
+          return {
+            target: {
+              kind: "statements",
+              bodyStmts: classified.stmts,
+              params: init.parameters,
+              declaration: decl,
+              resolvedSymbol: resolved,
+            },
+          };
+        }
         return {
           target: {
+            kind: "expression",
             bodyExpr: classified.expr,
             params: init.parameters,
             declaration: decl,
@@ -142,7 +177,7 @@ function isParamWritten(
 }
 
 function canInline(
-  target: InlineTarget,
+  target: ExpressionInlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
 ): true | string {
@@ -461,6 +496,18 @@ function handleCallExpression(
     return undefined;
   }
   const { target } = result;
+
+  if (target.kind === "statements") {
+    context.diagnostics.push(
+      createInlineWarning(
+        node,
+        "multi-statement body cannot be inlined at expression position" +
+          " (only statement-position calls supported)",
+      ),
+    );
+    return undefined;
+  }
+
   const canInlineResult = canInline(target, node, checker);
   if (canInlineResult !== true) {
     context.diagnostics.push(createInlineWarning(node, canInlineResult));
@@ -512,6 +559,35 @@ function handleCallExpression(
   return substituted;
 }
 
+function handleExpressionStatement(
+  node: ts.ExpressionStatement,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  if (!ts.isCallExpression(node.expression)) return undefined;
+  const callNode = node.expression;
+
+  const result = getInlineTarget(callNode, checker);
+  if (!result) return undefined;
+  if ("reason" in result) {
+    context.diagnostics.push(createInlineWarning(callNode, result.reason));
+    return undefined;
+  }
+
+  const { target } = result;
+
+  if (target.kind === "expression") {
+    // Delegate to existing expression handler and wrap result in ExpressionStatement
+    const inlined = handleCallExpression(callNode, checker, context);
+    if (inlined === undefined) return undefined;
+    return [tstl.createExpressionStatement(inlined)];
+  }
+
+  // target.kind === "statements" -- Phase 5 Plan 02 will handle this
+  // For now, return undefined (not handled, falls through to default)
+  return undefined;
+}
+
 export const createVisitors: RuleFactory = (checker, _config) => {
   // Returns undefined to signal "not handled" to the merge wrapper in index.ts;
   // the strict tstl.Visitors type doesn't model this protocol, so we cast here
@@ -519,6 +595,8 @@ export const createVisitors: RuleFactory = (checker, _config) => {
   const visitors: Record<number, LooseVisitor> = {
     [ts.SyntaxKind.CallExpression]: (node, context) =>
       handleCallExpression(node as ts.CallExpression, checker, context),
+    [ts.SyntaxKind.ExpressionStatement]: (node, context) =>
+      handleExpressionStatement(node as ts.ExpressionStatement, checker, context),
   };
   return visitors as tstl.Visitors;
 };
