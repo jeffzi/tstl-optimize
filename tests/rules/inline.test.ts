@@ -1429,3 +1429,93 @@ describe("cross-module statement body: return-statement statementsWithReturn", (
     expect(lua).toContain("return scale(a)");
   });
 });
+
+describe("diagnostic messages", () => {
+  describe("rejection reasons are specific", () => {
+    it("rejects early return with specific message", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function bad(x: number): void {
+          if (x > 0) return;
+          const y = x + 1;
+        }
+        declare const a: number;
+        bad(a);
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("early return in body");
+    });
+
+    it("rejects break in body with specific message", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function bad(x: number): void {
+          break;
+        }
+        declare const a: number;
+        bad(a);
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("break in body");
+    });
+
+    it("rejects rest parameters with specific message", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function bad(...args: number[]): void {
+          const x = args[0];
+        }
+        declare const a: number;
+        bad(a);
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("rest parameters are not supported");
+    });
+  });
+
+  it("emits specific message for multi-statement call at expression position", () => {
+    const { diagnostics } = compileWithDiagnostics(`
+      /** @inline */
+      function effect(x: number): number {
+        const y = x + 1;
+        return y * 2;
+      }
+      declare const a: number;
+      const r = effect(a) + 1;
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].messageText).toContain(
+      "multi-statement body cannot be inlined at expression position",
+    );
+    expect(diagnostics[0].messageText).toContain("only statement-position calls supported");
+    expect(diagnostics[0].code).toBe(90001);
+  });
+});
+
+describe("@inline JSDoc stripping", () => {
+  it("strips @inline comment from single-expression function Lua output", () => {
+    const lua = compile(`
+      /** @inline */
+      function single(x: number) { return x + 1; }
+      declare const a: number;
+      const r = single(a);
+    `);
+    expect(lua).not.toContain("@inline");
+    expect(lua).not.toContain("---");
+  });
+
+  it("strips @inline comment from multi-statement function Lua output", () => {
+    const lua = compile(`
+      /** @inline */
+      function multi(x: number): void {
+        const y = x + 1;
+        const z = y * 2;
+      }
+      declare const a: number;
+      multi(a);
+    `);
+    expect(lua).not.toContain("@inline");
+    // The function declaration's JSDoc block (---\n-- @inline\n) must not appear
+    expect(lua).not.toContain("-- @inline");
+  });
+});
