@@ -616,11 +616,13 @@ function buildDoEndBlock(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substituted = substituteParamsInStatements(luaBody, paramMap);
 
   return [...tempDecls, tstl.createDoStatement(substituted)];
@@ -640,9 +642,17 @@ function handleCallExpression(
   const { target } = result;
 
   if (target.kind === "statements" || target.kind === "statementsWithReturn") {
-    // Suppress here when parent is ExpressionStatement: the statement-level handler owns
-    // the diagnostic for that call site, avoiding double-reporting.
-    if (!ts.isExpressionStatement(node.parent)) {
+    // Suppress when the statement-level handler owns the diagnostic for this call site:
+    //   - ExpressionStatement parent → handleExpressionStatement handles it
+    //   - VariableDeclaration parent → handleVariableStatement handles it (statementsWithReturn only)
+    //   - ReturnStatement parent → handleReturnStatement handles it (statementsWithReturn only)
+    // NOTE: handleVariableStatement and handleReturnStatement only handle statementsWithReturn
+    // targets, so suppress VariableDeclaration/ReturnStatement parents only for that target kind.
+    const parentOwned =
+      ts.isExpressionStatement(node.parent) ||
+      (target.kind === "statementsWithReturn" &&
+        (ts.isVariableDeclaration(node.parent) || ts.isReturnStatement(node.parent)));
+    if (!parentOwned) {
       context.diagnostics.push(
         createInlineWarning(
           node,
@@ -721,11 +731,12 @@ function buildVarDeclInline(
   const resultIdent = tstl.createIdentifier(nameIdent.text, undefined, resultSymbolId);
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
-
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
   const substitutedReturn = substituteParams(
@@ -767,11 +778,13 @@ function buildObjectDestructureInline(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
   // Transform and substitute the return expression, then assign to result ident inside do...end.
@@ -837,11 +850,13 @@ function buildArrayDestructureInline(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
   // Transform and substitute the return expression, then assign to result ident inside do...end.
@@ -928,6 +943,24 @@ function handleVariableStatement(
     return undefined;
   }
 
+  // Cross-module free-variable check (mirrors handleExpressionStatement statement branch).
+  const isCrossModule =
+    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+  if (
+    isCrossModule &&
+    hasCrossModuleFreeVariable(
+      [...target.bodyStmts, target.returnExpr],
+      target.params,
+      target.declaration,
+      checker,
+    )
+  ) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+    );
+    return undefined;
+  }
+
   // Plain identifier binding: const r = foo(x)
   if (ts.isIdentifier(decl.name)) {
     return buildVarDeclInline(decl.name, target, callNode, checker, context);
@@ -954,11 +987,12 @@ function buildReturnSiteInline(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
+  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
-
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
   const substitutedReturn = substituteParams(
@@ -997,7 +1031,84 @@ function handleReturnStatement(
     return undefined;
   }
 
+  // Cross-module free-variable check (mirrors handleExpressionStatement statement branch).
+  const isCrossModule =
+    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+  if (
+    isCrossModule &&
+    hasCrossModuleFreeVariable(
+      [...target.bodyStmts, target.returnExpr],
+      target.params,
+      target.declaration,
+      checker,
+    )
+  ) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
+    );
+    return undefined;
+  }
+
   return buildReturnSiteInline(target, callNode, checker, context);
+}
+
+/**
+ * Check whether any identifier in the given TypeScript nodes references a symbol that is
+ * declared inside `sourceDeclaration`'s source file but outside `sourceDeclaration` itself
+ * (i.e., a free variable from the source module), and is not one of the given params.
+ *
+ * Returns true if a cross-module free variable is found.
+ */
+function hasCrossModuleFreeVariable(
+  nodes: readonly ts.Node[],
+  params: readonly ts.ParameterDeclaration[],
+  sourceDeclaration: ts.Node,
+  checker: ts.TypeChecker,
+): boolean {
+  const sourceFile = sourceDeclaration.getSourceFile();
+  const paramSymbols = new Set(
+    params
+      .map((p) => checker.getSymbolAtLocation(p.name))
+      .filter((s): s is ts.Symbol => s !== undefined),
+  );
+
+  let found = false;
+
+  function walk(node: ts.Node): void {
+    if (found) return;
+    if (ts.isIdentifier(node)) {
+      const sym = checker.getSymbolAtLocation(node);
+      if (sym && !paramSymbols.has(sym)) {
+        const resolved = sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym;
+        const decls = resolved.getDeclarations();
+        if (decls) {
+          for (const decl of decls) {
+            if (decl.getSourceFile() === sourceFile && !isDescendant(decl, sourceDeclaration)) {
+              found = true;
+              return;
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, walk);
+  }
+
+  for (const node of nodes) {
+    walk(node);
+    if (found) break;
+  }
+  return found;
+}
+
+/** Returns true if `node` is a descendant of (or equal to) `ancestor`. */
+function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
+  let current: ts.Node | undefined = node;
+  while (current !== undefined) {
+    if (current === ancestor) return true;
+    current = current.parent;
+  }
+  return false;
 }
 
 function handleExpressionStatement(
@@ -1087,9 +1198,13 @@ function handleExpressionStatement(
 
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
-  if (isCrossModule) {
+
+  if (
+    isCrossModule &&
+    hasCrossModuleFreeVariable(target.bodyStmts, target.params, target.declaration, checker)
+  ) {
     context.diagnostics.push(
-      createInlineWarning(callNode, "cross-module multi-statement inline is not supported"),
+      createInlineWarning(callNode, "cross-module function references non-parameter identifiers"),
     );
     return undefined;
   }

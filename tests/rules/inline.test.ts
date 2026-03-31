@@ -1262,10 +1262,12 @@ describe("cross-module statement body: var-decl statementsWithReturn", () => {
         const r = compute(a);
       `,
     });
-    // Self-contained: tmp is a local, x comes from params — should be inlined
+    // Self-contained: tmp is a local, x comes from params — should be inlined.
+    // buildVarDeclInline uses the binding name (r) as the result variable, not ____inline_result_N.
     expect(diagnostics).toHaveLength(0);
     expect(lua).not.toContain("= compute(");
-    expect(lua).toMatch(/____inline_result_\d+/);
+    expect(lua).toContain("local r");
+    expect(lua).toContain("____inline_arg_0");
   });
 
   it("rejects cross-module var-decl multi-statement inline when body references free variable", () => {
