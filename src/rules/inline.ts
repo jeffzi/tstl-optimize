@@ -196,6 +196,8 @@ function checkSharedPrereqs(
   declaration: ts.Node,
 ): string | undefined {
   for (const param of params) {
+    if (ts.isObjectBindingPattern(param.name) || ts.isArrayBindingPattern(param.name))
+      return "destructuring parameters are not supported";
     if (param.dotDotDotToken) return "rest parameters are not supported";
     if (param.questionToken) return "optional parameters are not supported";
     if (param.initializer) return "default parameters are not supported";
@@ -315,7 +317,7 @@ function substituteParams(
     if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
     const id = n as tstl.Identifier;
     const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
-    return mapped ? tstl.cloneNode(mapped) : undefined;
+    return mapped ? deepCloneExpression(mapped) : undefined;
   });
 }
 
@@ -624,7 +626,8 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false):
       if (bodyResult !== true) return bodyResult;
     } else if (ts.isSwitchStatement(stmt)) {
       for (const clause of stmt.caseBlock.clauses) {
-        const clauseResult = hasLinearControlFlow(clause.statements, loopBody);
+        // break inside switch is scoped to the switch — TSTL compiles switches to if-elseif chains
+        const clauseResult = hasLinearControlFlow(clause.statements, true);
         if (clauseResult !== true) return clauseResult;
       }
     } else if (ts.isTryStatement(stmt)) {
@@ -778,38 +781,11 @@ function inlineExpressionBody(
     paramMap.set(symbolId, luaArg);
   }
 
-  const isCrossModule =
-    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
-
-  if (isCrossModule) {
-    const paramIds = new Set(paramMap.keys());
-    if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
-      context.diagnostics.push(
-        createInlineWarning(
-          callNode,
-          "cross-module function references non-parameter identifiers",
-          strict,
-        ),
-      );
-      return undefined;
-    }
+  if (rejectIfCrossModuleFreeVar(callNode, target, [target.bodyExpr], checker, context, strict)) {
+    return undefined;
   }
 
   const substituted = substituteParams(luaBody, paramMap);
-
-  // Defense-in-depth: after substitution, only caller-provided identifiers should remain
-  if (isCrossModule) {
-    const callerIds = new Set<tstl.SymbolId>();
-    for (const arg of paramMap.values()) {
-      someLuaIdentifier(arg, (id) => {
-        callerIds.add(id);
-        return false;
-      });
-    }
-    if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
-      return undefined;
-    }
-  }
 
   return needsParentheses(substituted)
     ? tstl.createParenthesizedExpression(substituted)
@@ -873,18 +849,18 @@ function buildVarDeclInline(
   const resultIdent = tstl.createIdentifier(nameIdent.text, undefined, resultSymbolId);
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  // Transform body and return expression first so ALL param symbols are registered
+  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
+  // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
-  const substitutedReturn = substituteParams(
-    context.transformExpression(target.returnExpr),
-    paramMap,
-  );
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   // Assign the return expression to the result variable inside do...end.
   const assignResult = tstl.createAssignmentStatement(
@@ -926,18 +902,18 @@ function buildDestructureShared(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  // Transform body and return expression first so ALL param symbols are registered
+  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
+  // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-  const substitutedReturn = substituteParams(
-    context.transformExpression(target.returnExpr),
-    paramMap,
-  );
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   const assignResult = tstl.createAssignmentStatement(
     [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
@@ -960,6 +936,8 @@ function buildObjectDestructureInline(
     if (element.dotDotDotToken) return undefined;
     // Only simple identifier bindings are supported (no nested destructuring).
     if (!ts.isIdentifier(element.name)) return undefined;
+    // Default initializers are not supported.
+    if (element.initializer) return undefined;
   }
 
   const shared = buildDestructureShared(target, callNode, checker, context);
@@ -1003,16 +981,15 @@ function buildArrayDestructureInline(
     if (ts.isOmittedExpression(element)) return undefined;
     if (element.dotDotDotToken) return undefined;
     if (!ts.isIdentifier(element.name)) return undefined;
+    if (element.initializer) return undefined;
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context);
-  if (!shared) return undefined;
-  const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
-
-  // Detect LuaMultiReturn return type: if the function returns LuaMultiReturn, no unpack needed.
+  // Detect LuaMultiReturn return type before choosing an expansion strategy.
   const signature = checker.getResolvedSignature(callNode);
   const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
-  const isMultiReturn = returnType?.symbol?.name === "LuaMultiReturn";
+  const isMultiReturn =
+    returnType?.symbol?.name === "LuaMultiReturn" ||
+    returnType?.aliasSymbol?.name === "LuaMultiReturn";
 
   // Build binding element identifiers (fresh symbolIds since TSTL hasn't processed them yet).
   const bindingIdents: tstl.Identifier[] = pattern.elements
@@ -1023,12 +1000,61 @@ function buildArrayDestructureInline(
     });
 
   if (isMultiReturn) {
-    // LuaMultiReturn: emit `a, b = <resultIdent>` (multi-left assignment, no unpack).
-    const assignStmt = tstl.createAssignmentStatement(bindingIdents, [
-      tstl.createIdentifier(resultIdent.text, undefined, resultSymId),
-    ]);
-    return [resultDecl, ...tempDecls, doEnd, assignStmt];
+    // MultiReturn needs N result variables — a single temp loses all values after the first.
+    // Bypass buildDestructureShared and handle expansion directly.
+    const { bodyStmts, params, declaration } = target;
+
+    // Allocate N result variables matching destructuring width.
+    const resultIdents: tstl.Identifier[] = [];
+    const resultDecls: tstl.VariableDeclarationStatement[] = [];
+    for (let i = 0; i < pattern.elements.length; i++) {
+      const symId = context.nextSymbolId();
+      const ident = tstl.createIdentifier(`____inline_result_${symId}`, undefined, symId);
+      resultIdents.push(ident);
+      resultDecls.push(tstl.createVariableDeclarationStatement([ident]));
+    }
+
+    // Transform body AND the return statement inside a function scope so TSTL
+    // handles $multi correctly ($multi must appear in return-statement context)
+    // and all param symbols get registered in context.symbolIdMaps.
+    const returnStmt = target.returnExpr.parent as ts.ReturnStatement;
+    context.pushScope(FUNCTION_SCOPE, declaration);
+    const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+    const luaReturnStmts = context.transformStatements(returnStmt);
+    context.popScope();
+    const luaReturn = luaReturnStmts.find(
+      (s): s is tstl.ReturnStatement => s.kind === tstl.SyntaxKind.ReturnStatement,
+    );
+    if (!luaReturn) return undefined;
+    const luaReturnExprs = luaReturn.expressions;
+
+    const mapped = buildParamMap(params, callNode.arguments, checker, context);
+    if (!mapped) return undefined;
+    const { tempDecls, paramMap } = mapped;
+
+    const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+    const substitutedReturns = luaReturnExprs.map((expr) => substituteParams(expr, paramMap));
+
+    // Multi-assignment captures all values: result_a, result_b = expr1, expr2
+    const assignResult = tstl.createAssignmentStatement(
+      resultIdents.map((id) => tstl.createIdentifier(id.text, undefined, id.symbolId)),
+      substitutedReturns,
+    );
+    const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+    // local p, q = result_a, result_b
+    const finalDecl = tstl.createVariableDeclarationStatement(
+      bindingIdents,
+      resultIdents.map((id) => tstl.createIdentifier(id.text, undefined, id.symbolId)),
+    );
+
+    return [...resultDecls, ...tempDecls, doEnd, finalDecl];
   }
+
+  // Non-MultiReturn path: use buildDestructureShared + unpack.
+  const shared = buildDestructureShared(target, callNode, checker, context);
+  if (!shared) return undefined;
+  const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 
   // Plain array: emit `local a, b = unpack(resultId, 1, N)`.
   const unpackCall = tstl.createCallExpression(tstl.createIdentifier("unpack"), [
@@ -1120,18 +1146,18 @@ function buildReturnSiteInline(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
+  // Transform body and return expression first so ALL param symbols are registered
+  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
+  // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
-  const substitutedReturn = substituteParams(
-    context.transformExpression(target.returnExpr),
-    paramMap,
-  );
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   // Flat emission: arg temps + body statements + return (no do...end wrapper needed).
   return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
@@ -1187,7 +1213,7 @@ function handleReturnStatement(
  */
 function rejectIfCrossModuleFreeVar(
   callNode: ts.CallExpression,
-  target: StatementInlineTarget | ReturnValueInlineTarget,
+  target: InlineTarget,
   nodes: readonly ts.Node[],
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,

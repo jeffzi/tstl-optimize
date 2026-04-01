@@ -465,6 +465,30 @@ describe("localizer", () => {
       expect(lua).not.toContain("local ____vel = vel[i]");
     });
 
+    it("skips written arrays when nested loop has return", () => {
+      const lua = compile(
+        [
+          "declare const vel: number[];",
+          "declare const n: number;",
+          "declare const m: number;",
+          "declare const friction: number;",
+          "declare const limit: number;",
+          "function process(vel: number[], n: number, m: number): void {",
+          "  for (const i of $range(0, n - 1)) {",
+          "    vel[i] = vel[i] * friction;",
+          "    const v = vel[i];",
+          "    for (const j of $range(0, m - 1)) {",
+          "      if (v > limit) return;",
+          "    }",
+          "  }",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      // return inside nested loop exits the entire function, skipping the write-back
+      expect(lua).not.toContain("local ____vel = vel[i]");
+    });
+
     it("does not localize when loop body has function call", () => {
       const lua = compile(
         [
