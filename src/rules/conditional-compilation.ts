@@ -107,7 +107,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
   // Rebind after guard so TypeScript narrows the type inside closures below
   const resolved = maybeResolved;
 
-  // Resolve strict: per-rule override wins over global (same D-06 precedence as inline).
+  // Resolve strict: per-rule override wins over global (same precedence as inline).
   const perRuleStrict = resolveConditionalCompilationStrict(
     config.rules["conditional-compilation"],
   );

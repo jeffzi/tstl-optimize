@@ -4,20 +4,28 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that generates faster Lua
-code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. All rules
-default to on except `conditional-compilation` and `debug-strip`, which remove code. Toggle each
-rule individually.
+code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. Each rule
+can be toggled individually. All rules default to on except `conditional-compilation` and
+`debug-strip`, which remove code and are off by default.
 
 ```typescript
-// TypeScript input                       // Lua output (with plugin)
-Math.sqrt(x)                           // x ^ 0.5
-math.floor(a) + math.floor(b)          // local ____math_floor = math.floor
-                                        // ____math_floor(a) + ____math_floor(b)
+// TypeScript input
+Math.sqrt(x)
+math.floor(a) + math.floor(b)
 /** @inline */
-function double(x: number) {            // (inlined at call sites)
+function double(x: number) {
   return x * 2;
 }
-const y = double(5);                    // local y = 5 * 2
+const y = double(5);
+```
+
+```lua
+-- Lua output (with plugin)
+x ^ 0.5
+local ____math_floor = math.floor
+____math_floor(a) + ____math_floor(b)
+-- (inlined at call sites)
+local y = 5 * 2
 ```
 
 ## Installation
@@ -108,7 +116,7 @@ const isDebug = DEBUG;                // becomes: isDebug = false
 const isWeb = PLATFORM === "web";     // becomes: isWeb = false
 ```
 
-At build time the rule reads the environment variable named in `env` and falls back to `default`
+At build time, the rule reads the environment variable named in `env` and falls back to `default`
 when the variable is unset. Supported value types: `boolean`, `number`, `string`.
 
 Beyond branch elimination, the rule **substitutes every constant reference with its literal value**
@@ -129,8 +137,8 @@ replaces bare identifiers (`DEBUG`), binary comparisons (`PLATFORM === "web"`), 
 
 ### `math-intrinsics`
 
-Replaces `Math.*` calls with inline Lua expressions, avoiding the overhead of dispatching through
-the `math` table. Skipped on LuaJIT, which already handles C calls fast.
+Replaces `Math.*` calls with inline Lua expressions and avoids the dispatch overhead of going
+through the `math` table. The rule skips LuaJIT targets, which already handle C calls efficiently.
 
 | Source | Lua output | Notes |
 | --- | --- | --- |
@@ -170,7 +178,7 @@ in a nested declaration.
 
 ### `inline`
 
-Inlines `@inline`-tagged single-expression functions at call sites. Works within the same module and
+Inlines `@inline`-tagged single-expression functions at call sites, within the same module and
 across module boundaries.
 
 ```typescript
@@ -182,7 +190,8 @@ const y = double(5); // becomes: const y = 5 * 2
 ```
 
 Cross-module inlining works for self-contained functions — bodies that reference only parameters and
-literals. Functions that capture module-scope variables are rejected with a diagnostic warning.
+literals. The rule rejects functions that capture module-scope variables and emits a diagnostic
+warning.
 
 ```typescript
 // utils.ts
@@ -328,60 +337,17 @@ Functions with a top-level early `return`, `break`, or `continue` in the body ar
 ```typescript
 /** @inline */
 function bail(x: number) { if (x > 0) return; console.log(x); }
+declare const n: number;
 bail(n); // warns: @inline ignored — early return in body
 ```
 
 #### Rule interaction
 
 Inlined `do...end` blocks are processed by subsequent rules in the pipeline. For example, if the
-inlined body calls `Math.floor(x)` three or more times, the `localizer` rule hoists a
+inlined body calls `Math.floor(x)` two or more times, the `localizer` rule hoists a
 `____math_floor` local to module scope exactly as it would for non-inlined code. Similarly,
 `math-intrinsics` rewrites `Math.*` calls inside inlined bodies. Rules apply to the fully expanded
 output — inlined code receives the same optimizations as hand-written code.
-
-#### Strict mode
-
-By default, unresolvable inline and conditional-compilation diagnostics are emitted as warnings
-(code 90001 for inline, code 90002 for conditional-compilation). Set `strict: true` at the plugin
-level to promote all optimization warnings to compilation errors, causing the TypeScript compiler to
-fail the build whenever an optimization cannot be applied:
-
-```jsonc
-{
-  "compilerOptions": {
-    "plugins": [
-      {
-        "name": "tstl-optimize",
-        "strict": true
-      }
-    ]
-  }
-}
-```
-
-Use a per-rule `strict` override to exempt specific rules from the global setting. The example below
-enables global strict but keeps inline diagnostics as warnings:
-
-```jsonc
-{
-  "compilerOptions": {
-    "plugins": [
-      {
-        "name": "tstl-optimize",
-        "strict": true,
-        "rules": {
-          "inline": { "strict": false }
-        }
-      }
-    ]
-  }
-}
-```
-
-Precedence rules:
-
-- Per-rule `strict: false` always overrides global `strict: true` for that rule.
-- Per-rule `strict: true` promotes warnings to errors for that rule even when the global is `false`.
 
 ### `localizer`
 
@@ -406,10 +372,12 @@ end                                    pos[i] = pos[i] + ____vel * dt
                                    end
 ```
 
-Array element localization handles the simple case only: the base must be a plain identifier, the
-index must match exactly the loop control variable, the rule skips loops containing function calls
-(a call could modify the array through a reference, making the cached local stale), and skips
-write-back candidates in loops with early exits (`break`/`return`).
+Array element localization handles the simple case only:
+
+- The base must be a plain identifier and the index must match the loop control variable exactly.
+- Loops containing function calls are skipped — a call could modify the array through a reference,
+  making the cached local stale.
+- Write-back candidates in loops with early exits (`break`/`return`) are skipped.
 
 Options:
 
@@ -431,7 +399,9 @@ Chains rooted at any other global are skipped. This protects against libraries t
 metatables (e.g., busted/luassert: `assert.are_not.equal`), where hoisting the chain would
 collapse the `__index` chain and silently change behavior.
 
-**Resolution formula:** `(STDLIB ∪ include) \ exclude \ (BLOCKLIST \ include)`
+**Resolution formula** (`∪` = union, `\` = set difference):
+
+`(STDLIB ∪ include) \ exclude \ (BLOCKLIST \ include)`
 
 An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pending`, `setup`,
 `teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
@@ -504,15 +474,60 @@ Options:
 - **Custom config replaces defaults** — `functions: ["myDebug"]` replaces the default list; it does
   not extend it. Include defaults explicitly to keep both.
 
+## Strict mode
+
+By default, unresolvable diagnostics from optimization rules are emitted as warnings. The `inline`
+rule uses code 90001; `conditional-compilation` uses code 90002. Set `strict: true` at the plugin
+level to promote all optimization warnings to compilation errors; the build fails whenever an
+optimization cannot be applied:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true
+      }
+    ]
+  }
+}
+```
+
+Use a per-rule `strict` override to exempt a specific rule from the global setting. The `inline` and
+`conditional-compilation` rules support per-rule strict. The example below enables global strict but
+keeps inline diagnostics as warnings:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true,
+        "rules": {
+          "inline": { "strict": false }
+        }
+      }
+    ]
+  }
+}
+```
+
+Precedence:
+
+- Per-rule `strict: false` always overrides global `strict: true` for that rule.
+- Per-rule `strict: true` promotes warnings to errors for that rule even when the global is `false`.
+
 ## Configuration reference
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `strict` | `boolean` | `false` | Promote all optimization warnings (inline code 90001, conditional-compilation code 90002) to compilation errors globally |
-| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants |
+| `strict` | `boolean` | `false` | Promote all optimization warnings (inline code 90001, conditional-compilation code 90002) to compilation errors globally. See [Strict mode](#strict-mode). |
+| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants. Accepts `{ constants: ...; strict?: boolean }` for per-rule error promotion. |
 | `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions |
 | `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based |
-| `rules.inline` | `boolean \| InlineConfig` | `true` | Inline `@inline` functions at call sites, including cross-module. Accepts `{ enabled?: boolean; strict?: boolean }` object to configure per-rule strict independently of the global `strict` setting. |
+| `rules.inline` | `boolean \| { enabled?: boolean; strict?: boolean }` | `true` | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)). |
 | `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default — see `localizer` section for `include`/`exclude` options |
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |
@@ -520,7 +535,7 @@ Options:
 ## Examples
 
 The [`examples/`](examples/) directory contains a `.ts` / `.lua` pair for each rule, showing the
-TypeScript input and generated Lua output. See [`examples/readme.md`](examples/readme.md) for
+TypeScript input and generated Lua output. See [`examples/README.md`](examples/README.md) for
 details.
 
 ## License
