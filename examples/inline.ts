@@ -18,7 +18,8 @@ const flipped = negate(offset);
 // Pattern 1: Void statement site (multi-statement)
 /** @inline */
 function debugLog(prefix: string, value: number) {
-  const msg = prefix + ": " + value;
+  const msg = `${prefix}: ${value}`;
+  // biome-ignore lint/suspicious/noConsole: console.log maps to Lua print in TSTL
   console.log(msg);
 }
 
