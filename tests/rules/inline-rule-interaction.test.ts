@@ -59,16 +59,18 @@ describe("rule interaction", () => {
   });
 
   describe("math-intrinsics + inline", () => {
-    it("replaces Math functions inside inlined expressions and blocks", () => {
-      const srcExpr = `
+    it("replaces Math functions inside inlined expression body", () => {
+      const lua = compile(`
         /** @inline */
         function fastFloor(x: number) { return Math.floor(x); }
         declare const v: number;
         const r = fastFloor(v);
-      `;
-      expect(normalizeLua(compile(srcExpr))).toBe("r = (v - v % 1)");
+      `);
+      expect(normalizeLua(lua)).toBe("r = (v - v % 1)");
+    });
 
-      const srcBlock = `
+    it("replaces Math functions inside inlined do...end block", () => {
+      const lua = compile(`
         /** @inline */
         function doFloor(x: number): void {
           const y = Math.floor(x);
@@ -76,8 +78,7 @@ describe("rule interaction", () => {
         }
         declare const v: number;
         doFloor(v);
-      `;
-      const lua = compile(srcBlock);
+      `);
       expect(lua).toMatch(/v - v % 1|____inline_arg_0 - ____inline_arg_0 % 1/);
       expect(lua).not.toContain("math.floor");
       expect(lua).not.toContain("doFloor(v)");

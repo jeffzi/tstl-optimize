@@ -4,17 +4,13 @@ import * as tstl from "typescript-to-lua";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
-interface Replacement {
-  apply(): void;
-}
-
 interface AnalysisResult {
-  replacements: Replacement[];
+  replacements: Array<() => void>;
   blocked: boolean;
 }
 
 function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
-  const replacements: Replacement[] = [];
+  const replacements: Array<() => void> = [];
   let blocked = false;
 
   walkStatements(body.statements, {
@@ -26,7 +22,7 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
         const lIsOne = tstl.isNumericLiteral(expr.left) && expr.left.value === 1;
         const rIsOne = tstl.isNumericLiteral(expr.right) && expr.right.value === 1;
         if ((lIsVar && rIsOne) || (lIsOne && rIsVar)) {
-          replacements.push({ apply: () => replace(tstl.createIdentifier(varName)) });
+          replacements.push(() => replace(tstl.createIdentifier(varName)));
           control.skip();
           return;
         }
@@ -126,8 +122,8 @@ export const createVisitors: RuleFactory = (_checker, _config) => ({
     // Rebase: init 0→1, limit +1, replace all var+1 with bare var
     forStmt.controlVariableInitializer = tstl.createNumericLiteral(1);
     forStmt.limitExpression = incrementLimit(forStmt.limitExpression);
-    for (const r of replacements) {
-      r.apply();
+    for (const apply of replacements) {
+      apply();
     }
 
     return result;
