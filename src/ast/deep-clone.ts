@@ -6,80 +6,73 @@ import * as tstl from "typescript-to-lua";
 export function deepCloneExpression(node: tstl.Expression): tstl.Expression {
   switch (node.kind) {
     case tstl.SyntaxKind.BinaryExpression: {
-      const bin = node as tstl.BinaryExpression;
+      const { left, right, operator } = node as tstl.BinaryExpression;
       return tstl.createBinaryExpression(
-        deepCloneExpression(bin.left),
-        deepCloneExpression(bin.right),
-        bin.operator,
+        deepCloneExpression(left),
+        deepCloneExpression(right),
+        operator,
       );
     }
     case tstl.SyntaxKind.UnaryExpression: {
-      const un = node as tstl.UnaryExpression;
-      return tstl.createUnaryExpression(deepCloneExpression(un.operand), un.operator);
+      const { operand, operator } = node as tstl.UnaryExpression;
+      return tstl.createUnaryExpression(deepCloneExpression(operand), operator);
     }
     case tstl.SyntaxKind.CallExpression: {
-      const call = node as tstl.CallExpression;
+      const { expression, params } = node as tstl.CallExpression;
       return tstl.createCallExpression(
-        deepCloneExpression(call.expression),
-        call.params.map(deepCloneExpression),
+        deepCloneExpression(expression),
+        params.map(deepCloneExpression),
       );
     }
     case tstl.SyntaxKind.MethodCallExpression: {
-      const method = node as tstl.MethodCallExpression;
+      const { prefixExpression, name, params } = node as tstl.MethodCallExpression;
       return tstl.createMethodCallExpression(
-        deepCloneExpression(method.prefixExpression),
-        deepCloneExpression(method.name) as tstl.Identifier,
-        method.params.map(deepCloneExpression),
+        deepCloneExpression(prefixExpression),
+        deepCloneExpression(name) as tstl.Identifier,
+        params.map(deepCloneExpression),
       );
     }
     case tstl.SyntaxKind.TableIndexExpression: {
-      const tbl = node as tstl.TableIndexExpression;
+      const { table, index } = node as tstl.TableIndexExpression;
       return tstl.createTableIndexExpression(
-        deepCloneExpression(tbl.table),
-        deepCloneExpression(tbl.index),
+        deepCloneExpression(table),
+        deepCloneExpression(index),
       );
     }
-    case tstl.SyntaxKind.ParenthesizedExpression: {
-      const paren = node as tstl.ParenthesizedExpression;
-      return tstl.createParenthesizedExpression(deepCloneExpression(paren.expression));
-    }
-    case tstl.SyntaxKind.TableExpression: {
-      const tblExpr = node as tstl.TableExpression;
+    case tstl.SyntaxKind.ParenthesizedExpression:
+      return tstl.createParenthesizedExpression(
+        deepCloneExpression((node as tstl.ParenthesizedExpression).expression),
+      );
+    case tstl.SyntaxKind.TableExpression:
       return tstl.createTableExpression(
-        tblExpr.fields.map((f) =>
+        (node as tstl.TableExpression).fields.map((f) =>
           tstl.createTableFieldExpression(
             deepCloneExpression(f.value),
             f.key ? deepCloneExpression(f.key) : undefined,
           ),
         ),
       );
-    }
     case tstl.SyntaxKind.ConditionalExpression: {
-      const cond = node as tstl.ConditionalExpression;
+      const { condition, whenTrue, whenFalse } = node as tstl.ConditionalExpression;
       return tstl.createConditionalExpression(
-        deepCloneExpression(cond.condition),
-        deepCloneExpression(cond.whenTrue),
-        deepCloneExpression(cond.whenFalse),
+        deepCloneExpression(condition),
+        deepCloneExpression(whenTrue),
+        deepCloneExpression(whenFalse),
       );
     }
     case tstl.SyntaxKind.FunctionExpression: {
-      const func = node as tstl.FunctionExpression;
-      const clonedParams = func.params?.map((p) => deepCloneExpression(p) as tstl.Identifier);
-      const clonedDots = func.dots ? (tstl.cloneNode(func.dots) as tstl.DotsLiteral) : undefined;
-      const clonedBody = func.body
-        ? tstl.createBlock(deepCloneStatements(func.body.statements))
+      const { params, dots, body, flags } = node as tstl.FunctionExpression;
+      const clonedParams = params?.map((p) => deepCloneExpression(p) as tstl.Identifier);
+      const clonedDots = dots ? (tstl.cloneNode(dots) as tstl.DotsLiteral) : undefined;
+      const clonedBody = body
+        ? tstl.createBlock(deepCloneStatements(body.statements))
         : tstl.createBlock([]);
-      return tstl.createFunctionExpression(clonedBody, clonedParams, clonedDots, func.flags);
+      return tstl.createFunctionExpression(clonedBody, clonedParams, clonedDots, flags);
     }
     case tstl.SyntaxKind.Identifier: {
-      const ident = node as tstl.Identifier;
-      const cloned = tstl.createIdentifier(
-        ident.text,
-        undefined,
-        ident.symbolId,
-        ident.originalName,
-      );
-      cloned.exportable = ident.exportable;
+      const { text, symbolId, originalName, exportable } = node as tstl.Identifier;
+      const cloned = tstl.createIdentifier(text, undefined, symbolId, originalName);
+      cloned.exportable = exportable;
       return cloned;
     }
     default:
@@ -93,75 +86,69 @@ export function deepCloneExpression(node: tstl.Expression): tstl.Expression {
  *  where no child node shares a reference with the original. */
 export function deepCloneStatement(stmt: tstl.Statement): tstl.Statement {
   switch (stmt.kind) {
-    case tstl.SyntaxKind.DoStatement: {
-      const doStmt = stmt as tstl.DoStatement;
-      return tstl.createDoStatement(deepCloneStatements(doStmt.statements));
-    }
+    case tstl.SyntaxKind.DoStatement:
+      return tstl.createDoStatement(deepCloneStatements((stmt as tstl.DoStatement).statements));
     case tstl.SyntaxKind.VariableDeclarationStatement: {
-      const varDecl = stmt as tstl.VariableDeclarationStatement;
+      const { left, right } = stmt as tstl.VariableDeclarationStatement;
       return tstl.createVariableDeclarationStatement(
-        varDecl.left.map((l) => deepCloneExpression(l) as tstl.Identifier),
-        varDecl.right?.map(deepCloneExpression),
+        left.map((l) => deepCloneExpression(l) as tstl.Identifier),
+        right?.map(deepCloneExpression),
       );
     }
     case tstl.SyntaxKind.AssignmentStatement: {
-      const assign = stmt as tstl.AssignmentStatement;
+      const { left, right } = stmt as tstl.AssignmentStatement;
       return tstl.createAssignmentStatement(
-        assign.left.map((l) => deepCloneExpression(l) as tstl.AssignmentLeftHandSideExpression),
-        assign.right.map(deepCloneExpression),
+        left.map((l) => deepCloneExpression(l) as tstl.AssignmentLeftHandSideExpression),
+        right.map(deepCloneExpression),
       );
     }
-    case tstl.SyntaxKind.IfStatement: {
+    case tstl.SyntaxKind.IfStatement:
       return cloneIfStatement(stmt as tstl.IfStatement);
-    }
     case tstl.SyntaxKind.WhileStatement: {
-      const whileStmt = stmt as tstl.WhileStatement;
+      const { body, condition } = stmt as tstl.WhileStatement;
       return tstl.createWhileStatement(
-        tstl.createBlock(deepCloneStatements(whileStmt.body.statements)),
-        deepCloneExpression(whileStmt.condition),
+        tstl.createBlock(deepCloneStatements(body.statements)),
+        deepCloneExpression(condition),
       );
     }
     case tstl.SyntaxKind.RepeatStatement: {
-      const repeatStmt = stmt as tstl.RepeatStatement;
+      const { body, condition } = stmt as tstl.RepeatStatement;
       return tstl.createRepeatStatement(
-        tstl.createBlock(deepCloneStatements(repeatStmt.body.statements)),
-        deepCloneExpression(repeatStmt.condition),
+        tstl.createBlock(deepCloneStatements(body.statements)),
+        deepCloneExpression(condition),
       );
     }
     case tstl.SyntaxKind.ForStatement: {
-      const forStmt = stmt as tstl.ForStatement;
+      const { body, controlVariable, controlVariableInitializer, limitExpression, stepExpression } =
+        stmt as tstl.ForStatement;
       return tstl.createForStatement(
-        tstl.createBlock(deepCloneStatements(forStmt.body.statements)),
-        deepCloneExpression(forStmt.controlVariable) as tstl.Identifier,
-        deepCloneExpression(forStmt.controlVariableInitializer),
-        deepCloneExpression(forStmt.limitExpression),
-        forStmt.stepExpression ? deepCloneExpression(forStmt.stepExpression) : undefined,
+        tstl.createBlock(deepCloneStatements(body.statements)),
+        deepCloneExpression(controlVariable) as tstl.Identifier,
+        deepCloneExpression(controlVariableInitializer),
+        deepCloneExpression(limitExpression),
+        stepExpression ? deepCloneExpression(stepExpression) : undefined,
       );
     }
     case tstl.SyntaxKind.ForInStatement: {
-      const forIn = stmt as tstl.ForInStatement;
+      const { body, names, expressions } = stmt as tstl.ForInStatement;
       return tstl.createForInStatement(
-        tstl.createBlock(deepCloneStatements(forIn.body.statements)),
-        forIn.names.map((n) => deepCloneExpression(n) as tstl.Identifier),
-        forIn.expressions.map(deepCloneExpression),
+        tstl.createBlock(deepCloneStatements(body.statements)),
+        names.map((n) => deepCloneExpression(n) as tstl.Identifier),
+        expressions.map(deepCloneExpression),
       );
     }
-    case tstl.SyntaxKind.ReturnStatement: {
-      const ret = stmt as tstl.ReturnStatement;
-      return tstl.createReturnStatement(ret.expressions.map(deepCloneExpression));
-    }
-    case tstl.SyntaxKind.ExpressionStatement: {
-      const exprStmt = stmt as tstl.ExpressionStatement;
-      return tstl.createExpressionStatement(deepCloneExpression(exprStmt.expression));
-    }
-    case tstl.SyntaxKind.GotoStatement: {
-      const gotoStmt = stmt as tstl.GotoStatement;
-      return tstl.createGotoStatement(gotoStmt.label);
-    }
-    case tstl.SyntaxKind.LabelStatement: {
-      const labelStmt = stmt as tstl.LabelStatement;
-      return tstl.createLabelStatement(labelStmt.name);
-    }
+    case tstl.SyntaxKind.ReturnStatement:
+      return tstl.createReturnStatement(
+        (stmt as tstl.ReturnStatement).expressions.map(deepCloneExpression),
+      );
+    case tstl.SyntaxKind.ExpressionStatement:
+      return tstl.createExpressionStatement(
+        deepCloneExpression((stmt as tstl.ExpressionStatement).expression),
+      );
+    case tstl.SyntaxKind.GotoStatement:
+      return tstl.createGotoStatement((stmt as tstl.GotoStatement).label);
+    case tstl.SyntaxKind.LabelStatement:
+      return tstl.createLabelStatement((stmt as tstl.LabelStatement).name);
     default:
       return tstl.cloneNode(stmt);
   }
