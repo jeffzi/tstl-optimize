@@ -9,44 +9,46 @@ import {
 
 describe("inline", () => {
   describe("positive: inlined", () => {
-    it("inlines simple function calls", () => {
-      const srcDecl = `
+    it("inlines function declaration", () => {
+      const lua = compile(`
         /** @inline */
         function double(x: number) { return x * 2; }
         declare const a: number;
         const r = double(a);
-      `;
-      expect(compile(srcDecl)).toContain("a * 2");
+      `);
+      expect(lua).toContain("a * 2");
+    });
 
-      const srcArrow = `
+    it("inlines arrow function", () => {
+      const lua = compile(`
         /** @inline */
         const double = (x: number) => x * 2;
         declare const a: number;
         const r = double(a);
-      `;
-      expect(compile(srcArrow)).toContain("a * 2");
+      `);
+      expect(lua).toContain("a * 2");
     });
 
-    it("handles parameter counts and types", () => {
-      expect(
-        normalizeLua(
-          compile(`
+    it("inlines multi-param call with literal args", () => {
+      const lua = normalizeLua(
+        compile(`
         /** @inline */
         function add(a: number, b: number) { return a + b; }
         const x = add(1, 2);
       `),
-        ),
-      ).toContain("1 + 2");
+      );
+      expect(lua).toContain("1 + 2");
+    });
 
-      expect(
-        normalizeLua(
-          compile(`
+    it("inlines zero-param function", () => {
+      const lua = normalizeLua(
+        compile(`
         /** @inline */
         function pi() { return 3.14; }
         const r = pi();
       `),
-        ),
-      ).toContain("r = 3.14");
+      );
+      expect(lua).toContain("r = 3.14");
     });
 
     it("handles complex body expressions and precedence", () => {

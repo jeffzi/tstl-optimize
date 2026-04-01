@@ -895,20 +895,26 @@ function buildVarDeclInline(
   return [resultDecl, ...tempDecls, tstl.createDoStatement([...substitutedBody, assignResult])];
 }
 
-function buildObjectDestructureInline(
-  pattern: ts.ObjectBindingPattern,
+interface DestructureShared {
+  resultIdent: tstl.Identifier;
+  resultSymId: tstl.SymbolId;
+  resultDecl: tstl.VariableDeclarationStatement;
+  tempDecls: tstl.VariableDeclarationStatement[];
+  doEnd: tstl.DoStatement;
+}
+
+/**
+ * Shared setup for both object and array destructuring inline targets:
+ * allocates a result identifier, transforms the body, builds the param map,
+ * substitutes params, and wraps the body + result assignment in a do...end.
+ * Returns undefined if param-map construction fails.
+ */
+function buildDestructureShared(
   target: ReturnValueInlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
-): tstl.Statement[] | undefined {
-  // Reject rest elements — too complex to support.
-  for (const element of pattern.elements) {
-    if (element.dotDotDotToken) return undefined;
-    // Only simple identifier bindings are supported (no nested destructuring).
-    if (!ts.isIdentifier(element.name)) return undefined;
-  }
-
+): DestructureShared | undefined {
   const { bodyStmts, params, declaration } = target;
 
   // Generate fresh result identifier: ____inline_result_N
@@ -928,7 +934,6 @@ function buildObjectDestructureInline(
   const { tempDecls, paramMap } = mapped;
 
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-
   const substitutedReturn = substituteParams(
     context.transformExpression(target.returnExpr),
     paramMap,
@@ -938,8 +943,28 @@ function buildObjectDestructureInline(
     [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
     [substitutedReturn],
   );
-
   const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+  return { resultIdent, resultSymId, resultDecl, tempDecls, doEnd };
+}
+
+function buildObjectDestructureInline(
+  pattern: ts.ObjectBindingPattern,
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): tstl.Statement[] | undefined {
+  // Reject rest elements — too complex to support.
+  for (const element of pattern.elements) {
+    if (element.dotDotDotToken) return undefined;
+    // Only simple identifier bindings are supported (no nested destructuring).
+    if (!ts.isIdentifier(element.name)) return undefined;
+  }
+
+  const shared = buildDestructureShared(target, callNode, checker, context);
+  if (!shared) return undefined;
+  const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 
   // Build field-access declarations for each binding element.
   // `const { a: myA } = foo(x)` — key is `a`, local is `myA`.
@@ -980,37 +1005,9 @@ function buildArrayDestructureInline(
     if (!ts.isIdentifier(element.name)) return undefined;
   }
 
-  const { bodyStmts, params, declaration } = target;
-
-  // Generate fresh result identifier: ____inline_result_N
-  const resultSymId = context.nextSymbolId();
-  const resultIdent = tstl.createIdentifier(
-    `____inline_result_${resultSymId}`,
-    undefined,
-    resultSymId,
-  );
-  const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
-
-  // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
-
-  const mapped = buildParamMap(params, callNode.arguments, checker, context);
-  if (!mapped) return undefined;
-  const { tempDecls, paramMap } = mapped;
-
-  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-
-  const substitutedReturn = substituteParams(
-    context.transformExpression(target.returnExpr),
-    paramMap,
-  );
-
-  const assignResult = tstl.createAssignmentStatement(
-    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
-    [substitutedReturn],
-  );
-
-  const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+  const shared = buildDestructureShared(target, callNode, checker, context);
+  if (!shared) return undefined;
+  const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 
   // Detect LuaMultiReturn return type: if the function returns LuaMultiReturn, no unpack needed.
   const signature = checker.getResolvedSignature(callNode);
@@ -1084,25 +1081,16 @@ function handleVariableStatement(
     return undefined;
   }
 
-  // Cross-module free-variable check (mirrors handleExpressionStatement statement branch).
-  const isCrossModule =
-    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
   if (
-    isCrossModule &&
-    hasCrossModuleFreeVariable(
+    rejectIfCrossModuleFreeVar(
+      callNode,
+      target,
       [...target.bodyStmts, target.returnExpr],
-      target.params,
-      target.declaration,
       checker,
+      context,
+      strict,
     )
   ) {
-    context.diagnostics.push(
-      createInlineWarning(
-        callNode,
-        "cross-module function references non-parameter identifiers",
-        strict,
-      ),
-    );
     return undefined;
   }
 
@@ -1177,17 +1165,39 @@ function handleReturnStatement(
     return undefined;
   }
 
-  // Cross-module free-variable check (mirrors handleExpressionStatement statement branch).
+  if (
+    rejectIfCrossModuleFreeVar(
+      callNode,
+      target,
+      [...target.bodyStmts, target.returnExpr],
+      checker,
+      context,
+      strict,
+    )
+  ) {
+    return undefined;
+  }
+
+  return buildReturnSiteInline(target, callNode, checker, context);
+}
+
+/**
+ * If the call crosses module boundaries and the target has free variables from the source module,
+ * pushes a diagnostic and returns true (caller should return undefined).
+ */
+function rejectIfCrossModuleFreeVar(
+  callNode: ts.CallExpression,
+  target: StatementInlineTarget | ReturnValueInlineTarget,
+  nodes: readonly ts.Node[],
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+  strict: boolean,
+): boolean {
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
   if (
     isCrossModule &&
-    hasCrossModuleFreeVariable(
-      [...target.bodyStmts, target.returnExpr],
-      target.params,
-      target.declaration,
-      checker,
-    )
+    hasCrossModuleFreeVariable(nodes, target.params, target.declaration, checker)
   ) {
     context.diagnostics.push(
       createInlineWarning(
@@ -1196,10 +1206,9 @@ function handleReturnStatement(
         strict,
       ),
     );
-    return undefined;
+    return true;
   }
-
-  return buildReturnSiteInline(target, callNode, checker, context);
+  return false;
 }
 
 /**
@@ -1300,20 +1309,7 @@ function handleExpressionStatement(
 
   if (target.bodyStmts.length === 0) return [];
 
-  const isCrossModule =
-    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
-
-  if (
-    isCrossModule &&
-    hasCrossModuleFreeVariable(target.bodyStmts, target.params, target.declaration, checker)
-  ) {
-    context.diagnostics.push(
-      createInlineWarning(
-        callNode,
-        "cross-module function references non-parameter identifiers",
-        strict,
-      ),
-    );
+  if (rejectIfCrossModuleFreeVar(callNode, target, target.bodyStmts, checker, context, strict)) {
     return undefined;
   }
 
