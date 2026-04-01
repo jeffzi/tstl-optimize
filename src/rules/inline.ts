@@ -2,12 +2,13 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-// ScopeType is not exported from the typescript-to-lua public index; import from internal path.
-// Function = 2 (verified against TSTL source).
-import { ScopeType } from "typescript-to-lua/dist/transformation/utils/scope";
 import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import { type RuleFactory, resolveEffectiveStrict, resolveInlineConfig } from "../config";
+
+// ScopeType is not exported from the TSTL public index. Function = 2 (verified against TSTL source).
+// biome-ignore lint/suspicious/noExplicitAny: accessing internal enum value by numeric constant
+const FUNCTION_SCOPE = 2 as any;
 
 interface ExpressionInlineTarget {
   kind: "expression";
@@ -185,6 +186,25 @@ function isParamWritten(body: ts.Node, paramSymbol: ts.Symbol, checker: ts.TypeC
   return written;
 }
 
+/**
+ * Checks the three prerequisites shared by both canInline and canInlineStatements.
+ * Returns a rejection reason string, or undefined if all checks pass.
+ */
+function checkSharedPrereqs(
+  params: readonly ts.ParameterDeclaration[],
+  args: ts.NodeArray<ts.Expression>,
+  declaration: ts.Node,
+): string | undefined {
+  for (const param of params) {
+    if (param.dotDotDotToken) return "rest parameters are not supported";
+    if (param.questionToken) return "optional parameters are not supported";
+    if (param.initializer) return "default parameters are not supported";
+  }
+  if (args.length !== params.length) return "argument count does not match parameter count";
+  if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
+  return undefined;
+}
+
 function canInline(
   target: ExpressionInlineTarget,
   callNode: ts.CallExpression,
@@ -192,16 +212,8 @@ function canInline(
 ): true | string {
   const { bodyExpr, params, declaration, resolvedSymbol } = target;
 
-  for (const param of params) {
-    if (param.dotDotDotToken) return "rest parameters are not supported";
-    if (param.questionToken) return "optional parameters are not supported";
-    if (param.initializer) return "default parameters are not supported";
-  }
-
-  if (callNode.arguments.length !== params.length)
-    return "argument count does not match parameter count";
-
-  if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
+  const prereqFailure = checkSharedPrereqs(params, callNode.arguments, declaration);
+  if (prereqFailure !== undefined) return prereqFailure;
 
   if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
     return "recursive functions cannot be inlined";
@@ -336,6 +348,8 @@ export function mapLuaStatements(
       case tstl.SyntaxKind.VariableDeclarationStatement: {
         const varDecl = stmt as tstl.VariableDeclarationStatement;
         return tstl.createVariableDeclarationStatement(
+          // LHS identifiers in variable declarations are never parameters (canInline/canInlineStatements
+          // rejects writes to params), so recurse preserves their Identifier kind here.
           varDecl.left.map((id) => recurse(id) as tstl.Identifier),
           varDecl.right?.map(recurse),
         );
@@ -343,6 +357,8 @@ export function mapLuaStatements(
       case tstl.SyntaxKind.AssignmentStatement: {
         const assign = stmt as tstl.AssignmentStatement;
         return tstl.createAssignmentStatement(
+          // Assignment LHS expressions (Identifier | TableIndexExpression) are not params
+          // (isParamWritten rejects inline when params appear on LHS), so recurse is safe here.
           assign.left.map((l) => recurse(l) as tstl.AssignmentLeftHandSideExpression),
           assign.right.map(recurse),
         );
@@ -455,13 +471,6 @@ function someLuaIdentifier(
   }
 }
 
-function collectSymbolIds(node: tstl.Expression, ids: Set<tstl.SymbolId>): void {
-  someLuaIdentifier(node, (id) => {
-    ids.add(id);
-    return false;
-  });
-}
-
 function needsParentheses(node: tstl.Expression): boolean {
   return (
     tstl.isBinaryExpression(node) ||
@@ -517,6 +526,28 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false):
     } else if (ts.isBlock(stmt)) {
       const blockResult = hasLinearControlFlow(stmt.statements, loopBody);
       if (blockResult !== true) return blockResult;
+    } else if (ts.isDoStatement(stmt)) {
+      const bodyResult = hasLinearControlFlow([stmt.statement], true);
+      if (bodyResult !== true) return bodyResult;
+    } else if (ts.isSwitchStatement(stmt)) {
+      for (const clause of stmt.caseBlock.clauses) {
+        const clauseResult = hasLinearControlFlow(clause.statements, true);
+        if (clauseResult !== true) return clauseResult;
+      }
+    } else if (ts.isTryStatement(stmt)) {
+      const tryResult = hasLinearControlFlow(stmt.tryBlock.statements, loopBody);
+      if (tryResult !== true) return tryResult;
+      if (stmt.catchClause) {
+        const catchResult = hasLinearControlFlow(stmt.catchClause.block.statements, loopBody);
+        if (catchResult !== true) return catchResult;
+      }
+      if (stmt.finallyBlock) {
+        const finallyResult = hasLinearControlFlow(stmt.finallyBlock.statements, loopBody);
+        if (finallyResult !== true) return finallyResult;
+      }
+    } else if (ts.isLabeledStatement(stmt)) {
+      const labelResult = hasLinearControlFlow([stmt.statement], loopBody);
+      if (labelResult !== true) return labelResult;
     }
   }
   return true;
@@ -529,16 +560,8 @@ function canInlineStatements(
 ): true | string {
   const { bodyStmts, params, declaration, resolvedSymbol } = target;
 
-  for (const param of params) {
-    if (param.dotDotDotToken) return "rest parameters are not supported";
-    if (param.questionToken) return "optional parameters are not supported";
-    if (param.initializer) return "default parameters are not supported";
-  }
-
-  if (callNode.arguments.length !== params.length)
-    return "argument count does not match parameter count";
-
-  if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
+  const prereqFailure = checkSharedPrereqs(params, callNode.arguments, declaration);
+  if (prereqFailure !== undefined) return prereqFailure;
 
   for (const stmt of bodyStmts) {
     if (countReferences(stmt, resolvedSymbol, checker) > 0)
@@ -606,7 +629,7 @@ function transformBodyStatements(
   declaration: ts.Node,
   context: tstl.TransformationContext,
 ): tstl.Statement[] {
-  context.pushScope(ScopeType.Function, declaration);
+  context.pushScope(FUNCTION_SCOPE, declaration);
   const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
   context.popScope();
   return luaBody;
@@ -630,6 +653,74 @@ function buildDoEndBlock(
   const substituted = substituteParamsInStatements(luaBody, paramMap);
 
   return [...tempDecls, tstl.createDoStatement(substituted)];
+}
+
+/**
+ * Perform expression-body inlining for an expression-kind target.
+ * Returns the substituted Lua expression, or undefined if inlining fails.
+ * Emits diagnostics on failure when a reason is available.
+ */
+function inlineExpressionBody(
+  target: ExpressionInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+  strict: boolean,
+): tstl.Expression | undefined {
+  const canInlineResult = canInline(target, callNode, checker);
+  if (canInlineResult !== true) {
+    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
+    return undefined;
+  }
+
+  const luaBody = context.transformExpression(target.bodyExpr);
+
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  for (let i = 0; i < target.params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    if (!paramSymbol) return undefined;
+    const symbolId = context.symbolIdMaps.get(paramSymbol);
+    if (symbolId === undefined) return undefined;
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    paramMap.set(symbolId, luaArg);
+  }
+
+  const isCrossModule =
+    callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
+
+  if (isCrossModule) {
+    const paramIds = new Set(paramMap.keys());
+    if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
+      context.diagnostics.push(
+        createInlineWarning(
+          callNode,
+          "cross-module function references non-parameter identifiers",
+          strict,
+        ),
+      );
+      return undefined;
+    }
+  }
+
+  const substituted = substituteParams(luaBody, paramMap);
+
+  // Defense-in-depth: after substitution, only caller-provided identifiers should remain
+  if (isCrossModule) {
+    const callerIds = new Set<tstl.SymbolId>();
+    for (const arg of paramMap.values()) {
+      someLuaIdentifier(arg, (id) => {
+        callerIds.add(id);
+        return false;
+      });
+    }
+    if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
+      return undefined;
+    }
+  }
+
+  return needsParentheses(substituted)
+    ? tstl.createParenthesizedExpression(substituted)
+    : substituted;
 }
 
 function handleCallExpression(
@@ -670,59 +761,7 @@ function handleCallExpression(
     return undefined;
   }
 
-  const canInlineResult = canInline(target, node, checker);
-  if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(node, canInlineResult, strict));
-    return undefined;
-  }
-
-  const luaBody = context.transformExpression(target.bodyExpr);
-
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
-  for (let i = 0; i < target.params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
-    if (!paramSymbol) return undefined;
-    const symbolId = context.symbolIdMaps.get(paramSymbol);
-    if (symbolId === undefined) return undefined;
-    const luaArg = context.transformExpression(node.arguments[i]);
-    paramMap.set(symbolId, luaArg);
-  }
-
-  const isCrossModule =
-    node.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
-
-  if (isCrossModule) {
-    const paramIds = new Set(paramMap.keys());
-    if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
-      context.diagnostics.push(
-        createInlineWarning(
-          node,
-          "cross-module function references non-parameter identifiers",
-          strict,
-        ),
-      );
-      return undefined;
-    }
-  }
-
-  const substituted = substituteParams(luaBody, paramMap);
-
-  // Defense-in-depth: after substitution, only caller-provided identifiers should remain
-  if (isCrossModule) {
-    const callerIds = new Set<tstl.SymbolId>();
-    for (const arg of paramMap.values()) {
-      collectSymbolIds(arg, callerIds);
-    }
-    if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
-      return undefined;
-    }
-  }
-
-  if (needsParentheses(substituted)) {
-    return tstl.createParenthesizedExpression(substituted);
-  }
-
-  return substituted;
+  return inlineExpressionBody(target, node, checker, context, strict);
 }
 
 function buildVarDeclInline(
@@ -797,7 +836,6 @@ function buildObjectDestructureInline(
 
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
-  // Transform and substitute the return expression, then assign to result ident inside do...end.
   const substitutedReturn = substituteParams(
     context.transformExpression(target.returnExpr),
     paramMap,
@@ -869,7 +907,6 @@ function buildArrayDestructureInline(
 
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
-  // Transform and substitute the return expression, then assign to result ident inside do...end.
   const substitutedReturn = substituteParams(
     context.transformExpression(target.returnExpr),
     paramMap,
@@ -1150,57 +1187,9 @@ function handleExpressionStatement(
   const { target } = result;
 
   if (target.kind === "expression") {
-    const canInlineResult = canInline(target, callNode, checker);
-    if (canInlineResult !== true) {
-      context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
-      return undefined;
-    }
-
-    const luaBody = context.transformExpression(target.bodyExpr);
-
-    const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
-    for (let i = 0; i < target.params.length; i++) {
-      const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
-      if (!paramSymbol) return undefined;
-      const symbolId = context.symbolIdMaps.get(paramSymbol);
-      if (symbolId === undefined) return undefined;
-      const luaArg = context.transformExpression(callNode.arguments[i]);
-      paramMap.set(symbolId, luaArg);
-    }
-
-    // Cross-module check: expression-body only; statement-body cross-module is blocked separately.
-    const isCrossModule =
-      callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
-    if (isCrossModule) {
-      const paramIds = new Set(paramMap.keys());
-      if (someLuaIdentifier(luaBody, (id) => !paramIds.has(id))) {
-        context.diagnostics.push(
-          createInlineWarning(
-            callNode,
-            "cross-module function references non-parameter identifiers",
-            strict,
-          ),
-        );
-        return undefined;
-      }
-    }
-
-    const substituted = substituteParams(luaBody, paramMap);
-
-    if (isCrossModule) {
-      const callerIds = new Set<tstl.SymbolId>();
-      for (const arg of paramMap.values()) {
-        collectSymbolIds(arg, callerIds);
-      }
-      if (someLuaIdentifier(substituted, (id) => !callerIds.has(id))) {
-        return undefined;
-      }
-    }
-
-    const result2 = needsParentheses(substituted)
-      ? tstl.createParenthesizedExpression(substituted)
-      : substituted;
-    return [tstl.createExpressionStatement(result2)];
+    const inlined = inlineExpressionBody(target, callNode, checker, context, strict);
+    if (inlined === undefined) return undefined;
+    return [tstl.createExpressionStatement(inlined)];
   }
 
   if (target.kind === "statementsWithReturn") {
