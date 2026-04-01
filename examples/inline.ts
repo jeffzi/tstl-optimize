@@ -11,18 +11,11 @@ const maxHp = 100;
 const t = 0.5;
 const offset = 10;
 
+// Pattern: Expression-body inline
 const displayHp = lerp(hp, maxHp, t);
 const flipped = negate(offset);
 
-// --- Limitations ---
-
-// Not inlined: no @inline tag
-function double(x: number) {
-  return x * 2;
-}
-const doubled = double(hp);
-
-// Multi-statement inline at statement site -- expanded into do...end block
+// Pattern 1: Void statement site (multi-statement)
 /** @inline */
 function debugLog(prefix: string, value: number) {
   const msg = prefix + ": " + value;
@@ -32,6 +25,40 @@ function debugLog(prefix: string, value: number) {
 const playerHp = 75;
 debugLog("hp", playerHp);
 
-print(displayHp); // 75
-print(flipped); // -10
-print(doubled); // 100
+// Pattern 2: Variable-declaration site (multi-statement with return)
+/** @inline */
+function compute(x: number): number {
+  const y = x + 1;
+  return y * 2;
+}
+
+const a = 10;
+const r = compute(a);
+
+// Pattern 3: Return site (multi-statement with return)
+function caller(): number {
+  return compute(a);
+}
+
+// Pattern 4: Destructuring site (multi-statement with return)
+/** @inline */
+function getPos(x: number): { x: number; y: number } {
+  const pos = { x: x, y: x + 10 };
+  return pos;
+}
+
+const { x, y } = getPos(a);
+
+// --- Limitations ---
+
+// Not inlined: no @inline tag
+function double(x: number) {
+  return x * 2;
+}
+const doubled = double(hp);
+
+print(displayHp);
+print(flipped);
+print(doubled);
+print(r);
+print(x, y);

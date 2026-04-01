@@ -3,10 +3,7 @@
 [![CI](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that generates faster Lua
-code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. Each rule
-can be toggled individually. All rules default to on except `conditional-compilation` and
-`debug-strip`, which remove code and are off by default.
+A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that optimizes Lua output with configurable rules. It supports **Lua 5.1 (PUC)** and **LuaJIT**. You can toggle each rule individually. Most rules are on by default, except for `conditional-compilation` and `debug-strip`, which remove code.
 
 ```typescript
 // TypeScript input
@@ -178,8 +175,7 @@ in a nested declaration.
 
 ### `inline`
 
-Inlines `@inline`-tagged single-expression functions at call sites, within the same module and
-across module boundaries.
+Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries.
 
 ```typescript
 /** @inline */
@@ -189,14 +185,12 @@ function double(x: number) {
 const y = double(5); // becomes: const y = 5 * 2
 ```
 
-Cross-module inlining works for self-contained functions — bodies that reference only parameters and
-literals. The rule rejects functions that capture module-scope variables and emits a diagnostic
-warning.
+Cross-module inlining works for self-contained functions that only reference parameters and literals. The rule skips functions that capture module-scope variables and issues a diagnostic warning (code 90001).
 
 ```typescript
 // utils.ts
 /** @inline */
-export function double(x: number) { return x * 2; }       // ✓ cross-module OK
+export function double(x: number) { return x * 2; }       // ✓ OK
 /** @inline */
 export function addOffset(x: number) { return x + OFFSET; } // ✗ captures OFFSET
 
@@ -205,23 +199,20 @@ import { double } from "./utils";
 const y = double(5); // inlined: const y = 5 * 2
 ```
 
-A function qualifies for inlining when it meets all these conditions:
+A function must meet these conditions to be inlined:
 
 - `@inline` JSDoc tag on the function
-- Single-expression body (or arrow `=> expr`), or multi-statement body (see below)
+- Single-expression body (or arrow `=> expr`) or supported multi-statement body
 - Module-scope function (not nested)
 - No rest, default, or optional parameters
 - Non-recursive
 - No parameter writes inside the body
-- Each parameter used more than once receives only side-effect-free arguments
-- Cross-module: body references only parameters and literals — no captured module-scope variables
-  (applies to both single-expression and multi-statement bodies)
+- Multi-use parameters require side-effect-free arguments in expression bodies
+- Cross-module: body references only parameters and literals (no captured variables from the same module)
 
 #### Multi-statement inline
 
-Multi-statement function bodies are supported at statement-level call sites and expand in-place.
-The inlined statements are wrapped in a `do...end` block (except at return sites) to prevent
-local variable names from leaking into the caller's scope.
+The plugin supports multi-statement function bodies at statement-level call sites. It expands these in-place, wrapping them in a `do...end` block (except at return sites) to prevent variable name leakage.
 
 ##### Pattern 1 — Void statement site
 
@@ -299,16 +290,14 @@ const { a, b } = foo(x);
 
 ```lua
 -- result variable holds the inlined return, bindings extracted after do...end
-local a
-local b
 local ____inline_result_N
 local ____inline_arg_0 = x
 do
   local obj = {a = ____inline_arg_0, b = ____inline_arg_0 + 1}
   ____inline_result_N = obj
 end
-a = ____inline_result_N.a
-b = ____inline_result_N.b
+local a = ____inline_result_N.a
+local b = ____inline_result_N.b
 ```
 
 (where `N` is a compiler-generated symbol ID; the exact value is unimportant)
@@ -343,11 +332,7 @@ bail(n); // warns: @inline ignored — early return in body
 
 #### Rule interaction
 
-Inlined `do...end` blocks are processed by subsequent rules in the pipeline. For example, if the
-inlined body calls `Math.floor(x)` two or more times, the `localizer` rule hoists a
-`____math_floor` local to module scope exactly as it would for non-inlined code. Similarly,
-`math-intrinsics` rewrites `Math.*` calls inside inlined bodies. Rules apply to the fully expanded
-output — inlined code receives the same optimizations as hand-written code.
+Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as it would for hand-written code. Similarly, `math-intrinsics` rewrites `Math.*` calls inside inlined bodies. Because rules apply to the fully expanded output, inlined code receives the same optimizations as the rest of the file.
 
 ### `localizer`
 
