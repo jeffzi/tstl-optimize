@@ -204,7 +204,7 @@ A function must meet these conditions to be inlined:
 - `@inline` JSDoc tag on the function
 - Single-expression body (or arrow `=> expr`) or supported multi-statement body
 - Module-scope function (not nested)
-- No rest, default, or optional parameters
+- No rest, default, optional, or destructuring parameters
 - Non-recursive
 - No parameter writes inside the body
 - Multi-use parameters require side-effect-free arguments in expression bodies
@@ -302,6 +302,34 @@ local b = ____inline_result_N.b
 
 (where `N` is a compiler-generated symbol ID; the exact value is unimportant)
 
+##### Pattern 5 — LuaMultiReturn destructuring site
+
+```typescript
+/** @inline */
+function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
+  const tmp = a;
+  return $multi(b, tmp);
+}
+declare const x: number;
+declare const y: number;
+const [p, q] = swap(x, y);
+```
+
+```lua
+local ____inline_result_A
+local ____inline_result_B
+local ____inline_arg_0 = x
+local ____inline_arg_1 = y
+do
+  local tmp = ____inline_arg_0
+  ____inline_result_A, ____inline_result_B = ____inline_arg_1, tmp
+end
+local p, q = ____inline_result_A, ____inline_result_B
+```
+
+Multiple result variables are allocated to capture all return values. A single variable would
+truncate multi-return to its first value in Lua.
+
 Argument temporaries are always hoisted before the `do...end` block to preserve the left-to-right
 evaluation order of the original call's arguments. Variables declared inside `do...end` do not leak
 into the caller's scope.
@@ -321,7 +349,10 @@ const r = effect(a) + 1;   // warns: multi-statement body cannot be inlined at e
 bar(effect(a));             // warns: same reason
 ```
 
-Functions with a top-level early `return`, `break`, or `continue` in the body are also rejected:
+Functions with an early `return`, `break`, or `continue` in the body are also rejected — Lua's
+`do...end` block has no "return from block" construct, so a `return` inside the inlined body would
+return from the enclosing function rather than just exiting the inline. `break` inside a `switch` or
+loop is allowed (it is scoped to that construct and does not affect the inlined block):
 
 ```typescript
 /** @inline */
@@ -332,7 +363,7 @@ bail(n); // warns: @inline ignored — early return in body
 
 #### Rule interaction
 
-Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as it would for hand-written code. Similarly, `math-intrinsics` rewrites `Math.*` calls inside inlined bodies. Because rules apply to the fully expanded output, inlined code receives the same optimizations as the rest of the file.
+Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside inlined bodies the same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations as the rest of the file.
 
 ### `localizer`
 
