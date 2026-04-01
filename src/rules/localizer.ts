@@ -130,10 +130,39 @@ function hoistScope(
   return new Set(toHoist.keys());
 }
 
+/** Check for return/goto inside nested loops — these exit the function, not just the loop. */
+function hasNestedFunctionExit(statements: tstl.Statement[]): boolean {
+  for (const stmt of statements) {
+    if (tstl.isReturnStatement(stmt) || tstl.isGotoStatement(stmt)) return true;
+    if (tstl.isIfStatement(stmt)) {
+      if (hasNestedFunctionExit(stmt.ifBlock.statements)) return true;
+      if (stmt.elseBlock) {
+        const elseStmts = tstl.isIfStatement(stmt.elseBlock)
+          ? [stmt.elseBlock]
+          : stmt.elseBlock.statements;
+        if (hasNestedFunctionExit(elseStmts)) return true;
+      }
+    }
+    if (tstl.isDoStatement(stmt)) {
+      if (hasNestedFunctionExit(stmt.statements)) return true;
+    }
+    // Recurse into nested loops — return/goto there still exits the enclosing function
+    if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
+      if (hasNestedFunctionExit(stmt.body.statements)) return true;
+    }
+    if (tstl.isForStatement(stmt) || tstl.isForInStatement(stmt)) {
+      if (hasNestedFunctionExit(stmt.body.statements)) return true;
+    }
+    // Don't recurse into function expressions — return there exits the nested function
+  }
+  return false;
+}
+
 /** Check for top-level return/break that would prevent write-back from executing. */
 function hasEarlyExit(statements: tstl.Statement[]): boolean {
   for (const stmt of statements) {
-    if (tstl.isReturnStatement(stmt) || tstl.isBreakStatement(stmt)) return true;
+    if (tstl.isReturnStatement(stmt) || tstl.isBreakStatement(stmt) || tstl.isGotoStatement(stmt))
+      return true;
     // Recurse into if/do blocks — break/return there still exits our scope
     if (tstl.isIfStatement(stmt)) {
       if (hasEarlyExit(stmt.ifBlock.statements)) return true;
@@ -147,7 +176,13 @@ function hasEarlyExit(statements: tstl.Statement[]): boolean {
     if (tstl.isDoStatement(stmt)) {
       if (hasEarlyExit(stmt.statements)) return true;
     }
-    // Don't recurse into nested loops or functions — break/return there only exits the inner scope
+    // Recurse into nested loops for return/goto only (break is scoped to the inner loop)
+    if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
+      if (hasNestedFunctionExit(stmt.body.statements)) return true;
+    }
+    if (tstl.isForStatement(stmt) || tstl.isForInStatement(stmt)) {
+      if (hasNestedFunctionExit(stmt.body.statements)) return true;
+    }
   }
   return false;
 }

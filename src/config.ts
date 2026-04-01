@@ -27,13 +27,19 @@ export interface ConstantDef {
 export interface ConditionalCompilationConfig {
   enabled: boolean;
   constants: Record<string, ConstantDef>;
+  strict?: boolean;
+}
+
+export interface InlineConfig {
+  enabled?: boolean;
+  strict?: boolean;
 }
 
 export interface RulesConfig {
   "conditional-compilation": boolean | ConditionalCompilationConfig;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
-  inline: boolean;
+  inline: boolean | InlineConfig;
   localizer: boolean | LocalizerConfig;
   "debug-strip": boolean | DebugStripConfig;
 }
@@ -43,6 +49,7 @@ export type InterpreterTarget = "puc" | "luajit";
 export interface PluginConfig {
   rules: RulesConfig;
   target?: InterpreterTarget;
+  strict?: boolean;
 }
 
 const DEFAULT_DEBUG_STRIP: DebugStripConfig = {
@@ -111,6 +118,44 @@ export function resolveConditionalCompilationConfig(
   return resolved;
 }
 
+export function resolveInlineConfig(value: boolean | InlineConfig | undefined): {
+  enabled: boolean;
+  strict: boolean;
+} {
+  if (value === false) return { enabled: false, strict: false };
+  if (value === undefined || value === true) return { enabled: true, strict: false };
+  return {
+    enabled: value.enabled !== false,
+    strict: value.strict === true,
+  };
+}
+
+/**
+ * Extracts the per-rule strict field from ConditionalCompilationConfig.
+ * Returns undefined when value is not an object (boolean or absent), meaning "not set".
+ */
+export function resolveConditionalCompilationStrict(
+  value: boolean | ConditionalCompilationConfig | undefined,
+): boolean | undefined {
+  if (value === undefined || value === true || value === false) return undefined;
+  // value is ConditionalCompilationConfig — object narrowing, no cast required
+  return value.strict;
+}
+
+/**
+ * Resolves the effective strict flag from global and per-rule overrides.
+ * Per-rule `false` always wins over global `true` (allows opting a rule out of global strict).
+ */
+export function resolveEffectiveStrict(
+  globalStrict: boolean,
+  perRuleStrict: boolean | undefined,
+): boolean {
+  // Per-rule false always wins over global true.
+  if (perRuleStrict === false) return false;
+  // Global true, or per-rule true, or both — strict is active.
+  return globalStrict || perRuleStrict === true;
+}
+
 export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boolean {
   const value = config[rule];
   if (typeof value === "boolean") return value;
@@ -119,27 +164,28 @@ export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boo
 
 export type RuleFactory = (checker: ts.TypeChecker, config: PluginConfig) => tstl.Visitors;
 
-function isRecord(val: unknown): val is Record<string, unknown> {
-  return typeof val === "object" && val !== null && !Array.isArray(val);
+export function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === "object" && val != null && !Array.isArray(val);
 }
 
 const STRUCTURED_RULES: ReadonlySet<string> = new Set([
   "conditional-compilation",
+  "inline",
   "localizer",
   "debug-strip",
 ]);
 
 export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   const rawRules = isRecord(options?.rules) ? options.rules : {};
-
   const rules: RulesConfig = { ...DEFAULT_RULES };
 
   for (const key of Object.keys(DEFAULT_RULES) as (keyof RulesConfig)[]) {
-    if (!(key in rawRules)) continue;
     const val = rawRules[key];
+    if (val === undefined) continue;
+
     if (STRUCTURED_RULES.has(key)) {
       if (typeof val === "boolean" || isRecord(val)) {
-        // Safe: val is boolean or a config object from tsconfig.json
+        // We know key is a valid key of RulesConfig and val matches the expected type
         (rules as unknown as Record<string, unknown>)[key] = val;
       }
     } else if (typeof val === "boolean") {
@@ -147,9 +193,11 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
     }
   }
 
-  const target = isInterpreterTarget(options?.target) ? options.target : undefined;
-
-  return { rules, target };
+  return {
+    rules,
+    target: isInterpreterTarget(options?.target) ? options.target : undefined,
+    strict: options?.strict === true,
+  };
 }
 
 const INTERPRETER_TARGETS: ReadonlySet<string> = new Set(["puc", "luajit"]);

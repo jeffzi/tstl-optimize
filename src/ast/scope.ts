@@ -73,7 +73,7 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
           if (tstl.isIdentifier(name)) scopeDefs.add(name.text);
         }
       }
-      if (tstl.isForStatement(stmt) && tstl.isIdentifier(stmt.controlVariable)) {
+      if (tstl.isForStatement(stmt)) {
         scopeDefs.add(stmt.controlVariable.text);
       }
     },

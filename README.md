@@ -3,10 +3,27 @@
 [![CI](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that generates faster Lua
-code through configurable optimization rules. Targets **Lua 5.1 (PUC)** and **LuaJIT**. All rules
-default to on except `conditional-compilation` and `debug-strip`, which remove code. Toggle each
-rule individually.
+A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that optimizes Lua output with configurable rules. It supports **Lua 5.1 (PUC)** and **LuaJIT**. You can toggle each rule individually. Most rules are on by default, except for `conditional-compilation` and `debug-strip`, which remove code.
+
+```typescript
+// TypeScript input
+Math.sqrt(x)
+math.floor(a) + math.floor(b)
+/** @inline */
+function double(x: number) {
+  return x * 2;
+}
+const y = double(5);
+```
+
+```lua
+-- Lua output (with plugin)
+x ^ 0.5
+local ____math_floor = math.floor
+____math_floor(a) + ____math_floor(b)
+-- (inlined at call sites)
+local y = 5 * 2
+```
 
 ## Installation
 
@@ -96,7 +113,7 @@ const isDebug = DEBUG;                // becomes: isDebug = false
 const isWeb = PLATFORM === "web";     // becomes: isWeb = false
 ```
 
-At build time the rule reads the environment variable named in `env` and falls back to `default`
+At build time, the rule reads the environment variable named in `env` and falls back to `default`
 when the variable is unset. Supported value types: `boolean`, `number`, `string`.
 
 Beyond branch elimination, the rule **substitutes every constant reference with its literal value**
@@ -117,8 +134,8 @@ replaces bare identifiers (`DEBUG`), binary comparisons (`PLATFORM === "web"`), 
 
 ### `math-intrinsics`
 
-Replaces `Math.*` calls with inline Lua expressions, eliminating C-function-call overhead through
-the `math` table. Skipped on LuaJIT, which already dispatches C calls fast.
+Replaces `Math.*` calls with inline Lua expressions and avoids the dispatch overhead of going
+through the `math` table. The rule skips LuaJIT targets, which already handle C calls efficiently.
 
 | Source | Lua output | Notes |
 | --- | --- | --- |
@@ -158,7 +175,7 @@ in a nested declaration.
 
 ### `inline`
 
-Inlines `@inline`-tagged single-expression functions at call sites.
+Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries.
 
 ```typescript
 /** @inline */
@@ -168,15 +185,185 @@ function double(x: number) {
 const y = double(5); // becomes: const y = 5 * 2
 ```
 
-A function qualifies for inlining when it meets all these conditions:
+Cross-module inlining works for self-contained functions that only reference parameters and literals. The rule skips functions that capture module-scope variables and issues a diagnostic warning (code 90001).
+
+```typescript
+// utils.ts
+/** @inline */
+export function double(x: number) { return x * 2; }       // ✓ OK
+/** @inline */
+export function addOffset(x: number) { return x + OFFSET; } // ✗ captures OFFSET
+
+// main.ts
+import { double } from "./utils";
+const y = double(5); // inlined: const y = 5 * 2
+```
+
+A function must meet these conditions to be inlined:
 
 - `@inline` JSDoc tag on the function
-- Single-expression body (or arrow `=> expr`)
+- Single-expression body (or arrow `=> expr`) or supported multi-statement body
 - Module-scope function (not nested)
-- No rest, default, or optional parameters
+- No rest, default, optional, or destructuring parameters
 - Non-recursive
 - No parameter writes inside the body
-- Each parameter used more than once receives only side-effect-free arguments
+- Multi-use parameters require side-effect-free arguments in expression bodies
+- Cross-module: body references only parameters and literals (no captured variables from the same module)
+
+#### Multi-statement inline
+
+The plugin supports multi-statement function bodies at statement-level call sites. It expands these in-place, wrapping them in a `do...end` block (except at return sites) to prevent variable name leakage.
+
+##### Pattern 1 — Void statement site
+
+```typescript
+/** @inline */
+function setup(x: number) {
+  let a = x + 1;
+  console.log(a);
+}
+declare const n: number;
+setup(n); // expanded into do...end block
+```
+
+```lua
+local ____inline_arg_0 = n
+do
+  local a = ____inline_arg_0 + 1
+  print(a)
+end
+```
+
+##### Pattern 2 — Variable-declaration site
+
+```typescript
+/** @inline */
+function compute(x: number): number {
+  const y = x + 1;
+  return y * 2;
+}
+declare const a: number;
+const r = compute(a);
+```
+
+```lua
+local r
+local ____inline_arg_0 = a
+do
+  local y = ____inline_arg_0 + 1
+  r = y * 2
+end
+```
+
+##### Pattern 3 — Return site
+
+```typescript
+/** @inline */
+function compute(x: number): number {
+  const y = x + 1;
+  return y * 2;
+}
+declare const a: number;
+function caller(): number {
+  return compute(a);
+}
+```
+
+```lua
+-- body statements emitted flat, no do...end needed
+local ____inline_arg_0 = a
+local y = ____inline_arg_0 + 1
+return y * 2
+```
+
+##### Pattern 4 — Destructuring site
+
+```typescript
+/** @inline */
+function foo(x: number): { a: number; b: number } {
+  const obj = { a: x, b: x + 1 };
+  return obj;
+}
+declare const x: number;
+const { a, b } = foo(x);
+```
+
+```lua
+-- result variable holds the inlined return, bindings extracted after do...end
+local ____inline_result_N
+local ____inline_arg_0 = x
+do
+  local obj = {a = ____inline_arg_0, b = ____inline_arg_0 + 1}
+  ____inline_result_N = obj
+end
+local a = ____inline_result_N.a
+local b = ____inline_result_N.b
+```
+
+(where `N` is a compiler-generated symbol ID; the exact value is unimportant)
+
+##### Pattern 5 — LuaMultiReturn destructuring site
+
+```typescript
+/** @inline */
+function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
+  const tmp = a;
+  return $multi(b, tmp);
+}
+declare const x: number;
+declare const y: number;
+const [p, q] = swap(x, y);
+```
+
+```lua
+local ____inline_result_A
+local ____inline_result_B
+local ____inline_arg_0 = x
+local ____inline_arg_1 = y
+do
+  local tmp = ____inline_arg_0
+  ____inline_result_A, ____inline_result_B = ____inline_arg_1, tmp
+end
+local p, q = ____inline_result_A, ____inline_result_B
+```
+
+Multiple result variables are allocated to capture all return values. A single variable would
+truncate multi-return to its first value in Lua.
+
+Argument temporaries are always hoisted before the `do...end` block to preserve the left-to-right
+evaluation order of the original call's arguments. Variables declared inside `do...end` do not leak
+into the caller's scope.
+
+A multi-statement `@inline` function with an empty body is erased silently at statement sites — no
+`do...end` is emitted.
+
+#### Call-site limitations
+
+Multi-statement inline is rejected with a diagnostic warning (code 90001) at expression positions
+where the result feeds another expression. The function declaration is kept and the call is left
+unchanged:
+
+```typescript
+// Not inlined — expression position
+const r = effect(a) + 1;   // warns: multi-statement body cannot be inlined at expression position
+bar(effect(a));             // warns: same reason
+```
+
+Functions with an early `return`, `break`, or `continue` in the body are also rejected — Lua's
+`do...end` block has no "return from block" construct, so a `return` inside the inlined body would
+return from the enclosing function rather than just exiting the inline. `break` inside a `switch` or
+loop is allowed (it is scoped to that construct and does not affect the inlined block):
+
+```typescript
+/** @inline */
+function bail(x: number) { if (x > 0) return; console.log(x); }
+declare const n: number;
+bail(n); // warns: @inline ignored — early return in body
+```
+
+#### Rule interaction
+
+Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside inlined bodies the same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations as the rest of the file.
 
 ### `localizer`
 
@@ -201,10 +388,12 @@ end                                    pos[i] = pos[i] + ____vel * dt
                                    end
 ```
 
-Array element localization handles the simple case only: the base must be a plain identifier, the
-index must match exactly the loop control variable, the rule skips loops containing function calls
-(a call could modify the array through a reference, making the cached local stale), and skips
-write-back candidates in loops with early exits (`break`/`return`).
+Array element localization handles the simple case only:
+
+- The base must be a plain identifier and the index must match the loop control variable exactly.
+- Loops containing function calls are skipped — a call could modify the array through a reference,
+  making the cached local stale.
+- Write-back candidates in loops with early exits (`break`/`return`) are skipped.
 
 Options:
 
@@ -217,24 +406,26 @@ Options:
 
 #### Root filtering
 
-**Default behavior (breaking change from v0.x)**
+##### Default behavior
 
-In v1.0, the localizer hoists only chains rooted at Lua stdlib globals by default:
+The localizer hoists only chains rooted at Lua stdlib globals by default:
 `math`, `string`, `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`.
 
 Chains rooted at any other global are skipped. This protects against libraries that rely on
 metatables (e.g., busted/luassert: `assert.are_not.equal`), where hoisting the chain would
 collapse the `__index` chain and silently change behavior.
 
-**Resolution formula:** `(STDLIB ∪ include) \ exclude \ (BLOCKLIST \ include)`
+**Resolution formula** (`∪` = union, `\` = set difference):
+
+`(STDLIB ∪ include) \ exclude \ (BLOCKLIST \ include)`
 
 An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pending`, `setup`,
 `teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
 excluded unless the user explicitly names them in `include`.
 
-**Restoring previous behavior**
+##### Restoring previous behavior
 
-To hoist all chains as v0.x did, set `include: ["*"]`. This enables opt-out mode — all roots
+To hoist all chains regardless of root, set `include: ["*"]`. This enables opt-out mode — all roots
 are allowed except those in `exclude` and the internal blocklist (unless also named in `include`).
 
 ```jsonc
@@ -299,14 +490,60 @@ Options:
 - **Custom config replaces defaults** — `functions: ["myDebug"]` replaces the default list; it does
   not extend it. Include defaults explicitly to keep both.
 
+## Strict mode
+
+By default, unresolvable diagnostics from optimization rules are emitted as warnings. The `inline`
+rule uses code 90001; `conditional-compilation` uses code 90002. Set `strict: true` at the plugin
+level to promote all optimization warnings to compilation errors; the build fails whenever an
+optimization cannot be applied:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true
+      }
+    ]
+  }
+}
+```
+
+Use a per-rule `strict` override to exempt a specific rule from the global setting. The `inline` and
+`conditional-compilation` rules support per-rule strict. The example below enables global strict but
+keeps inline diagnostics as warnings:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true,
+        "rules": {
+          "inline": { "strict": false }
+        }
+      }
+    ]
+  }
+}
+```
+
+Precedence:
+
+- Per-rule `strict: false` always overrides global `strict: true` for that rule.
+- Per-rule `strict: true` promotes warnings to errors for that rule even when the global is `false`.
+
 ## Configuration reference
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants |
+| `strict` | `boolean` | `false` | Promote all optimization warnings (inline code 90001, conditional-compilation code 90002) to compilation errors globally. See [Strict mode](#strict-mode). |
+| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants. Accepts `{ constants: ...; strict?: boolean }` for per-rule error promotion. |
 | `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions |
 | `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based |
-| `rules.inline` | `boolean` | `true` | Inline `@inline` functions at call sites |
+| `rules.inline` | `boolean \| { enabled?: boolean; strict?: boolean }` | `true` | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)). |
 | `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default — see `localizer` section for `include`/`exclude` options |
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug/profiling calls |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target |
@@ -314,7 +551,7 @@ Options:
 ## Examples
 
 The [`examples/`](examples/) directory contains a `.ts` / `.lua` pair for each rule, showing the
-TypeScript input and generated Lua output. See [`examples/readme.md`](examples/readme.md) for
+TypeScript input and generated Lua output. See [`examples/README.md`](examples/README.md) for
 details.
 
 ## License

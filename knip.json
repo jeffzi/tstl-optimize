@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/webpro-nl/knip/main/packages/knip/schema.json",
-  "project": ["src/**/*.ts", "test/**/*.ts"],
+  "project": ["src/**/*.ts", "tests/**/*.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["@commitlint/cli", "@typescript-to-lua/language-extensions", "dprint"]
 }

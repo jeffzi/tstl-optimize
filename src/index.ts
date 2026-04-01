@@ -32,6 +32,19 @@ const EXPRESSION_KINDS: ReadonlySet<number> = new Set([
   ts.SyntaxKind.CallExpression,
 ]);
 
+// Statement SyntaxKinds where returning undefined should fall through to
+// TSTL's default transform instead of erasing the statement. Without this,
+// a visitor returning undefined (meaning "not handled") for ExpressionStatement
+// would silently erase it — unlike expression kinds which have the
+// superTransformExpression fallback, and unlike conditional-compilation's
+// statement kinds where erasure is the intended semantics.
+const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
+  ts.SyntaxKind.ExpressionStatement,
+  ts.SyntaxKind.VariableStatement,
+  ts.SyntaxKind.ReturnStatement,
+  ts.SyntaxKind.FunctionDeclaration,
+]);
+
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;
   private config: PluginConfig;
@@ -50,54 +63,33 @@ class OptimizePlugin implements tstl.Plugin {
   }
 
   private buildVisitors(): void {
-    // Dynamic merging requires loose typing — the Visitors mapped type
-    // can't track kind↔node relationships through Object.entries iteration
     type AnyVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
-    type LooseVisitors = Record<number, AnyVisitor>;
-    const merged: LooseVisitors = {};
+    const merged: Record<number, AnyVisitor> = {};
 
     for (const [ruleName, factory] of RULE_ENTRIES) {
       if (!isRuleEnabled(this.config.rules, ruleName)) continue;
+
       const ruleVisitors = factory(this.checker, this.config);
       for (const [kindStr, rawVisitor] of Object.entries(ruleVisitors)) {
         const kind = Number(kindStr);
-        // Contravariance prevents direct assignment — safe because each
-        // visitor only receives nodes matching its registered SyntaxKind
         const visitor = rawVisitor as AnyVisitor | { transform: AnyVisitor };
         const fn: AnyVisitor = typeof visitor === "function" ? visitor : visitor.transform;
+
         const existing = merged[kind];
-        if (existing) {
-          // Multiple rules registered for the same SyntaxKind.
-          // Chain: higher-priority visitor (fn) runs first; returning
-          // undefined signals "not handled" and falls through to the
-          // lower-priority visitor (existing). If ALL visitors return
-          // undefined, the wrapper calls TSTL's default transformation
-          // for expression kinds; for statement kinds undefined means
-          // "erase" which is the intended semantics.
-          const isExpr = EXPRESSION_KINDS.has(kind);
-          merged[kind] = (node, context) => {
-            const fnResult = fn(node, context);
-            if (fnResult !== undefined) return fnResult;
-            const existingResult = existing(node, context);
-            if (existingResult !== undefined) return existingResult;
-            if (isExpr) return context.superTransformExpression(node as ts.Expression);
-            return undefined;
-          };
-        } else if (EXPRESSION_KINDS.has(kind)) {
-          // Wrap sole expression visitors with a superTransformExpression
-          // fallback so they can return undefined to signal "not handled"
-          merged[kind] = (node, context) => {
-            const result = fn(node, context);
-            if (result !== undefined) return result;
-            return context.superTransformExpression(node as ts.Expression);
-          };
-        } else {
-          merged[kind] = fn;
-        }
+        const isExpr = EXPRESSION_KINDS.has(kind);
+        const isStmtFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
+
+        merged[kind] = (node, context) => {
+          const res = fn(node, context) ?? existing?.(node, context);
+          if (res !== undefined) return res;
+
+          if (isExpr) return context.superTransformExpression(node as ts.Expression);
+          if (isStmtFallback) return context.superTransformStatements(node as ts.Statement);
+          return undefined;
+        };
       }
     }
 
-    // Safe: each key was originally from a well-typed Visitors object
     this.visitors = merged as unknown as tstl.Visitors;
   }
 
@@ -111,7 +103,8 @@ class OptimizePlugin implements tstl.Plugin {
   ): void {
     if (!isRuleEnabled(this.config.rules, "inline")) return;
     for (const file of result) {
-      file.code = file.code.replace(/---\n-- @inline\n/g, "");
+      // Remove @inline from JSDoc comments in emitted Lua.
+      file.code = file.code.replace(/(?:---\s*\n)?--\s*@inline\s*\n/g, "");
     }
   }
 }
@@ -120,5 +113,4 @@ class OptimizePlugin implements tstl.Plugin {
 // so the default export must be a function to receive tsconfig.json options.
 export default (options?: Record<string, unknown>): OptimizePlugin => new OptimizePlugin(options);
 
-// Named export for in-memory test usage
 export { OptimizePlugin };

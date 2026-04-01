@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **inline** rule now supports multi-statement function bodies at statement-level call sites,
+  expanding them in-place wrapped in `do...end` blocks. Supported patterns: void statement,
+  variable-declaration, return site, and destructuring (object, array, and `LuaMultiReturn`).
+- **inline** rule supports per-rule `strict` override (`{ "strict": true }`) to promote inline
+  warnings to compilation errors independently of the global setting.
+
+### Changed
+
+- **inline** cross-module rejection is now narrower: only functions that reference non-parameter
+  identifiers from the source module are rejected. Previously all multi-statement cross-module
+  calls were rejected.
+- **inline** now rejects destructuring parameters with a specific diagnostic message instead of
+  the generic "parameter symbol could not be resolved".
+- **inline** `break` inside `switch` cases is no longer rejected — TSTL compiles switches to
+  `if-elseif` chains, so the `break` is scoped to the switch and does not affect the inlined block.
+
+### Fixed
+
+- **inline** expression-body inlining now correctly duplicates complex arguments used multiple times
+  in the body. Previously, repeated uses could share internal state and produce corrupted output.
+- **localizer** array element write-back is now suppressed when a `return` statement exists inside
+  a nested loop. Previously `return` inside nested loops was not detected as an early exit, which
+  could cause lost mutations when the write-back was skipped at runtime.
+
 ## [0.4.0] - 2026-03-28
 
 ### Added

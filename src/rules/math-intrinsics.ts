@@ -126,21 +126,20 @@ export const createVisitors: RuleFactory = (checker, config) => {
     [ts.SyntaxKind.BinaryExpression]: (node, context) => {
       const binNode = node as ts.BinaryExpression;
       // x ** 2 → x * x
-      if (binNode.operatorToken.kind === ts.SyntaxKind.AsteriskAsteriskToken) {
-        if (
-          ts.isNumericLiteral(binNode.right) &&
-          binNode.right.text === "2" &&
-          !hasSideEffects(binNode.left)
-        ) {
-          const luaBase = context.transformExpression(binNode.left);
-          return tstl.createBinaryExpression(
-            luaBase,
-            tstl.cloneNode(luaBase),
-            tstl.SyntaxKind.MultiplicationOperator,
-          );
-        }
+      if (
+        binNode.operatorToken.kind !== ts.SyntaxKind.AsteriskAsteriskToken ||
+        !ts.isNumericLiteral(binNode.right) ||
+        binNode.right.text !== "2" ||
+        hasSideEffects(binNode.left)
+      ) {
+        return undefined;
       }
-      return undefined;
+      const luaBase = context.transformExpression(binNode.left);
+      return tstl.createBinaryExpression(
+        luaBase,
+        tstl.cloneNode(luaBase),
+        tstl.SyntaxKind.MultiplicationOperator,
+      );
     },
   };
   return visitors as tstl.Visitors;

@@ -5,6 +5,8 @@ import {
   type ConstantValue,
   type RuleFactory,
   resolveConditionalCompilationConfig,
+  resolveConditionalCompilationStrict,
+  resolveEffectiveStrict,
 } from "../config";
 
 function isTruthy(value: ConstantValue): boolean {
@@ -91,20 +93,6 @@ function referencesKnownConstants(
   return false;
 }
 
-function createPartialFoldingWarning(node: ts.Node): ts.Diagnostic {
-  return {
-    file: node.getSourceFile(),
-    start: node.getStart(),
-    length: node.getWidth(),
-    messageText:
-      "conditional-compilation: condition references compile-time constants " +
-      "but could not be fully resolved — the entire branch is preserved at runtime",
-    category: ts.DiagnosticCategory.Warning,
-    code: 90002,
-    source: "tstl-optimize",
-  };
-}
-
 function constantToLuaLiteral(value: ConstantValue): tstl.Expression {
   if (typeof value === "boolean") return tstl.createBooleanLiteral(value);
   if (typeof value === "number") return tstl.createNumericLiteral(value);
@@ -115,17 +103,38 @@ export const createVisitors: RuleFactory = (_checker, config) => {
   const maybeResolved = resolveConditionalCompilationConfig(
     config.rules["conditional-compilation"],
   );
-  if (maybeResolved === false || maybeResolved.size === 0) return {};
+  if (maybeResolved === false) return {};
   // Rebind after guard so TypeScript narrows the type inside closures below
   const resolved = maybeResolved;
+
+  // Resolve strict: per-rule override wins over global (same precedence as inline).
+  const perRuleStrict = resolveConditionalCompilationStrict(
+    config.rules["conditional-compilation"],
+  );
+  const effectiveStrict = resolveEffectiveStrict(config.strict ?? false, perRuleStrict);
+
+  function createPartialFoldingWarning(node: ts.Node): ts.Diagnostic {
+    return {
+      file: node.getSourceFile(),
+      start: node.getStart(),
+      length: node.getWidth(),
+      messageText:
+        "conditional-compilation: condition references compile-time constants " +
+        "but could not be fully resolved — the entire branch is preserved at runtime",
+      category: effectiveStrict ? ts.DiagnosticCategory.Error : ts.DiagnosticCategory.Warning,
+      code: 90002,
+      source: "tstl-optimize",
+    };
+  }
 
   function tryFoldExpression(
     node: ts.Expression,
     context: tstl.TransformationContext,
   ): tstl.Expression {
     const value = evaluateCondition(node, resolved);
-    if (value !== undefined) return constantToLuaLiteral(value);
-    return context.superTransformExpression(node);
+    return value !== undefined
+      ? constantToLuaLiteral(value)
+      : context.superTransformExpression(node);
   }
 
   return {
@@ -144,7 +153,6 @@ export const createVisitors: RuleFactory = (_checker, config) => {
 
     [ts.SyntaxKind.IfStatement]: (node: ts.IfStatement, context: tstl.TransformationContext) => {
       const value = evaluateCondition(node.expression, resolved);
-      // Can't resolve → pass through to default IfStatement handler
       if (value === undefined) {
         if (referencesKnownConstants(node.expression, resolved)) {
           context.diagnostics.push(createPartialFoldingWarning(node));
@@ -152,11 +160,10 @@ export const createVisitors: RuleFactory = (_checker, config) => {
         return context.superTransformStatements(node);
       }
 
-      // Unwrap block to avoid do...end wrapper in Lua output
       const branch = isTruthy(value) ? node.thenStatement : node.elseStatement;
-      if (!branch) return undefined;
-
-      return unwrapBlock(branch).flatMap((s) => context.transformStatements(s));
+      return branch
+        ? unwrapBlock(branch).flatMap((s) => context.transformStatements(s))
+        : undefined;
     },
 
     [ts.SyntaxKind.ConditionalExpression]: (
@@ -164,7 +171,6 @@ export const createVisitors: RuleFactory = (_checker, config) => {
       context: tstl.TransformationContext,
     ) => {
       const value = evaluateCondition(node.condition, resolved);
-      // Can't resolve → pass through to default ConditionalExpression handler
       if (value === undefined) {
         if (referencesKnownConstants(node.condition, resolved)) {
           context.diagnostics.push(createPartialFoldingWarning(node));
@@ -172,8 +178,6 @@ export const createVisitors: RuleFactory = (_checker, config) => {
         return context.superTransformExpression(node);
       }
 
-      // Transform the surviving branch through the full visitor chain
-      // (not super — whenTrue/whenFalse have different SyntaxKinds)
       return isTruthy(value)
         ? context.transformExpression(node.whenTrue)
         : context.transformExpression(node.whenFalse);
