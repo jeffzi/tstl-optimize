@@ -164,8 +164,8 @@ export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boo
 
 export type RuleFactory = (checker: ts.TypeChecker, config: PluginConfig) => tstl.Visitors;
 
-function isRecord(val: unknown): val is Record<string, unknown> {
-  return typeof val === "object" && val !== null && !Array.isArray(val);
+export function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === "object" && val != null && !Array.isArray(val);
 }
 
 const STRUCTURED_RULES: ReadonlySet<string> = new Set([
@@ -177,15 +177,15 @@ const STRUCTURED_RULES: ReadonlySet<string> = new Set([
 
 export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   const rawRules = isRecord(options?.rules) ? options.rules : {};
-
   const rules: RulesConfig = { ...DEFAULT_RULES };
 
   for (const key of Object.keys(DEFAULT_RULES) as (keyof RulesConfig)[]) {
-    if (!(key in rawRules)) continue;
     const val = rawRules[key];
+    if (val === undefined) continue;
+
     if (STRUCTURED_RULES.has(key)) {
       if (typeof val === "boolean" || isRecord(val)) {
-        // Safe: val is boolean or a config object from tsconfig.json
+        // We know key is a valid key of RulesConfig and val matches the expected type
         (rules as unknown as Record<string, unknown>)[key] = val;
       }
     } else if (typeof val === "boolean") {
@@ -193,10 +193,11 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
     }
   }
 
-  const target = isInterpreterTarget(options?.target) ? options.target : undefined;
-  const strict = options?.strict === true;
-
-  return { rules, target, strict };
+  return {
+    rules,
+    target: isInterpreterTarget(options?.target) ? options.target : undefined,
+    strict: options?.strict === true,
+  };
 }
 
 const INTERPRETER_TARGETS: ReadonlySet<string> = new Set(["puc", "luajit"]);
