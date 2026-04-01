@@ -4,11 +4,9 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
-import { type RuleFactory, resolveEffectiveStrict, resolveInlineConfig } from "../config";
+import { isRecord, type RuleFactory, resolveEffectiveStrict, resolveInlineConfig } from "../config";
 
-// ScopeType is not exported from the TSTL public index. Function = 2 (verified against TSTL source).
-// biome-ignore lint/suspicious/noExplicitAny: accessing internal enum value by numeric constant
-const FUNCTION_SCOPE = 2 as any;
+const FUNCTION_SCOPE = 2 as Parameters<tstl.TransformationContext["pushScope"]>[0];
 
 interface ExpressionInlineTarget {
   kind: "expression";
@@ -52,26 +50,28 @@ function classifyBody(
   if (ts.isArrowFunction(func) && !ts.isBlock(func.body)) {
     return { kind: "expression", expr: func.body };
   }
-  const body = ts.isArrowFunction(func) ? (func.body as ts.Block) : func.body;
+
+  const body = ts.isArrowFunction(func) ? (func.body as ts.Block | undefined) : func.body;
   if (!body || body.statements.length === 0) return undefined;
 
-  if (body.statements.length === 1) {
-    const stmt = body.statements[0];
+  const { statements } = body;
+  if (statements.length === 1) {
+    const stmt = statements[0];
     if (ts.isReturnStatement(stmt) && stmt.expression) {
       return { kind: "expression", expr: stmt.expression };
     }
   }
 
-  const lastStmt = body.statements[body.statements.length - 1];
+  const lastStmt = statements[statements.length - 1];
   if (ts.isReturnStatement(lastStmt) && lastStmt.expression) {
     return {
       kind: "statementsWithReturn",
-      stmts: body.statements.slice(0, -1),
+      stmts: statements.slice(0, -1),
       returnExpr: lastStmt.expression,
     };
   }
 
-  return { kind: "statements", stmts: body.statements };
+  return { kind: "statements", stmts: statements };
 }
 
 type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
@@ -293,6 +293,15 @@ function mapLuaExpression(
         recurse(cond.whenFalse),
       );
     }
+    case tstl.SyntaxKind.FunctionExpression: {
+      const func = node as tstl.FunctionExpression;
+      return tstl.createFunctionExpression(
+        tstl.createBlock(mapLuaStatements(func.body.statements, leafFn)),
+        func.params,
+        func.dots,
+        func.flags,
+      );
+    }
     default:
       return node;
   }
@@ -466,9 +475,93 @@ function someLuaIdentifier(
       const cond = node as tstl.ConditionalExpression;
       return some(cond.condition) || some(cond.whenTrue) || some(cond.whenFalse);
     }
+    case tstl.SyntaxKind.FunctionExpression:
+      return someLuaIdentifierInStatements(
+        (node as tstl.FunctionExpression).body.statements,
+        predicate,
+      );
     default:
       return false;
   }
+}
+
+/**
+ * Scan a list of Lua statements for any identifier matching the predicate.
+ * Mutual recursion with someLuaIdentifier.
+ */
+function someLuaIdentifierInStatements(
+  statements: readonly tstl.Statement[],
+  predicate: (symbolId: tstl.SymbolId) => boolean,
+): boolean {
+  const some = (n: tstl.Expression) => someLuaIdentifier(n, predicate);
+  const someStmts = (s: readonly tstl.Statement[]) => someLuaIdentifierInStatements(s, predicate);
+
+  for (const stmt of statements) {
+    switch (stmt.kind) {
+      case tstl.SyntaxKind.DoStatement:
+        if (someStmts((stmt as tstl.DoStatement).statements)) return true;
+        break;
+      case tstl.SyntaxKind.VariableDeclarationStatement: {
+        const varDecl = stmt as tstl.VariableDeclarationStatement;
+        if (varDecl.right?.some(some)) return true;
+        break;
+      }
+      case tstl.SyntaxKind.AssignmentStatement: {
+        const assign = stmt as tstl.AssignmentStatement;
+        if (assign.left.some(some) || assign.right.some(some)) return true;
+        break;
+      }
+      case tstl.SyntaxKind.IfStatement: {
+        const ifStmt = stmt as tstl.IfStatement;
+        if (some(ifStmt.condition) || someStmts(ifStmt.ifBlock.statements)) return true;
+        let currentElse = ifStmt.elseBlock;
+        while (currentElse) {
+          if (tstl.isIfStatement(currentElse)) {
+            if (some(currentElse.condition) || someStmts(currentElse.ifBlock.statements))
+              return true;
+            currentElse = currentElse.elseBlock;
+          } else {
+            if (someStmts(currentElse.statements)) return true;
+            break;
+          }
+        }
+        break;
+      }
+      case tstl.SyntaxKind.WhileStatement: {
+        const whileStmt = stmt as tstl.WhileStatement;
+        if (some(whileStmt.condition) || someStmts(whileStmt.body.statements)) return true;
+        break;
+      }
+      case tstl.SyntaxKind.RepeatStatement: {
+        const repeatStmt = stmt as tstl.RepeatStatement;
+        if (some(repeatStmt.condition) || someStmts(repeatStmt.body.statements)) return true;
+        break;
+      }
+      case tstl.SyntaxKind.ForStatement: {
+        const forStmt = stmt as tstl.ForStatement;
+        if (
+          some(forStmt.controlVariableInitializer) ||
+          some(forStmt.limitExpression) ||
+          (forStmt.stepExpression && some(forStmt.stepExpression)) ||
+          someStmts(forStmt.body.statements)
+        )
+          return true;
+        break;
+      }
+      case tstl.SyntaxKind.ForInStatement: {
+        const forIn = stmt as tstl.ForInStatement;
+        if (forIn.expressions.some(some) || someStmts(forIn.body.statements)) return true;
+        break;
+      }
+      case tstl.SyntaxKind.ReturnStatement:
+        if ((stmt as tstl.ReturnStatement).expressions.some(some)) return true;
+        break;
+      case tstl.SyntaxKind.ExpressionStatement:
+        if (some((stmt as tstl.ExpressionStatement).expression)) return true;
+        break;
+    }
+  }
+  return false;
 }
 
 function needsParentheses(node: tstl.Expression): boolean {
@@ -531,7 +624,7 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false):
       if (bodyResult !== true) return bodyResult;
     } else if (ts.isSwitchStatement(stmt)) {
       for (const clause of stmt.caseBlock.clauses) {
-        const clauseResult = hasLinearControlFlow(clause.statements, true);
+        const clauseResult = hasLinearControlFlow(clause.statements, loopBody);
         if (clauseResult !== true) return clauseResult;
       }
     } else if (ts.isTryStatement(stmt)) {
@@ -1199,13 +1292,13 @@ function handleExpressionStatement(
     return undefined;
   }
 
-  if (target.bodyStmts.length === 0) return [];
-
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== true) {
     context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
     return undefined;
   }
+
+  if (target.bodyStmts.length === 0) return [];
 
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
@@ -1227,14 +1320,39 @@ function handleExpressionStatement(
   return buildDoEndBlock(target, callNode, checker, context);
 }
 
+function handleFunctionDeclaration(node: ts.FunctionDeclaration): tstl.Statement[] | undefined {
+  if (hasInlineTag(node) && isModuleScopeDeclaration(node) && !isExported(node)) {
+    return [];
+  }
+  return undefined;
+}
+
+function handleVariableStatementDeclaration(
+  node: ts.VariableStatement,
+): tstl.Statement[] | undefined {
+  const decls = node.declarationList.declarations;
+  if (
+    decls.length === 1 &&
+    hasInlineTag(node) &&
+    isModuleScopeDeclaration(decls[0]) &&
+    !isExported(node)
+  ) {
+    return [];
+  }
+  return undefined;
+}
+
+function isExported(node: ts.Node): boolean {
+  return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
+}
+
 export const createVisitors: RuleFactory = (checker, config) => {
   const inlineCfg = resolveInlineConfig(config.rules.inline);
   if (!inlineCfg.enabled) return {};
   // Read per-rule strict directly from raw config to distinguish "not set" (undefined)
   // from "explicitly disabled" (false). resolveInlineConfig normalizes both to false.
   const rawInline = config.rules.inline;
-  const perRuleStrict =
-    typeof rawInline === "object" && rawInline !== null ? rawInline.strict : undefined;
+  const perRuleStrict = isRecord(rawInline) ? (rawInline.strict as boolean | undefined) : undefined;
   const strictMode = resolveEffectiveStrict(config.strict ?? false, perRuleStrict);
 
   // Returning undefined signals "not handled" to the merge wrapper; the strict
@@ -1246,9 +1364,12 @@ export const createVisitors: RuleFactory = (checker, config) => {
     [ts.SyntaxKind.ExpressionStatement]: (node, context) =>
       handleExpressionStatement(node as ts.ExpressionStatement, checker, context, strictMode),
     [ts.SyntaxKind.VariableStatement]: (node, context) =>
-      handleVariableStatement(node as ts.VariableStatement, checker, context, strictMode),
+      handleVariableStatement(node as ts.VariableStatement, checker, context, strictMode) ??
+      handleVariableStatementDeclaration(node as ts.VariableStatement),
     [ts.SyntaxKind.ReturnStatement]: (node, context) =>
       handleReturnStatement(node as ts.ReturnStatement, checker, context, strictMode),
+    [ts.SyntaxKind.FunctionDeclaration]: (node) =>
+      handleFunctionDeclaration(node as ts.FunctionDeclaration),
   };
   return visitors as tstl.Visitors;
 };
