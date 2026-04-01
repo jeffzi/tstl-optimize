@@ -80,13 +80,8 @@ class OptimizePlugin implements tstl.Plugin {
         const isStmtFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
 
         merged[kind] = (node, context) => {
-          const res = fn(node, context);
+          const res = fn(node, context) ?? existing?.(node, context);
           if (res !== undefined) return res;
-
-          if (existing) {
-            const resExisting = existing(node, context);
-            if (resExisting !== undefined) return resExisting;
-          }
 
           if (isExpr) return context.superTransformExpression(node as ts.Expression);
           if (isStmtFallback) return context.superTransformStatements(node as ts.Statement);
@@ -109,10 +104,7 @@ class OptimizePlugin implements tstl.Plugin {
     if (!isRuleEnabled(this.config.rules, "inline")) return;
     for (const file of result) {
       // Remove @inline from JSDoc comments in emitted Lua.
-      // 1. Remove it when it's the only tag (and remove the JSDoc header)
-      file.code = file.code.replace(/---\s*\n--\s*@inline\s*\n/g, "");
-      // 2. Remove any remaining @inline lines in multi-line JSDoc
-      file.code = file.code.replace(/--\s*@inline\s*\n/g, "");
+      file.code = file.code.replace(/(?:---\s*\n)?--\s*@inline\s*\n/g, "");
     }
   }
 }

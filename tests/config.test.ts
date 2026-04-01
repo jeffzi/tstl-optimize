@@ -2,50 +2,40 @@ import { describe, expect, it } from "vitest";
 import { isRuleEnabled, parseConfig, resolveInlineConfig } from "../src/config";
 
 describe("resolveInlineConfig", () => {
-  it("resolves from boolean or undefined", () => {
-    expect(resolveInlineConfig(false)).toStrictEqual({ enabled: false, strict: false });
-    expect(resolveInlineConfig(undefined)).toStrictEqual({ enabled: true, strict: false });
-    expect(resolveInlineConfig(true)).toStrictEqual({ enabled: true, strict: false });
-  });
-
-  it("resolves from object with enabled/strict fields", () => {
-    expect(resolveInlineConfig({ enabled: false })).toStrictEqual({
-      enabled: false,
-      strict: false,
-    });
-    expect(resolveInlineConfig({ strict: true })).toStrictEqual({ enabled: true, strict: true });
-    expect(resolveInlineConfig({ enabled: false, strict: true })).toStrictEqual({
-      enabled: false,
-      strict: true,
-    });
+  it.each([
+    { input: false, expected: { enabled: false, strict: false } },
+    { input: undefined, expected: { enabled: true, strict: false } },
+    { input: true, expected: { enabled: true, strict: false } },
+    { input: { enabled: false }, expected: { enabled: false, strict: false } },
+    { input: { strict: true }, expected: { enabled: true, strict: true } },
+    { input: { enabled: false, strict: true }, expected: { enabled: false, strict: true } },
+  ])("resolves $input to $expected", ({ input, expected }) => {
+    expect(resolveInlineConfig(input)).toStrictEqual(expected);
   });
 });
 
 describe("parseConfig", () => {
   describe("inline rule", () => {
-    it("preserves InlineConfig object", () => {
-      const config = parseConfig({ rules: { inline: { strict: false } } });
-      expect(config.rules.inline).toStrictEqual({ strict: false });
-    });
-
-    it("accepts boolean values", () => {
-      expect(parseConfig({ rules: { inline: false } }).rules.inline).toBe(false);
-      expect(parseConfig({ rules: { inline: true } }).rules.inline).toBe(true);
-    });
-
-    it("falls back to default for invalid values", () => {
-      const config = parseConfig({ rules: { inline: "invalid" as unknown as boolean } });
-      expect(config.rules.inline).toBe(true);
+    it.each([
+      { input: { strict: false }, expected: { strict: false } },
+      { input: false, expected: false },
+      { input: true, expected: true },
+      { input: "invalid", expected: true },
+    ])("parses inline: $input as $expected", ({ input, expected }) => {
+      const config = parseConfig({ rules: { inline: input } as Record<string, unknown> });
+      expect(config.rules.inline).toStrictEqual(expected);
     });
   });
 
   describe("strict field", () => {
-    it("returns true only when explicitly provided", () => {
-      expect(parseConfig({ strict: true }).strict).toBe(true);
-      expect(parseConfig({}).strict).toBe(false);
-      expect(parseConfig().strict).toBe(false);
-      expect(parseConfig({ strict: false }).strict).toBe(false);
-      expect(parseConfig({ strict: "yes" as unknown as boolean }).strict).toBe(false);
+    it.each([
+      { input: { strict: true }, expected: true },
+      { input: {}, expected: false },
+      { input: undefined, expected: false },
+      { input: { strict: false }, expected: false },
+      { input: { strict: "yes" }, expected: false },
+    ])("returns $expected for input $input", ({ input, expected }) => {
+      expect(parseConfig(input as Record<string, unknown>).strict).toBe(expected);
     });
   });
 });
