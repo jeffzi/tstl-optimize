@@ -72,6 +72,23 @@ describe("inline", () => {
     });
   });
 
+  describe("expression-body deep clone", () => {
+    it("substitutes nested property access used multiple times without corruption", () => {
+      const lua = compile(`
+        /** @inline */
+        function mul(x: number): number { return x * x; }
+        declare const obj: { a: { b: { c: number } } };
+        const r = mul(obj.a.b.c);
+      `);
+
+      // substituteParams must deep-clone the argument for each occurrence.
+      // With shallow clone (tstl.cloneNode), the two substituted positions
+      // share child AST nodes (obj.a.b). A downstream pass mutating one copy
+      // would corrupt the other. Verify both occurrences are correct.
+      expect(lua).toContain("obj.a.b.c * obj.a.b.c");
+    });
+  });
+
   describe("void multi-statement inline", () => {
     it("expands body into do...end block", () => {
       const lua = compile(`
@@ -119,6 +136,53 @@ describe("inline", () => {
       expect(lua).not.toMatch(/\bdo\b/);
       expect(lua).toMatch(/10 \+ 1|____inline_arg_0 \+ 1/);
       expect(lua).toContain("return y * 2");
+    });
+  });
+
+  describe("switch with break in body", () => {
+    it("inlines multi-statement body with switch containing break", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function classify(x: number): void {
+          let label: string;
+          switch (x) {
+            case 0: label = "zero"; break;
+            case 1: label = "one"; break;
+            default: label = "other"; break;
+          }
+          print(label);
+        }
+        declare const n: number;
+        classify(n);
+      `);
+
+      const pluginWarnings = diagnostics.filter(
+        (d) => d.category === ts.DiagnosticCategory.Warning,
+      );
+      expect(pluginWarnings).toHaveLength(0);
+      expect(lua).toContain("do");
+    });
+
+    it("inlines statementsWithReturn body with switch containing break", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function compute(x: number): string {
+          let result: string;
+          switch (x) {
+            case 0: result = "zero"; break;
+            default: result = "other"; break;
+          }
+          return result;
+        }
+        declare const n: number;
+        const label = compute(n);
+      `);
+
+      const pluginWarnings = diagnostics.filter(
+        (d) => d.category === ts.DiagnosticCategory.Warning,
+      );
+      expect(pluginWarnings).toHaveLength(0);
+      expect(lua).toContain("do");
     });
   });
 
@@ -200,6 +264,57 @@ describe("inline", () => {
       });
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("non-parameter");
+    });
+  });
+
+  describe("destructuring parameter rejection", () => {
+    it.each([
+      {
+        name: "object destructuring",
+        decl: "function f({ x, y }: { x: number; y: number }) { return x + y; }",
+        call: "f({ x: 1, y: 2 });",
+      },
+      {
+        name: "array destructuring",
+        decl: "function f([a, b]: [number, number]) { return a + b; }",
+        call: "f([1, 2]);",
+      },
+    ])("rejects $name parameter", ({ decl, call }) => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        ${decl}
+        ${call}
+      `);
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("destructuring parameters are not supported");
+    });
+  });
+
+  describe("LuaMultiReturn destructuring", () => {
+    it("preserves all values when destructuring multi-return inline function", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
+          const tmp = a;
+          return $multi(b, tmp);
+        }
+        declare const x: number;
+        declare const y: number;
+        const [p, q] = swap(x, y);
+      `);
+      const warnings = diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Warning);
+      expect(warnings).toHaveLength(0);
+      // The multi-statement body should be inlined: the call should be expanded,
+      // not left as a plain function call. The function definition is stripped by
+      // TSTL for @inline-annotated functions, so leaving the call un-expanded
+      // produces a reference to an undefined function.
+      expect(lua).not.toContain("swap(");
+      // After inlining, both destructured variables must receive values.
+      // A correct expansion must NOT assign multi-return to a single temp variable
+      // (in Lua, "a, b = singleVar" sets b to nil).
+      const brokenPattern = /\w+, \w+ = ____inline_result_\d+$/m;
+      expect(lua).not.toMatch(brokenPattern);
     });
   });
 
