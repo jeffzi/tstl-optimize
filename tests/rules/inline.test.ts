@@ -137,6 +137,24 @@ describe("inline", () => {
       expect(lua).toMatch(/10 \+ 1|____inline_arg_0 \+ 1/);
       expect(lua).toContain("return y * 2");
     });
+
+    it("uses temp variable when body local collides with outer binding name", () => {
+      const lua = compile(`
+        /** @inline */
+        function fn(x: number): number {
+          let result = x + 1;
+          return result;
+        }
+        declare const n: number;
+        const result = fn(n);
+      `);
+      // When the inlined body declares a local named "result" — the same name as the
+      // call-site binding — the expander must use a collision-safe temp inside the
+      // do...end block. Otherwise the inner local shadows the result variable,
+      // turning the return assignment into a no-op.
+      expect(lua).toContain("do");
+      expect(lua).toMatch(/local result = ____inline_result_\d+/);
+    });
   });
 
   describe("switch with break in body", () => {

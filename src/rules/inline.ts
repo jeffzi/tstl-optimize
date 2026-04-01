@@ -833,6 +833,18 @@ function handleCallExpression(
   return inlineExpressionBody(target, node, checker, context, strict);
 }
 
+/** Check whether any VariableStatement in the body declares a binding with the given name. */
+function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: string): boolean {
+  for (const stmt of bodyStmts) {
+    if (ts.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name) && decl.name.text === name) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function buildVarDeclInline(
   nameIdent: ts.Identifier,
   target: ReturnValueInlineTarget,
@@ -845,8 +857,15 @@ function buildVarDeclInline(
   // Allocate a fresh Lua symbolId for the result variable. We cannot use
   // context.symbolIdMaps.get() here because TSTL hasn't transformed this
   // VariableStatement yet — the result symbol has no Lua symbolId assigned.
-  const resultSymbolId = context.nextSymbolId();
-  const resultIdent = tstl.createIdentifier(nameIdent.text, undefined, resultSymbolId);
+  const resultSymId = context.nextSymbolId();
+
+  // When the inlined body declares a local with the same name as the call-site
+  // binding, the inner local would shadow the result variable inside the do...end
+  // block, turning the return assignment into a no-op. Use a collision-safe temp
+  // name in that case and re-bind the user's name after the do...end block.
+  const needsTempName = bodyDeclaresLocal(bodyStmts, nameIdent.text);
+  const resultName = needsTempName ? `____inline_result_${resultSymId}` : nameIdent.text;
+  const resultIdent = tstl.createIdentifier(resultName, undefined, resultSymId);
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
   // Transform body and return expression first so ALL param symbols are registered
@@ -859,16 +878,25 @@ function buildVarDeclInline(
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-
   const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   // Assign the return expression to the result variable inside do...end.
   const assignResult = tstl.createAssignmentStatement(
-    [tstl.createIdentifier(resultIdent.text, undefined, resultSymbolId)],
+    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
     [substitutedReturn],
   );
 
-  return [resultDecl, ...tempDecls, tstl.createDoStatement([...substitutedBody, assignResult])];
+  const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
+
+  if (needsTempName) {
+    const bindingSymId = context.nextSymbolId();
+    const bindingDecl = tstl.createVariableDeclarationStatement(
+      [tstl.createIdentifier(nameIdent.text, undefined, bindingSymId)],
+      [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
+    );
+    return [resultDecl, ...tempDecls, doEnd, bindingDecl];
+  }
+  return [resultDecl, ...tempDecls, doEnd];
 }
 
 interface DestructureShared {
