@@ -9,13 +9,13 @@ Regenerate the Lua files:
 npm run examples
 ```
 
-| File                                                  | Rule                      | Description                                                                |
-| ----------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------- |
-| [conditional-compilation](conditional-compilation.ts) | `conditional-compilation` | Strips dead `if`/ternary/`switch` branches based on compile-time constants |
-| [inline](inline.ts)                                   | `inline`                  | Inlines `@inline`-tagged single-expression functions at call sites         |
-| [localizer](localizer.ts)                             | `localizer`               | Hoists repeated table-index chains into local variables                    |
-| [loop-rebase](loop-rebase.ts)                         | `loop-rebase`             | Converts 0-based `$range` loops into 1-based Lua loops                     |
-| [math-intrinsics](math-intrinsics.ts)                 | `math-intrinsics`         | Replaces `Math.*` calls with inline Lua expressions                        |
+| File                                                  | Rule                      | Description                                                                        |
+| ----------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------- |
+| [conditional-compilation](conditional-compilation.ts) | `conditional-compilation` | Strips dead `if`/ternary/`switch` branches based on compile-time constants         |
+| [inline](inline.ts)                                   | `inline`                  | Inlines `@inline`-tagged functions at call sites, including multi-statement bodies |
+| [localizer](localizer.ts)                             | `localizer`               | Hoists repeated table-index chains into local variables                            |
+| [loop-rebase](loop-rebase.ts)                         | `loop-rebase`             | Converts 0-based `$range` loops into 1-based Lua loops                             |
+| [math-intrinsics](math-intrinsics.ts)                 | `math-intrinsics`         | Replaces `Math.*` calls with inline Lua expressions                                |
 
 Each example includes a **Limitations** section showing cases where the rule skips the optimization, with comments
 explaining why.
