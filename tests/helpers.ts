@@ -51,7 +51,7 @@ function extractLua(result: tstl.TranspileVirtualProjectResult): string {
     throw new Error(msgs);
   }
   const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
-  if (!file?.lua) {
+  if (file === undefined) {
     throw new Error("No Lua output.");
   }
   return file.lua;

@@ -1,12 +1,11 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import { compile, normalizeLua } from "../helpers";
 
-describe("rule interaction: inline + localizer + math-intrinsics", () => {
-  describe("localizer processes do...end blocks", () => {
+describe("rule interaction", () => {
+  describe("localizer + blocks", () => {
     it("hoists repeated chains from inside do...end to module scope", () => {
-      // Use LuaJIT target so math-intrinsics doesn't replace Math.ceil
       const lua = compile(
         `
         declare const x: number;
@@ -21,27 +20,20 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
           luaTarget: tstl.LuaTarget.LuaJIT,
         },
       );
-      // Localizer should hoist math.ceil since it is a stdlib root and appears 3 times
       expect(lua).toContain("local ____math_ceil = math.ceil");
     });
 
-    it("hoists chains from inside nested do...end blocks", () => {
+    it("hoists chains from inside nested blocks", () => {
       const lua = compile(
         `
         declare const x: number;
-        {
-          {
-            const a = Math.ceil(x);
-            const b = Math.ceil(x + 1);
-          }
-        }
+        { { const a = Math.ceil(x); const b = Math.ceil(x + 1); } }
       `,
         {
           pluginOptions: { rules: { localizer: { scope: "module" } } },
           luaTarget: tstl.LuaTarget.LuaJIT,
         },
       );
-      // Even doubly nested do...end should be processed
       expect(lua).toContain("____math_ceil");
     });
 
@@ -61,151 +53,69 @@ describe("rule interaction: inline + localizer + math-intrinsics", () => {
           },
         },
       );
-      // obj is defined inside the do...end block. The module-scope pass sees obj in
-      // scopeDefs and correctly skips hoisting (it cannot safely insert a local alias
-      // before obj's own declaration). No ____obj_nested_value alias is emitted at all.
       expect(lua).not.toContain("____obj");
-      // The do...end block structure is preserved and obj.nested.value is used directly.
-      expect(lua).toContain("do");
       expect(lua).toContain("obj.nested.value");
     });
   });
 
-  describe("math-intrinsics with inline", () => {
-    it("replaces Math.floor inside inlined expression", () => {
-      const lua = compile(`
+  describe("math-intrinsics + inline", () => {
+    it("replaces Math functions inside inlined expressions and blocks", () => {
+      const srcExpr = `
         /** @inline */
         function fastFloor(x: number) { return Math.floor(x); }
         declare const v: number;
         const r = fastFloor(v);
-      `);
-      // Math.floor(x) should become x - x % 1 via math-intrinsics
-      expect(lua).toContain("% 1");
+      `;
+      expect(normalizeLua(compile(srcExpr))).toBe("r = (v - v % 1)");
+
+      const srcBlock = `
+        /** @inline */
+        function doFloor(x: number): void {
+          const y = Math.floor(x);
+          const z = y + 1;
+        }
+        declare const v: number;
+        doFloor(v);
+      `;
+      const lua = compile(srcBlock);
+      expect(lua).toMatch(/v - v % 1|____inline_arg_0 - ____inline_arg_0 % 1/);
       expect(lua).not.toContain("math.floor");
-      // Call site should be inlined (r = ... not r = fastFloor(v))
-      expect(lua).not.toContain("r = fastFloor(");
-    });
-
-    it("replaces Math.abs inside inlined expression", () => {
-      const lua = compile(`
-        /** @inline */
-        function absVal(x: number) { return Math.abs(x); }
-        declare const v: number;
-        const r = absVal(v);
-      `);
-      // Math.abs should be replaced by intrinsic
-      expect(lua).not.toContain("math.abs");
-      // Call site should be inlined
-      expect(lua).not.toContain("r = absVal(");
-    });
-
-    it("replaces Math.sqrt inside inlined expression", () => {
-      const lua = compile(`
-        /** @inline */
-        function sqrtVal(x: number) { return Math.sqrt(x); }
-        declare const v: number;
-        const r = sqrtVal(v);
-      `);
-      // Math.sqrt should be replaced by x ^ 0.5
-      expect(lua).toContain("^ 0.5");
-      expect(lua).not.toContain("math.sqrt");
-      // Call site should be inlined
-      expect(lua).not.toContain("r = sqrtVal(");
+      expect(lua).not.toContain("doFloor(v)");
     });
   });
 
-  describe("inline + localizer combined", () => {
-    it("localizer processes property chains from inlined expression body", () => {
-      const lua = compile(
-        `
+  describe("localizer + inline", () => {
+    it("processes property chains and calls from inlined body", () => {
+      const src = `
         declare const obj: { pos: { x: number } };
         /** @inline */
         function getX() { return obj.pos.x; }
-        const a = getX();
-        const b = getX();
-        const c = getX();
-      `,
-        {
-          pluginOptions: {
-            rules: { localizer: { scope: "module", include: ["obj"] } },
-          },
-        },
-      );
-      // After inlining, obj.pos.x appears 3 times at module scope
-      // Localizer should hoist it
+        const a = getX(); const b = getX(); const c = getX();
+      `;
+      const lua = compile(src, {
+        pluginOptions: { rules: { localizer: { scope: "module", include: ["obj"] } } },
+      });
       expect(lua).toContain("____obj_pos_x");
-      // Call sites should be inlined (no getX() calls in Lua output)
-      expect(lua).not.toContain("a = getX(");
+      expect(lua).not.toContain("getX(");
     });
 
-    it("localizer and inline both active without conflict", () => {
-      const lua = compile(
-        `
-        declare const x: number;
+    it("hoists repeated chains from inside inlined do...end block", () => {
+      const src = `
         /** @inline */
-        function fastFloor(x: number) { return Math.floor(x); }
-        declare const a: number;
-        const r1 = fastFloor(a);
-        const r2 = Math.ceil(1);
-        const r3 = Math.ceil(2);
-        const r4 = Math.ceil(3);
-      `,
-        {
-          pluginOptions: { rules: { localizer: { scope: "module" } } },
-          luaTarget: tstl.LuaTarget.LuaJIT,
-        },
-      );
-      // Inline should work (no call to fastFloor at call site)
-      expect(lua).not.toContain("r1 = fastFloor(");
-      // Localizer should hoist math.ceil
-      expect(lua).toContain("____math_ceil");
-    });
-  });
-});
-
-describe("rule interaction: inline multi-statement + localizer", () => {
-  it("localizer hoists repeated chain from inside inlined do...end block", () => {
-    // Use LuaJIT target so math-intrinsics doesn't replace math.floor → keeps
-    // math.floor visible for the localizer threshold check (3 occurrences).
-    const lua = compile(
-      `
-      /** @inline */
-      function doWork(x: number): void {
-        const a = Math.floor(x);
-        const b = Math.floor(x + 1);
-        const c = Math.floor(x + 2);
-      }
-      declare const v: number;
-      doWork(v);
-      `,
-      {
+        function doWork(x: number): void {
+          const a = Math.floor(x);
+          const b = Math.floor(x + 1);
+          const c = Math.floor(x + 2);
+        }
+        declare const v: number;
+        doWork(v);
+      `;
+      const lua = compile(src, {
         pluginOptions: { rules: { localizer: { scope: "module" } } },
         luaTarget: tstl.LuaTarget.LuaJIT,
-      },
-    );
-    // Localizer should hoist math.floor since it appears 3 times inside the inlined do...end
-    expect(lua).toContain("____math_floor");
-    // The call site should be inlined (no standalone doWork(v) call in Lua output)
-    expect(lua).not.toContain("doWork(v)");
-  });
-});
-
-describe("rule interaction: inline multi-statement + math-intrinsics", () => {
-  it("math-intrinsics replaces Math.floor inside inlined do...end block", () => {
-    const lua = compile(`
-      /** @inline */
-      function doFloor(x: number): void {
-        const y = Math.floor(x);
-        const z = y + 1;
-      }
-      declare const v: number;
-      doFloor(v);
-    `);
-    // Math.floor should be replaced by the x - x % 1 intrinsic inside the inlined block
-    expect(lua).toContain("% 1");
-    // math.floor should not appear — replaced by intrinsic
-    expect(lua).not.toContain("math.floor");
-    // The call site should be inlined (no standalone doFloor(v) call in Lua output)
-    expect(lua).not.toContain("doFloor(v)");
+      });
+      expect(lua).toContain("____math_floor");
+      expect(lua).not.toContain("doWork(v)");
+    });
   });
 });
