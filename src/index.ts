@@ -140,5 +140,4 @@ class OptimizePlugin implements tstl.Plugin {
 // so the default export must be a function to receive tsconfig.json options.
 export default (options?: Record<string, unknown>): OptimizePlugin => new OptimizePlugin(options);
 
-// Named export for in-memory test usage
 export { OptimizePlugin };

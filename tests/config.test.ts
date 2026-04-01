@@ -2,30 +2,27 @@ import { describe, expect, it } from "vitest";
 import { isRuleEnabled, parseConfig, resolveInlineConfig } from "../src/config";
 
 describe("resolveInlineConfig", () => {
-  it("resolveInlineConfig(false) returns { enabled: false, strict: false }", () => {
+  it("returns disabled non-strict config when called with false", () => {
     expect(resolveInlineConfig(false)).toStrictEqual({ enabled: false, strict: false });
   });
 
-  it("resolveInlineConfig(undefined) returns { enabled: true, strict: false }", () => {
+  it("returns enabled non-strict config when called with undefined or true", () => {
     expect(resolveInlineConfig(undefined)).toStrictEqual({ enabled: true, strict: false });
-  });
-
-  it("resolveInlineConfig(true) returns { enabled: true, strict: false }", () => {
     expect(resolveInlineConfig(true)).toStrictEqual({ enabled: true, strict: false });
   });
 
-  it("resolveInlineConfig({ enabled: false }) returns { enabled: false, strict: false }", () => {
+  it("returns disabled non-strict config when object has enabled: false", () => {
     expect(resolveInlineConfig({ enabled: false })).toStrictEqual({
       enabled: false,
       strict: false,
     });
   });
 
-  it("resolveInlineConfig({ strict: true }) returns { enabled: true, strict: true }", () => {
+  it("returns enabled strict config when object has strict: true", () => {
     expect(resolveInlineConfig({ strict: true })).toStrictEqual({ enabled: true, strict: true });
   });
 
-  it("resolveInlineConfig({ enabled: false, strict: true }) returns { enabled: false, strict: true }", () => {
+  it("returns disabled strict config when object has both enabled: false and strict: true", () => {
     expect(resolveInlineConfig({ enabled: false, strict: true })).toStrictEqual({
       enabled: false,
       strict: true,
@@ -69,23 +66,14 @@ describe("isRuleEnabled with InlineConfig", () => {
 });
 
 describe("parseConfig strict field", () => {
-  it("parseConfig({ strict: true }).strict === true", () => {
+  it("returns strict: true when strict: true is provided", () => {
     expect(parseConfig({ strict: true }).strict).toBe(true);
   });
 
-  it("parseConfig({}).strict === false", () => {
+  it("returns strict: false when strict is missing, false, or a non-boolean", () => {
     expect(parseConfig({}).strict).toBe(false);
-  });
-
-  it("parseConfig() (no arg).strict === false", () => {
     expect(parseConfig().strict).toBe(false);
-  });
-
-  it("parseConfig({ strict: 'yes' }).strict === false (non-boolean coerced to false)", () => {
-    expect(parseConfig({ strict: "yes" as unknown as boolean }).strict).toBe(false);
-  });
-
-  it("parseConfig({ strict: false }).strict === false", () => {
     expect(parseConfig({ strict: false }).strict).toBe(false);
+    expect(parseConfig({ strict: "yes" as unknown as boolean }).strict).toBe(false);
   });
 });
