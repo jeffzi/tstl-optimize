@@ -121,34 +121,32 @@ describe("inline", () => {
   });
 
   describe("warnings and rejections", () => {
-    it("rejects bodies with early return, break, or continue", () => {
-      const cases = ["if (x > 0) return; print(x);", "break;", "continue;"];
-      for (const body of cases) {
-        const { diagnostics } = compileWithDiagnostics(`
+    it.each([
+      { body: "if (x > 0) return; print(x);", name: "early return" },
+      { body: "break;", name: "break" },
+      { body: "continue;", name: "continue" },
+    ])("rejects bodies with $name", ({ body }) => {
+      const { diagnostics } = compileWithDiagnostics(`
           /** @inline */
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
         `);
-        expect(diagnostics.length).toBeGreaterThan(0);
-        expect(diagnostics[0].messageText).toContain("@inline ignored");
-      }
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics[0].messageText).toContain("@inline ignored");
     });
 
-    it("rejects unsupported parameters", () => {
-      const cases = [
-        "function f(...args: any[]) {}",
-        "function f(x?: number) {}",
-        "function f(x: number = 0) {}",
-      ];
-      for (const decl of cases) {
-        const { diagnostics } = compileWithDiagnostics(`
+    it.each([
+      { decl: "function f(...args: any[]) {}", name: "rest parameters" },
+      { decl: "function f(x?: number) {}", name: "optional parameters" },
+      { decl: "function f(x: number = 0) {}", name: "default parameters" },
+    ])("rejects unsupported $name", ({ decl }) => {
+      const { diagnostics } = compileWithDiagnostics(`
           /** @inline */
           ${decl}
           f();
         `);
-        expect(diagnostics.length).toBeGreaterThan(0);
-        expect(diagnostics[0].messageText).toContain("not supported");
-      }
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics[0].messageText).toContain("not supported");
     });
 
     it("warns on multi-statement body at expression position", () => {
