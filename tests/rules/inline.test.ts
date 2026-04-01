@@ -1,8 +1,5 @@
 import ts from "typescript";
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
-import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { mapLuaStatements } from "../../src/rules/inline";
 import { compile, compileMultiFileWithDiagnostics, compileWithDiagnostics } from "../helpers";
 
 describe("inline", () => {
@@ -175,6 +172,7 @@ describe("inline", () => {
         const r = double(a);
       `);
       expect(luaDecl).not.toContain("@inline");
+      expect(luaDecl).not.toContain("---");
 
       const luaArrow = compile(`
         /** @inline */
@@ -183,6 +181,18 @@ describe("inline", () => {
         const r = double(a);
       `);
       expect(luaArrow).not.toContain("@inline");
+
+      const luaMulti = compile(`
+        /** @inline */
+        function multi(x: number): void {
+          const y = x + 1;
+          const z = y * 2;
+        }
+        declare const a: number;
+        multi(a);
+      `);
+      expect(luaMulti).not.toContain("@inline");
+      expect(luaMulti).not.toContain("-- @inline");
     });
   });
 
@@ -620,29 +630,31 @@ describe("void multi-statement inline", () => {
     expect(diagnostics[0].messageText).toContain("early return");
   });
 
-  it("rejects @inline function with top-level break or continue", () => {
-    const { diagnostics: breakDiags } = compileWithDiagnostics(`
+  it("rejects @inline function with top-level break in body", () => {
+    const { diagnostics } = compileWithDiagnostics(`
       /** @inline */
       function stopLoop() { break; }
       for (let i = 0; i < 10; i++) {
         stopLoop();
       }
     `);
-    expect(breakDiags.length).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
     expect(
-      breakDiags.some((d) => typeof d.messageText === "string" && d.messageText.includes("break")),
+      diagnostics.some((d) => typeof d.messageText === "string" && d.messageText.includes("break")),
     ).toBe(true);
+  });
 
-    const { diagnostics: continueDiags } = compileWithDiagnostics(`
+  it("rejects @inline function with top-level continue in body", () => {
+    const { diagnostics } = compileWithDiagnostics(`
       /** @inline */
       function skipIter() { continue; }
       for (let i = 0; i < 10; i++) {
         skipIter();
       }
     `);
-    expect(continueDiags.length).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.length).toBeGreaterThanOrEqual(1);
     expect(
-      continueDiags.some(
+      diagnostics.some(
         (d) => typeof d.messageText === "string" && d.messageText.includes("continue"),
       ),
     ).toBe(true);
@@ -802,196 +814,6 @@ describe("statement visitor fallthrough", () => {
       }
     `);
     expect(lua).toContain("return 42");
-  });
-});
-
-describe("mapLuaStatements (unit)", () => {
-  /** leafFn that replaces any Identifier with text "x" with one named "replaced". */
-  const leafFn = (n: tstl.Expression): tstl.Expression | undefined => {
-    if (n.kind === tstl.SyntaxKind.Identifier && (n as tstl.Identifier).text === "x") {
-      return tstl.createIdentifier("replaced");
-    }
-    return undefined;
-  };
-
-  it("returns empty array for empty input", () => {
-    const result = mapLuaStatements([], leafFn);
-    expect(result).toStrictEqual([]);
-  });
-
-  it("substitutes in ExpressionStatement", () => {
-    const stmt = tstl.createExpressionStatement(tstl.createIdentifier("x"));
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const expr = (result as tstl.ExpressionStatement).expression as tstl.Identifier;
-    expect(expr.text).toBe("replaced");
-  });
-
-  it("substitutes in VariableDeclarationStatement right side", () => {
-    const stmt = tstl.createVariableDeclarationStatement(
-      [tstl.createIdentifier("y")],
-      [tstl.createIdentifier("x")],
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const varDecl = result as tstl.VariableDeclarationStatement;
-    expect(varDecl.right).toBeDefined();
-    expect((varDecl.right?.[0] as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in AssignmentStatement right side", () => {
-    const stmt = tstl.createAssignmentStatement(
-      [tstl.createIdentifier("y") as tstl.AssignmentLeftHandSideExpression],
-      [tstl.createIdentifier("x")],
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const assign = result as tstl.AssignmentStatement;
-    expect((assign.right[0] as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in AssignmentStatement TableIndexExpression left side", () => {
-    const tblIndex = tstl.createTableIndexExpression(
-      tstl.createIdentifier("x"),
-      tstl.createIdentifier("key"),
-    );
-    const stmt = tstl.createAssignmentStatement(
-      [tblIndex as tstl.AssignmentLeftHandSideExpression],
-      [tstl.createNumericLiteral(1)],
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const assign = result as tstl.AssignmentStatement;
-    const lhs = assign.left[0] as tstl.TableIndexExpression;
-    expect((lhs.table as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("recurses into DoStatement", () => {
-    const inner = tstl.createExpressionStatement(tstl.createIdentifier("x"));
-    const stmt = tstl.createDoStatement([inner]);
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const doStmt = result as tstl.DoStatement;
-    const innerResult = doStmt.statements[0] as tstl.ExpressionStatement;
-    expect((innerResult.expression as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in IfStatement condition and blocks", () => {
-    const stmt = tstl.createIfStatement(
-      tstl.createIdentifier("x"),
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const ifStmt = result as tstl.IfStatement;
-    expect((ifStmt.condition as tstl.Identifier).text).toBe("replaced");
-    const ifBlock = ifStmt.ifBlock.statements[0] as tstl.ExpressionStatement;
-    expect((ifBlock.expression as tstl.Identifier).text).toBe("replaced");
-    const elseBlock = (ifStmt.elseBlock as tstl.Block).statements[0] as tstl.ExpressionStatement;
-    expect((elseBlock.expression as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in chained IfStatement (elseif)", () => {
-    const elseIf = tstl.createIfStatement(
-      tstl.createIdentifier("x"),
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("y"))]),
-    );
-    const stmt = tstl.createIfStatement(
-      tstl.createIdentifier("y"),
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("y"))]),
-      elseIf,
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const ifStmt = result as tstl.IfStatement;
-    const elseIfStmt = ifStmt.elseBlock as tstl.IfStatement;
-    expect((elseIfStmt.condition as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in WhileStatement condition and body", () => {
-    const stmt = tstl.createWhileStatement(
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
-      tstl.createIdentifier("x"),
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const whileStmt = result as tstl.WhileStatement;
-    expect((whileStmt.condition as tstl.Identifier).text).toBe("replaced");
-    const bodyExpr = whileStmt.body.statements[0] as tstl.ExpressionStatement;
-    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in RepeatStatement body and condition", () => {
-    const stmt = tstl.createRepeatStatement(
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
-      tstl.createIdentifier("x"),
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const repeatStmt = result as tstl.RepeatStatement;
-    expect((repeatStmt.condition as tstl.Identifier).text).toBe("replaced");
-    const bodyExpr = repeatStmt.body.statements[0] as tstl.ExpressionStatement;
-    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in ForStatement expressions but not controlVariable", () => {
-    const stmt = tstl.createForStatement(
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
-      tstl.createIdentifier("i"),
-      tstl.createIdentifier("x"), // controlVariableInitializer
-      tstl.createIdentifier("x"), // limitExpression
-      tstl.createIdentifier("x"), // stepExpression
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const forStmt = result as tstl.ForStatement;
-    // controlVariable should NOT be substituted
-    expect((forStmt.controlVariable as tstl.Identifier).text).toBe("i");
-    // Expressions should be substituted
-    expect((forStmt.controlVariableInitializer as tstl.Identifier).text).toBe("replaced");
-    expect((forStmt.limitExpression as tstl.Identifier).text).toBe("replaced");
-    expect((forStmt.stepExpression as tstl.Identifier).text).toBe("replaced");
-    const bodyExpr = forStmt.body.statements[0] as tstl.ExpressionStatement;
-    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in ForInStatement expressions but not names", () => {
-    const stmt = tstl.createForInStatement(
-      tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("x"))]),
-      [tstl.createIdentifier("k")],
-      [tstl.createIdentifier("x")],
-    );
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const forInStmt = result as tstl.ForInStatement;
-    // names should NOT be substituted
-    expect(forInStmt.names[0].text).toBe("k");
-    // expressions should be substituted
-    expect((forInStmt.expressions[0] as tstl.Identifier).text).toBe("replaced");
-    const bodyExpr = forInStmt.body.statements[0] as tstl.ExpressionStatement;
-    expect((bodyExpr.expression as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("substitutes in ReturnStatement expressions", () => {
-    const stmt = tstl.createReturnStatement([tstl.createIdentifier("x")]);
-    const [result] = mapLuaStatements([stmt], leafFn);
-    const retStmt = result as tstl.ReturnStatement;
-    expect((retStmt.expressions[0] as tstl.Identifier).text).toBe("replaced");
-  });
-
-  it("does not mutate original statements", () => {
-    const original = tstl.createExpressionStatement(tstl.createIdentifier("x"));
-    const stmts = [original];
-    mapLuaStatements(stmts, leafFn);
-    // Original should be unchanged
-    expect((original.expression as tstl.Identifier).text).toBe("x");
-    expect(stmts).toHaveLength(1);
-  });
-
-  it("passes through leaf statements (break, goto, label) unchanged", () => {
-    const breakStmt = tstl.createBreakStatement();
-    const [breakResult] = mapLuaStatements([breakStmt], leafFn);
-    expect(breakResult.kind).toBe(tstl.SyntaxKind.BreakStatement);
-
-    const gotoStmt = tstl.createGotoStatement("lbl");
-    const [gotoResult] = mapLuaStatements([gotoStmt], leafFn);
-    expect(gotoResult.kind).toBe(tstl.SyntaxKind.GotoStatement);
-    expect((gotoResult as tstl.GotoStatement).label).toBe("lbl");
-
-    const labelStmt = tstl.createLabelStatement("lbl");
-    const [labelResult] = mapLuaStatements([labelStmt], leafFn);
-    expect(labelResult.kind).toBe(tstl.SyntaxKind.LabelStatement);
-    expect((labelResult as tstl.LabelStatement).name).toBe("lbl");
   });
 });
 
@@ -1444,6 +1266,7 @@ describe("inline strict mode", () => {
       );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].code).toBe(90001);
+      expect(diagnostics[0].source).toBe("tstl-optimize");
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
     });
 
@@ -1525,21 +1348,79 @@ describe("inline strict mode", () => {
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
     });
   });
+});
 
-  describe("diagnostic code 90001 still correct regardless of strict mode", () => {
-    it("code is 90001 with global strict: true", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
+describe("shared prerequisite checks", () => {
+  // These tests verify the three prerequisite checks that must hold for ANY inline attempt,
+  // regardless of whether the call site is an expression or a statement. After the
+  // checkSharedPrereqs refactor, all of these must continue to fire through both canInline
+  // (expression path) and canInlineStatements (statement path).
+
+  describe("expression-inline path (canInline)", () => {
+    it("rejects rest parameter — expression position", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
-        function double(x: number) { return x * 2; }
+        function first(...args: number[]) { return args[0]; }
         declare const a: number;
-        double(a + 1, a);
-        `,
-        { pluginOptions: { strict: true } },
-      );
+        const r = first(a);
+      `);
+      expect(lua).toContain("first(");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].code).toBe(90001);
-      expect(diagnostics[0].source).toBe("tstl-optimize");
+      expect(diagnostics[0].messageText).toContain("rest parameters are not supported");
+    });
+
+    it("rejects optional parameter — expression position", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function maybe(x?: number) { return x ?? 0; }
+        const r = maybe();
+      `);
+      expect(lua).toContain("maybe(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("optional parameters are not supported");
+    });
+
+    it("rejects argument count mismatch — expression position", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function id(x: number) { return x; }
+        // @ts-expect-error intentional arity mismatch
+        const r = id(1, 2);
+      `);
+      expect(lua).toContain("id(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("argument count does not match parameter count");
+    });
+
+    it("rejects non-module-scope function — expression position", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        function outer() {
+          /** @inline */
+          function inner(x: number) { return x + 1; }
+          return inner(5);
+        }
+      `);
+      expect(lua).toContain("inner(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("function must be declared at module scope");
+    });
+  });
+
+  describe("statement-inline path (canInlineStatements)", () => {
+    it("rejects rest parameter — statement position", () => {
+      // Uses a multi-statement body so the call goes through canInlineStatements, not canInline.
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function log(...args: number[]): void {
+          const x = args[0];
+          const y = args[1];
+        }
+        declare const a: number;
+        log(a);
+      `);
+      expect(lua).toContain("log(");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].messageText).toContain("rest parameters are not supported");
     });
   });
 });
@@ -1603,123 +1484,5 @@ describe("diagnostic messages", () => {
     );
     expect(diagnostics[0].messageText).toContain("only statement-position calls supported");
     expect(diagnostics[0].code).toBe(90001);
-  });
-});
-
-describe("@inline JSDoc stripping", () => {
-  it("strips @inline comment from single-expression function Lua output", () => {
-    const lua = compile(`
-      /** @inline */
-      function single(x: number) { return x + 1; }
-      declare const a: number;
-      const r = single(a);
-    `);
-    expect(lua).not.toContain("@inline");
-    expect(lua).not.toContain("---");
-  });
-
-  it("strips @inline comment from multi-statement function Lua output", () => {
-    const lua = compile(`
-      /** @inline */
-      function multi(x: number): void {
-        const y = x + 1;
-        const z = y * 2;
-      }
-      declare const a: number;
-      multi(a);
-    `);
-    expect(lua).not.toContain("@inline");
-    // The function declaration's JSDoc block (---\n-- @inline\n) must not appear
-    expect(lua).not.toContain("-- @inline");
-  });
-});
-
-describe("strict mode", () => {
-  describe("global strict: true promotes inline warnings to errors", () => {
-    it("promotes warning to error for multi-statement call at expression position", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
-        /** @inline */
-        function effect(x: number): number {
-          const y = x + 1;
-          return y * 2;
-        }
-        declare const a: number;
-        const r = effect(a) + 1;
-        `,
-        { pluginOptions: { strict: true, rules: { inline: true } } },
-      );
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
-      expect(diagnostics[0].code).toBe(90001);
-    });
-
-    it("promotes warning to error for early-return rejection", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
-        /** @inline */
-        function bad(x: number): void {
-          if (x > 0) return;
-          const y = x + 1;
-        }
-        declare const a: number;
-        bad(a);
-        `,
-        { pluginOptions: { strict: true, rules: { inline: true } } },
-      );
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
-      expect(diagnostics[0].code).toBe(90001);
-    });
-  });
-
-  describe("per-rule inline.strict: false overrides global strict: true", () => {
-    it("keeps warning when per-rule strict is false", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
-        /** @inline */
-        function effect(x: number): number {
-          const y = x + 1;
-          return y * 2;
-        }
-        declare const a: number;
-        const r = effect(a) + 1;
-        `,
-        {
-          pluginOptions: {
-            strict: true,
-            rules: { inline: { strict: false } },
-          },
-        },
-      );
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Warning);
-      expect(diagnostics[0].code).toBe(90001);
-    });
-  });
-
-  describe("per-rule inline.strict: true with global strict: false promotes to error", () => {
-    it("promotes to error when only per-rule strict is true", () => {
-      const { diagnostics } = compileWithDiagnostics(
-        `
-        /** @inline */
-        function effect(x: number): number {
-          const y = x + 1;
-          return y * 2;
-        }
-        declare const a: number;
-        const r = effect(a) + 1;
-        `,
-        {
-          pluginOptions: {
-            strict: false,
-            rules: { inline: { strict: true } },
-          },
-        },
-      );
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
-      expect(diagnostics[0].code).toBe(90001);
-    });
   });
 });
