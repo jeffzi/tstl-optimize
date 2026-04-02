@@ -7,7 +7,7 @@
 
 import { type SpawnSyncOptions, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { argv, env, exit } from "node:process";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,12 @@ function main(): void {
     writeFileSync(readyMarker, currentMarker);
   } else {
     console.log(`==> Using cached TSTL clone at ${conformanceDir}`);
+  }
+
+  // The conformance patch skips toMatchSnapshot() calls, which makes all existing snapshot files
+  // obsolete. Jest exits with code 1 for obsolete snapshots in CI. Remove them preemptively.
+  for (const dir of globSync("**/test/**/__snapshots__", { cwd: conformanceDir })) {
+    rmSync(resolve(conformanceDir, dir), { recursive: true, force: true });
   }
 
   console.log("==> Running TSTL unit tests with tstl-optimize active...");
