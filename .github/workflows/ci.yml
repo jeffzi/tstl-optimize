@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .conformance
-          key: conformance-${{ hashFiles('scripts/conformance.mjs', 'scripts/conformance.patch') }}
+          key: conformance-${{ hashFiles('scripts/conformance.ts', 'scripts/conformance.patch') }}
 
       - name: Check examples in sync
         run: npm run examples:check
