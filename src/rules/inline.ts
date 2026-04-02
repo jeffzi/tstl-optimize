@@ -434,138 +434,6 @@ function substituteParamsInStatements(
   });
 }
 
-/**
- * Test whether a predicate holds for any identifier (with a symbolId) in the
- * expression tree. Short-circuits on first match. Does not recurse into
- * nested function bodies.
- */
-function someLuaIdentifier(
-  node: tstl.Expression,
-  predicate: (symbolId: tstl.SymbolId) => boolean,
-): boolean {
-  const some = (n: tstl.Expression) => someLuaIdentifier(n, predicate);
-  if (node.kind === tstl.SyntaxKind.Identifier) {
-    const symbolId = (node as tstl.Identifier).symbolId;
-    return symbolId !== undefined && predicate(symbolId);
-  }
-  switch (node.kind) {
-    case tstl.SyntaxKind.BinaryExpression: {
-      const bin = node as tstl.BinaryExpression;
-      return some(bin.left) || some(bin.right);
-    }
-    case tstl.SyntaxKind.UnaryExpression:
-      return some((node as tstl.UnaryExpression).operand);
-    case tstl.SyntaxKind.CallExpression: {
-      const call = node as tstl.CallExpression;
-      return some(call.expression) || call.params.some(some);
-    }
-    case tstl.SyntaxKind.MethodCallExpression: {
-      const method = node as tstl.MethodCallExpression;
-      return some(method.prefixExpression) || method.params.some(some);
-    }
-    case tstl.SyntaxKind.TableIndexExpression: {
-      const tbl = node as tstl.TableIndexExpression;
-      return some(tbl.table) || some(tbl.index);
-    }
-    case tstl.SyntaxKind.ParenthesizedExpression:
-      return some((node as tstl.ParenthesizedExpression).expression);
-    case tstl.SyntaxKind.TableExpression:
-      return (node as tstl.TableExpression).fields.some(
-        (f) => some(f.value) || (f.key !== undefined && some(f.key)),
-      );
-    case tstl.SyntaxKind.ConditionalExpression: {
-      const cond = node as tstl.ConditionalExpression;
-      return some(cond.condition) || some(cond.whenTrue) || some(cond.whenFalse);
-    }
-    case tstl.SyntaxKind.FunctionExpression:
-      return someLuaIdentifierInStatements(
-        (node as tstl.FunctionExpression).body.statements,
-        predicate,
-      );
-    default:
-      return false;
-  }
-}
-
-/**
- * Scan a list of Lua statements for any identifier matching the predicate.
- * Mutual recursion with someLuaIdentifier.
- */
-function someLuaIdentifierInStatements(
-  statements: readonly tstl.Statement[],
-  predicate: (symbolId: tstl.SymbolId) => boolean,
-): boolean {
-  const some = (n: tstl.Expression) => someLuaIdentifier(n, predicate);
-  const someStmts = (s: readonly tstl.Statement[]) => someLuaIdentifierInStatements(s, predicate);
-
-  for (const stmt of statements) {
-    switch (stmt.kind) {
-      case tstl.SyntaxKind.DoStatement:
-        if (someStmts((stmt as tstl.DoStatement).statements)) return true;
-        break;
-      case tstl.SyntaxKind.VariableDeclarationStatement: {
-        const varDecl = stmt as tstl.VariableDeclarationStatement;
-        if (varDecl.right?.some(some)) return true;
-        break;
-      }
-      case tstl.SyntaxKind.AssignmentStatement: {
-        const assign = stmt as tstl.AssignmentStatement;
-        if (assign.left.some(some) || assign.right.some(some)) return true;
-        break;
-      }
-      case tstl.SyntaxKind.IfStatement: {
-        const ifStmt = stmt as tstl.IfStatement;
-        if (some(ifStmt.condition) || someStmts(ifStmt.ifBlock.statements)) return true;
-        let currentElse = ifStmt.elseBlock;
-        while (currentElse) {
-          if (tstl.isIfStatement(currentElse)) {
-            if (some(currentElse.condition) || someStmts(currentElse.ifBlock.statements))
-              return true;
-            currentElse = currentElse.elseBlock;
-          } else {
-            if (someStmts(currentElse.statements)) return true;
-            break;
-          }
-        }
-        break;
-      }
-      case tstl.SyntaxKind.WhileStatement: {
-        const whileStmt = stmt as tstl.WhileStatement;
-        if (some(whileStmt.condition) || someStmts(whileStmt.body.statements)) return true;
-        break;
-      }
-      case tstl.SyntaxKind.RepeatStatement: {
-        const repeatStmt = stmt as tstl.RepeatStatement;
-        if (some(repeatStmt.condition) || someStmts(repeatStmt.body.statements)) return true;
-        break;
-      }
-      case tstl.SyntaxKind.ForStatement: {
-        const forStmt = stmt as tstl.ForStatement;
-        if (
-          some(forStmt.controlVariableInitializer) ||
-          some(forStmt.limitExpression) ||
-          (forStmt.stepExpression && some(forStmt.stepExpression)) ||
-          someStmts(forStmt.body.statements)
-        )
-          return true;
-        break;
-      }
-      case tstl.SyntaxKind.ForInStatement: {
-        const forIn = stmt as tstl.ForInStatement;
-        if (forIn.expressions.some(some) || someStmts(forIn.body.statements)) return true;
-        break;
-      }
-      case tstl.SyntaxKind.ReturnStatement:
-        if ((stmt as tstl.ReturnStatement).expressions.some(some)) return true;
-        break;
-      case tstl.SyntaxKind.ExpressionStatement:
-        if (some((stmt as tstl.ExpressionStatement).expression)) return true;
-        break;
-    }
-  }
-  return false;
-}
-
 function needsParentheses(node: tstl.Expression): boolean {
   return (
     tstl.isBinaryExpression(node) ||
@@ -1289,6 +1157,10 @@ function hasCrossModuleFreeVariable(
 
   function walk(node: ts.Node): void {
     if (found) return;
+    // Type annotations don't emit to Lua — skip them to avoid false positives
+    // from type-only references (e.g., `param: SomeType` where SomeType is a
+    // module-level type alias).
+    if (ts.isTypeNode(node)) return;
     if (ts.isIdentifier(node)) {
       const sym = checker.getSymbolAtLocation(node);
       if (sym && !paramSymbols.has(sym)) {
