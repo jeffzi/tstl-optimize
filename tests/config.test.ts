@@ -22,20 +22,20 @@ describe("parseConfig", () => {
       { input: true, expected: true },
       { input: "invalid", expected: true },
     ])("parses inline: $input as $expected", ({ input, expected }) => {
-      const config = parseConfig({ rules: { inline: input } as Record<string, unknown> });
+      const config = parseConfig({ rules: { inline: input } });
       expect(config.rules.inline).toStrictEqual(expected);
     });
   });
 
   describe("strict field", () => {
-    it.each([
+    it.each<{ input: Record<string, unknown> | undefined; expected: boolean }>([
       { input: { strict: true }, expected: true },
       { input: {}, expected: false },
       { input: undefined, expected: false },
       { input: { strict: false }, expected: false },
       { input: { strict: "yes" }, expected: false },
     ])("returns $expected for input $input", ({ input, expected }) => {
-      expect(parseConfig(input as Record<string, unknown>).strict).toBe(expected);
+      expect(parseConfig(input).strict).toBe(expected);
     });
   });
 });

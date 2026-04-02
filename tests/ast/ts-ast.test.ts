@@ -129,8 +129,10 @@ describe("hasSideEffects", () => {
         ts.ScriptTarget.Latest,
         true,
       );
-      const fn = src.statements[0] as ts.FunctionDeclaration;
-      const stmt = fn.body?.statements[0] as ts.ExpressionStatement;
+      const fn = src.statements.find(ts.isFunctionDeclaration);
+      const stmt = fn?.body?.statements.find(ts.isExpressionStatement);
+      expect(stmt).toBeDefined();
+      if (!stmt) throw new Error("Expected statement");
       expect(hasSideEffects(stmt.expression)).toBe(true);
     });
 

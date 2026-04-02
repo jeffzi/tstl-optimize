@@ -23,7 +23,8 @@ function makeAccess(table: string, ...fields: string[]): tstl.TableIndexExpressi
   for (const field of fields) {
     expr = tstl.createTableIndexExpression(expr, tstl.createStringLiteral(field));
   }
-  return expr as tstl.TableIndexExpression;
+  if (!tstl.isTableIndexExpression(expr)) throw new Error("Expected TableIndexExpression");
+  return expr;
 }
 
 describe("luaPropertyChain", () => {
