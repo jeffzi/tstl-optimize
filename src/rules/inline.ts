@@ -1264,8 +1264,34 @@ function handleVariableStatementDeclaration(
   return undefined;
 }
 
-function isExported(node: ts.Node): boolean {
-  return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
+function isExported(node: ts.FunctionDeclaration | ts.VariableStatement): boolean {
+  if ((ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0) {
+    return true;
+  }
+
+  // Check for `export { name }` or `export { name as alias }` blocks.
+  let declName: string | undefined;
+  if (ts.isFunctionDeclaration(node)) {
+    declName = node.name?.text;
+  } else {
+    const firstDecl = node.declarationList.declarations[0];
+    if (firstDecl && ts.isIdentifier(firstDecl.name)) {
+      declName = firstDecl.name.text;
+    }
+  }
+  if (declName === undefined) return false;
+
+  return node.getSourceFile().statements.some(
+    (stmt) =>
+      ts.isExportDeclaration(stmt) &&
+      stmt.exportClause &&
+      ts.isNamedExports(stmt.exportClause) &&
+      stmt.exportClause.elements.some(
+        // propertyName is the local name in `export { foo as bar }`;
+        // falls back to name.text for plain `export { foo }`.
+        (s) => (s.propertyName?.text ?? s.name.text) === declName,
+      ),
+  );
 }
 
 export const createVisitors: RuleFactory = (checker, config) => {

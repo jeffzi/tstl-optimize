@@ -37,7 +37,8 @@ describe("inline", () => {
         const x = add(1, 2);
       `),
       );
-      expect(lua).toContain("1 + 2");
+      // Constant folding reduces 1 + 2 to 3
+      expect(lua).toContain("(3)");
     });
 
     it("inlines zero-param function", () => {
@@ -265,7 +266,8 @@ describe("inline", () => {
           const r = double(10);
         `,
       });
-      expect(lua).toContain("10 * 2");
+      // Constant folding reduces 10 * 2 to 20
+      expect(lua).toContain("(20)");
     });
 
     it("rejects functions with free variables", () => {
@@ -348,6 +350,54 @@ describe("inline", () => {
         { pluginOptions: { strict: true } },
       );
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+  });
+
+  describe("export block detection", () => {
+    it.each([
+      {
+        name: "function declaration via export { name }",
+        decl: "function double(x: number) { return x * 2; }",
+        exportStmt: "export { double };",
+      },
+      {
+        name: "arrow function via export { name }",
+        decl: "const double = (x: number) => x * 2;",
+        exportStmt: "export { double };",
+      },
+      {
+        name: "function declaration via export { name as alias }",
+        decl: "function double(x: number) { return x * 2; }",
+        exportStmt: "export { double as myDouble };",
+      },
+    ])("preserves and inlines $name", ({ decl, exportStmt }) => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        ${decl}
+        declare const a: number;
+        const r = double(a);
+        ${exportStmt}
+      `);
+
+      expect(diagnostics).not.toContainEqual(
+        expect.objectContaining({ category: ts.DiagnosticCategory.Warning }),
+      );
+      expect(lua).toContain("function double");
+      expect(lua).toContain("a * 2");
+    });
+
+    it("preserves definition when there is no local call site", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        export { double };
+      `);
+
+      expect(diagnostics).not.toContainEqual(
+        expect.objectContaining({ category: ts.DiagnosticCategory.Warning }),
+      );
+      // Without the definition, ____exports.double would reference an undefined local.
+      expect(lua).toContain("function double");
     });
   });
 });

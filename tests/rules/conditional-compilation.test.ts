@@ -197,7 +197,9 @@ describe("conditional-compilation", () => {
         "declare const DEBUG: boolean; if (DEBUG) { print(Math.floor(1.5)); }",
         opts,
       );
-      expect(normalizeLua(lua)).toBe("print(1.5 - 1.5 % 1)");
+      // math-intrinsics converts Math.floor(1.5) to 1.5 - 1.5 % 1,
+      // then constant-folding reduces it to 1
+      expect(normalizeLua(lua)).toBe("print(1)");
     });
   });
 });

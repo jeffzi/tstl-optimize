@@ -1,9 +1,8 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import type { PluginConfig, RuleFactory } from "../config";
-import { hasSideEffects } from "../ast/ts-ast";
 import { walkStatements } from "../ast/lua-walker";
+import type { PluginConfig, RuleFactory } from "../config";
 
 type ConstantValue = number | string | boolean;
 
@@ -27,45 +26,74 @@ function evaluateBinary(
 ): ConstantValue | undefined {
   if (typeof left === "number" && typeof right === "number") {
     switch (op) {
-      case tstl.SyntaxKind.AdditionOperator: return left + right;
-      case tstl.SyntaxKind.SubtractionOperator: return left - right;
-      case tstl.SyntaxKind.MultiplicationOperator: return left * right;
-      case tstl.SyntaxKind.DivisionOperator: return left / right;
-      case tstl.SyntaxKind.FloorDivisionOperator: return Math.floor(left / right);
-      case tstl.SyntaxKind.ModuloOperator: return left % right;
-      case tstl.SyntaxKind.PowerOperator: return Math.pow(left, right);
-      case tstl.SyntaxKind.EqualityOperator: return left === right;
-      case tstl.SyntaxKind.InequalityOperator: return left !== right;
-      case tstl.SyntaxKind.LessThanOperator: return left < right;
-      case tstl.SyntaxKind.LessEqualOperator: return left <= right;
-      case tstl.SyntaxKind.GreaterThanOperator: return left > right;
-      case tstl.SyntaxKind.GreaterEqualOperator: return left >= right;
+      case tstl.SyntaxKind.AdditionOperator:
+        return left + right;
+      case tstl.SyntaxKind.SubtractionOperator:
+        return left - right;
+      case tstl.SyntaxKind.MultiplicationOperator:
+        return left * right;
+      case tstl.SyntaxKind.DivisionOperator:
+        return left / right;
+      case tstl.SyntaxKind.FloorDivisionOperator:
+        return Math.floor(left / right);
+      case tstl.SyntaxKind.ModuloOperator:
+        return left % right;
+      case tstl.SyntaxKind.PowerOperator:
+        return left ** right;
+      case tstl.SyntaxKind.EqualityOperator:
+        return left === right;
+      case tstl.SyntaxKind.InequalityOperator:
+        return left !== right;
+      case tstl.SyntaxKind.LessThanOperator:
+        return left < right;
+      case tstl.SyntaxKind.LessEqualOperator:
+        return left <= right;
+      case tstl.SyntaxKind.GreaterThanOperator:
+        return left > right;
+      case tstl.SyntaxKind.GreaterEqualOperator:
+        return left >= right;
     }
-  } else if (typeof left === "string" && typeof right === "string") {
+  }
+  if (typeof left === "string" && typeof right === "string") {
     switch (op) {
-      case tstl.SyntaxKind.ConcatOperator: return left + right;
-      case tstl.SyntaxKind.EqualityOperator: return left === right;
-      case tstl.SyntaxKind.InequalityOperator: return left !== right;
-      case tstl.SyntaxKind.LessThanOperator: return left < right;
-      case tstl.SyntaxKind.LessEqualOperator: return left <= right;
-      case tstl.SyntaxKind.GreaterThanOperator: return left > right;
-      case tstl.SyntaxKind.GreaterEqualOperator: return left >= right;
+      case tstl.SyntaxKind.ConcatOperator:
+        return left + right;
+      case tstl.SyntaxKind.EqualityOperator:
+        return left === right;
+      case tstl.SyntaxKind.InequalityOperator:
+        return left !== right;
+      case tstl.SyntaxKind.LessThanOperator:
+        return left < right;
+      case tstl.SyntaxKind.LessEqualOperator:
+        return left <= right;
+      case tstl.SyntaxKind.GreaterThanOperator:
+        return left > right;
+      case tstl.SyntaxKind.GreaterEqualOperator:
+        return left >= right;
     }
-  } else if (typeof left === "boolean" && typeof right === "boolean") {
+  }
+  if (typeof left === "boolean" && typeof right === "boolean") {
     switch (op) {
-      case tstl.SyntaxKind.EqualityOperator: return left === right;
-      case tstl.SyntaxKind.InequalityOperator: return left !== right;
-      case tstl.SyntaxKind.AndOperator: return left && right;
-      case tstl.SyntaxKind.OrOperator: return left || right;
+      case tstl.SyntaxKind.EqualityOperator:
+        return left === right;
+      case tstl.SyntaxKind.InequalityOperator:
+        return left !== right;
+      case tstl.SyntaxKind.AndOperator:
+        return left && right;
+      case tstl.SyntaxKind.OrOperator:
+        return left || right;
     }
-  } else {
-    // Mixed types
-    switch (op) {
-      case tstl.SyntaxKind.EqualityOperator: return left === right;
-      case tstl.SyntaxKind.InequalityOperator: return left !== right;
-      case tstl.SyntaxKind.AndOperator: return left && right;
-      case tstl.SyntaxKind.OrOperator: return left || right;
-    }
+  }
+  // Mixed types
+  switch (op) {
+    case tstl.SyntaxKind.EqualityOperator:
+      return left === right;
+    case tstl.SyntaxKind.InequalityOperator:
+      return left !== right;
+    case tstl.SyntaxKind.AndOperator:
+      return left && right;
+    case tstl.SyntaxKind.OrOperator:
+      return left || right;
   }
   return undefined;
 }
@@ -139,35 +167,35 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
         statements.splice(i, 1);
         i--;
       } else {
-         // Prune trailing empty else/elseif
-         let node: tstl.IfStatement | tstl.Block | undefined = stmt;
-         const stack: { parent: tstl.IfStatement, node: tstl.IfStatement | tstl.Block }[] = [];
-         
-         while (node && tstl.isIfStatement(node)) {
-            if (node.elseBlock) {
-                stack.push({ parent: node, node: node.elseBlock });
-                node = node.elseBlock;
+        // Prune trailing empty else/elseif
+        let node: tstl.IfStatement | tstl.Block | undefined = stmt;
+        const stack: { parent: tstl.IfStatement; node: tstl.IfStatement | tstl.Block }[] = [];
+
+        while (node && tstl.isIfStatement(node)) {
+          if (node.elseBlock) {
+            stack.push({ parent: node, node: node.elseBlock });
+            node = node.elseBlock;
+          } else {
+            break;
+          }
+        }
+
+        while (stack.length > 0) {
+          const { parent, node } = stack.pop()!;
+          if (tstl.isIfStatement(node)) {
+            if (node.ifBlock.statements.length === 0 && !node.elseBlock) {
+              parent.elseBlock = undefined;
             } else {
-                break;
+              break; // stop pruning if we hit a non-empty block
             }
-         }
-         
-         while (stack.length > 0) {
-             const { parent, node } = stack.pop()!;
-             if (tstl.isIfStatement(node)) {
-                 if (node.ifBlock.statements.length === 0 && !node.elseBlock) {
-                     parent.elseBlock = undefined;
-                 } else {
-                     break; // stop pruning if we hit a non-empty block
-                 }
-             } else {
-                 if (node.statements.length === 0) {
-                     parent.elseBlock = undefined;
-                 } else {
-                     break; // stop pruning if we hit a non-empty block
-                 }
-             }
-         }
+          } else {
+            if (node.statements.length === 0) {
+              parent.elseBlock = undefined;
+            } else {
+              break; // stop pruning if we hit a non-empty block
+            }
+          }
+        }
       }
     } else if (tstl.isDoStatement(stmt)) {
       optimizeControlFlow(stmt.statements);
@@ -202,8 +230,6 @@ export const createVisitors: RuleFactory = (
         passes++;
         walkStatements(file.statements, {
           expr: (expr, replace) => {
-            if (expr.tsOriginal && hasSideEffects(expr.tsOriginal as ts.Expression)) return;
-
             if (tstl.isBinaryExpression(expr)) {
               const leftVal = getLiteralValue(expr.left);
               const rightVal = getLiteralValue(expr.right);
@@ -211,7 +237,8 @@ export const createVisitors: RuleFactory = (
                 const folded = evaluateBinary(expr.operator, leftVal, rightVal);
                 if (folded !== undefined) {
                   const lit = createLiteral(folded);
-                  lit.tsOriginal = expr.tsOriginal;
+                  lit.line = expr.line;
+                  lit.column = expr.column;
                   replace(lit);
                   changed = true;
                 }
@@ -222,7 +249,8 @@ export const createVisitors: RuleFactory = (
                 const folded = evaluateUnary(expr.operator, operandVal);
                 if (folded !== undefined) {
                   const lit = createLiteral(folded);
-                  lit.tsOriginal = expr.tsOriginal;
+                  lit.line = expr.line;
+                  lit.column = expr.column;
                   replace(lit);
                   changed = true;
                 }
