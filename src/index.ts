@@ -3,6 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { isRuleEnabled, type PluginConfig, parseConfig, type RuleFactory } from "./config";
 import { createVisitors as conditionalCompilationVisitors } from "./rules/conditional-compilation";
+import { createVisitors as constantFoldingVisitors } from "./rules/constant-folding";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
@@ -14,6 +15,7 @@ import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsic
 // so dead branches are stripped before other rules process surviving code.
 const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
   ["conditional-compilation", conditionalCompilationVisitors],
+  ["constant-folding", constantFoldingVisitors],
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
@@ -80,6 +82,25 @@ class OptimizePlugin implements tstl.Plugin {
         const isStmtFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
 
         merged[kind] = (node, context) => {
+          if (kind === ts.SyntaxKind.SourceFile) {
+            const mockedContext = Object.create(context);
+            mockedContext.superTransformNode = (n: ts.Node) => {
+              if (existing) {
+                const existingRes = existing(n, context);
+                return Array.isArray(existingRes) ? existingRes : [existingRes];
+              }
+              return context.superTransformNode(n);
+            };
+            mockedContext.superTransformStatements = (n: ts.Statement) => {
+              if (existing) {
+                const existingRes = existing(n, context);
+                return Array.isArray(existingRes) ? existingRes : [existingRes];
+              }
+              return context.superTransformStatements(n);
+            };
+            return fn(node, mockedContext);
+          }
+
           const res = fn(node, context) ?? existing?.(node, context);
           if (res !== undefined) return res;
 
@@ -90,7 +111,10 @@ class OptimizePlugin implements tstl.Plugin {
       }
     }
 
-    this.visitors = merged as unknown as tstl.Visitors;
+    for (const key of Object.keys(this.visitors)) {
+      delete (this.visitors as any)[key];
+    }
+    Object.assign(this.visitors, merged);
   }
 
   // Strip JSDoc artifact — TSTL converts all JSDoc tags to Lua comments,

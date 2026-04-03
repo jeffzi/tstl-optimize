@@ -37,6 +37,7 @@ export interface InlineConfig {
 
 export interface RulesConfig {
   "conditional-compilation": boolean | ConditionalCompilationConfig;
+  "constant-folding": boolean;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
   inline: boolean | InlineConfig;
@@ -68,6 +69,7 @@ const DEFAULT_LOCALIZER: LocalizerConfig = {
 
 const DEFAULT_RULES: RulesConfig = {
   "conditional-compilation": false,
+  "constant-folding": true,
   "math-intrinsics": true,
   "loop-rebase": true,
   inline: true,
