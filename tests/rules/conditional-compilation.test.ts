@@ -1,6 +1,8 @@
+import fc from "fast-check";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../src/config";
+import { arbSafeString } from "../arbitraries";
 import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
 
 function ccOpts(constants: Record<string, { env: string; default: boolean | number | string }>) {
@@ -193,4 +195,87 @@ describe("conditional-compilation", () => {
       expect(normalizeLua(lua)).toBe("print(1)");
     });
   });
+});
+
+describe("property-based", () => {
+  const NUM_RUNS = 50;
+  const TIMEOUT = 15_000;
+
+  it(
+    "boolean constant selects correct branch",
+    () => {
+      fc.assert(
+        fc.property(fc.boolean(), (value) => {
+          const src = `
+            declare const MY_FLAG: boolean;
+            if (MY_FLAG) { const kept = "yes"; } else { const removed = "no"; }
+          `;
+
+          const lua = compile(src, ccOpts({ MY_FLAG: { env: "X", default: value } }));
+
+          if (value) {
+            expect(lua).toContain('"yes"');
+            expect(lua).not.toContain('"no"');
+          } else {
+            expect(lua).toContain('"no"');
+            expect(lua).not.toContain('"yes"');
+          }
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "negation inverts branch selection",
+    () => {
+      fc.assert(
+        fc.property(fc.boolean(), (value) => {
+          const src = `
+            declare const MY_FLAG: boolean;
+            if (!MY_FLAG) { const kept = "yes"; } else { const removed = "no"; }
+          `;
+
+          const lua = compile(src, ccOpts({ MY_FLAG: { env: "X", default: value } }));
+
+          if (value) {
+            expect(lua).toContain('"no"');
+            expect(lua).not.toContain('"yes"');
+          } else {
+            expect(lua).toContain('"yes"');
+            expect(lua).not.toContain('"no"');
+          }
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "string equality selects correct branch",
+    () => {
+      fc.assert(
+        fc.property(arbSafeString, arbSafeString, (constValue, compareValue) => {
+          const src = `
+            declare const PLATFORM: string;
+            if (PLATFORM === "${compareValue}") { const matched = "yes"; } else { const unmatched = "no"; }
+          `;
+
+          const lua = compile(src, ccOpts({ PLATFORM: { env: "X", default: constValue } }));
+
+          if (constValue === compareValue) {
+            expect(lua).toContain('"yes"');
+            expect(lua).not.toContain('"no"');
+          } else {
+            expect(lua).toContain('"no"');
+            expect(lua).not.toContain('"yes"');
+          }
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    },
+    TIMEOUT,
+  );
 });

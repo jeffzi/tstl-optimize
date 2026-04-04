@@ -16,7 +16,7 @@ describe("math-intrinsics", () => {
   });
 
   describe("Math.sqrt", () => {
-    it("replaces with x ^ 0.5", () => {
+    it("replaces with x ^ 0.5 when argument is pure", () => {
       const lua = compile("declare const x: number; const a = Math.sqrt(x);");
       expect(lua).toContain("x ^ 0.5");
       expect(lua).not.toContain("math.sqrt");
@@ -37,9 +37,12 @@ describe("math-intrinsics", () => {
     });
 
     it("parenthesizes negation to avoid Lua comment syntax", () => {
-      const lua = compile("const r = Math.abs(-42);");
-      expect(lua).not.toContain("--42");
+      const noFold = { pluginOptions: { rules: { "constant-folding": false } } };
+
+      const lua = compile("const x = Math.abs(-42);", noFold);
+
       expect(lua).toContain("-(-42)");
+      expect(lua).not.toMatch(/--\d/);
     });
 
     it("keeps math.abs when argument has side effects", () => {
@@ -109,6 +112,36 @@ describe("math-intrinsics", () => {
     it("does not replace x ** 3 or other exponents", () => {
       const lua = compile("declare const x: number; const a = x ** 3;");
       expect(lua).toContain("x ^ 3");
+    });
+  });
+
+  describe("constant-folding interaction", () => {
+    it("folds Math.floor with constant argument to literal", () => {
+      const lua = compile("const x = Math.floor(1.7);");
+
+      expect(lua).toContain("= 1");
+      expect(lua).not.toContain("% 1");
+    });
+
+    it("folds Math.abs conditional with constant argument", () => {
+      const lua = compile("const x = Math.abs(-42);");
+
+      expect(lua).toContain("true and");
+      expect(lua).not.toContain("math.abs");
+      expect(lua).not.toMatch(/--\d/);
+    });
+
+    it("folds Math.max conditional with constant arguments", () => {
+      const lua = compile("const x = Math.max(5, 3);");
+
+      expect(lua).toContain("true and 5 or 3");
+      expect(lua).not.toContain("math.max");
+    });
+
+    it("folds x ** 2 with constant base to literal", () => {
+      const lua = compile("const x = 3 ** 2;");
+
+      expect(lua).toContain("= 9");
     });
   });
 

@@ -20,12 +20,13 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("x"))).toBe(false);
     });
 
-    it("returns false for void with pure operand", () => {
+    it("returns false for transparent wrappers around pure operand", () => {
       expect(hasSideEffects(parseExpr("void 0"))).toBe(false);
-    });
-
-    it("returns false for typeof with pure operand", () => {
       expect(hasSideEffects(parseExpr("typeof x"))).toBe(false);
+      expect(hasSideEffects(parseExpr("(a + b)"))).toBe(false);
+      expect(hasSideEffects(parseExpr("x as number"))).toBe(false);
+      expect(hasSideEffects(parseExpr("x!"))).toBe(false);
+      expect(hasSideEffects(parseExpr("x satisfies number"))).toBe(false);
     });
 
     it("returns false for prefix unary non-increment with pure operand", () => {
@@ -43,24 +44,8 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("a + b"))).toBe(false);
     });
 
-    it("returns false for parenthesized pure expression", () => {
-      expect(hasSideEffects(parseExpr("(a + b)"))).toBe(false);
-    });
-
     it("returns false for conditional with pure branches", () => {
       expect(hasSideEffects(parseExpr("x ? a : b"))).toBe(false);
-    });
-
-    it("returns false for as expression wrapping pure expr", () => {
-      expect(hasSideEffects(parseExpr("x as number"))).toBe(false);
-    });
-
-    it("returns false for non-null assertion on pure expr", () => {
-      expect(hasSideEffects(parseExpr("x!"))).toBe(false);
-    });
-
-    it("returns false for satisfies expression wrapping pure expr", () => {
-      expect(hasSideEffects(parseExpr("x satisfies number"))).toBe(false);
     });
 
     it("returns false for element access with pure index", () => {
@@ -140,15 +125,9 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("delete obj.x"))).toBe(true);
     });
 
-    it("returns true for void wrapping call", () => {
+    it("returns true for unary wrappers around call", () => {
       expect(hasSideEffects(parseExpr("void foo()"))).toBe(true);
-    });
-
-    it("returns true for typeof wrapping call", () => {
       expect(hasSideEffects(parseExpr("typeof foo()"))).toBe(true);
-    });
-
-    it("returns true for prefix unary non-increment wrapping call", () => {
       expect(hasSideEffects(parseExpr("+foo()"))).toBe(true);
     });
 
@@ -171,26 +150,17 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("arr[foo()]"))).toBe(true);
     });
 
-    it("detects call inside parenthesized expression", () => {
+    it("detects call through transparent wrappers", () => {
       expect(hasSideEffects(parseExpr("(foo())"))).toBe(true);
+      expect(hasSideEffects(parseExpr("foo() as number"))).toBe(true);
+      expect(hasSideEffects(parseExpr("foo()!"))).toBe(true);
+      expect(hasSideEffects(parseExpr("foo() satisfies number"))).toBe(true);
     });
 
     it("detects call in any branch of conditional expression", () => {
       expect(hasSideEffects(parseExpr("foo() ? a : b"))).toBe(true);
       expect(hasSideEffects(parseExpr("x ? foo() : b"))).toBe(true);
       expect(hasSideEffects(parseExpr("x ? a : foo()"))).toBe(true);
-    });
-
-    it("detects call inside as expression", () => {
-      expect(hasSideEffects(parseExpr("foo() as number"))).toBe(true);
-    });
-
-    it("detects call inside non-null assertion", () => {
-      expect(hasSideEffects(parseExpr("foo()!"))).toBe(true);
-    });
-
-    it("detects call inside satisfies expression", () => {
-      expect(hasSideEffects(parseExpr("foo() satisfies number"))).toBe(true);
     });
 
     it("detects call in either operand of binary expression", () => {
