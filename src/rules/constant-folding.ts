@@ -2,14 +2,20 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { walkStatements } from "../ast/lua-walker";
-import type { PluginConfig, RuleFactory } from "../config";
-
-type ConstantValue = number | string | boolean;
+import type { ConstantValue, RuleFactory } from "../config";
 
 function getLiteralValue(expr: tstl.Expression): ConstantValue | undefined {
   if (tstl.isNumericLiteral(expr)) return expr.value;
   if (tstl.isStringLiteral(expr)) return expr.value;
   if (tstl.isBooleanLiteral(expr)) return expr.kind === tstl.SyntaxKind.TrueKeyword;
+  // TSTL represents negative number literals as unary negation of a positive literal.
+  if (
+    tstl.isUnaryExpression(expr) &&
+    expr.operator === tstl.SyntaxKind.NegationOperator &&
+    tstl.isNumericLiteral(expr.operand)
+  ) {
+    return -expr.operand.value;
+  }
   return undefined;
 }
 
@@ -17,6 +23,10 @@ function createLiteral(value: ConstantValue): tstl.Expression {
   if (typeof value === "number") return tstl.createNumericLiteral(value);
   if (typeof value === "string") return tstl.createStringLiteral(value);
   return tstl.createBooleanLiteral(value);
+}
+
+function finiteOrUndefined(n: number): number | undefined {
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function evaluateBinary(
@@ -27,19 +37,19 @@ function evaluateBinary(
   if (typeof left === "number" && typeof right === "number") {
     switch (op) {
       case tstl.SyntaxKind.AdditionOperator:
-        return left + right;
+        return finiteOrUndefined(left + right);
       case tstl.SyntaxKind.SubtractionOperator:
-        return left - right;
+        return finiteOrUndefined(left - right);
       case tstl.SyntaxKind.MultiplicationOperator:
-        return left * right;
+        return finiteOrUndefined(left * right);
       case tstl.SyntaxKind.DivisionOperator:
-        return left / right;
+        return finiteOrUndefined(left / right);
       case tstl.SyntaxKind.FloorDivisionOperator:
-        return Math.floor(left / right);
+        return finiteOrUndefined(Math.floor(left / right));
       case tstl.SyntaxKind.ModuloOperator:
-        return left % right;
+        return finiteOrUndefined(left % right);
       case tstl.SyntaxKind.PowerOperator:
-        return left ** right;
+        return finiteOrUndefined(left ** right);
       case tstl.SyntaxKind.EqualityOperator:
         return left === right;
       case tstl.SyntaxKind.InequalityOperator:
@@ -84,25 +94,18 @@ function evaluateBinary(
         return left || right;
     }
   }
-  // Mixed types
+  // Mixed types — only fold equality; and/or have different semantics in Lua vs JS for non-booleans
   switch (op) {
     case tstl.SyntaxKind.EqualityOperator:
       return left === right;
     case tstl.SyntaxKind.InequalityOperator:
       return left !== right;
-    case tstl.SyntaxKind.AndOperator:
-      return left && right;
-    case tstl.SyntaxKind.OrOperator:
-      return left || right;
   }
   return undefined;
 }
 
 function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue | undefined {
   switch (op) {
-    case tstl.SyntaxKind.NegationOperator:
-      if (typeof operand === "number") return -operand;
-      break;
     case tstl.SyntaxKind.NotOperator:
       return !operand;
     case tstl.SyntaxKind.BitwiseNotOperator:
@@ -134,68 +137,35 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
     if (tstl.isIfStatement(stmt)) {
       optimizeControlFlow(stmt.ifBlock.statements);
 
-      let currentElse = stmt.elseBlock;
-      while (currentElse) {
-        if (tstl.isIfStatement(currentElse)) {
-          optimizeControlFlow(currentElse.ifBlock.statements);
-          currentElse = currentElse.elseBlock;
+      // Single forward pass: recurse into each branch and simultaneously track
+      // allBranchesEmpty / pruneFrom so we only traverse the elseif chain once.
+      // pruneFrom resets to undefined when a non-empty bare else is seen (terminal).
+      let allBranchesEmpty = stmt.ifBlock.statements.length === 0;
+      let pruneFrom: tstl.IfStatement | undefined = allBranchesEmpty ? undefined : stmt;
+      let cursor = stmt.elseBlock;
+      while (cursor) {
+        if (tstl.isIfStatement(cursor)) {
+          optimizeControlFlow(cursor.ifBlock.statements);
+          if (cursor.ifBlock.statements.length > 0) {
+            allBranchesEmpty = false;
+            pruneFrom = cursor;
+          }
+          cursor = cursor.elseBlock;
         } else {
-          optimizeControlFlow(currentElse.statements);
+          optimizeControlFlow(cursor.statements);
+          if (cursor.statements.length > 0) {
+            allBranchesEmpty = false;
+            pruneFrom = undefined; // bare else is terminal; nothing to prune after it
+          }
           break;
         }
       }
 
-      // Check if all branches are empty
-      let allBranchesEmpty = stmt.ifBlock.statements.length === 0;
-      let checkElse = stmt.elseBlock;
-      while (allBranchesEmpty && checkElse) {
-        if (tstl.isIfStatement(checkElse)) {
-          if (checkElse.ifBlock.statements.length > 0) {
-            allBranchesEmpty = false;
-          }
-          checkElse = checkElse.elseBlock;
-        } else {
-          if (checkElse.statements.length > 0) {
-            allBranchesEmpty = false;
-          }
-          checkElse = undefined;
-        }
-      }
-
       if (allBranchesEmpty) {
-        // Remove this if statement
         statements.splice(i, 1);
         i--;
-      } else {
-        // Prune trailing empty else/elseif
-        let node: tstl.IfStatement | tstl.Block | undefined = stmt;
-        const stack: { parent: tstl.IfStatement; node: tstl.IfStatement | tstl.Block }[] = [];
-
-        while (node && tstl.isIfStatement(node)) {
-          if (node.elseBlock) {
-            stack.push({ parent: node, node: node.elseBlock });
-            node = node.elseBlock;
-          } else {
-            break;
-          }
-        }
-
-        while (stack.length > 0) {
-          const { parent, node } = stack.pop()!;
-          if (tstl.isIfStatement(node)) {
-            if (node.ifBlock.statements.length === 0 && !node.elseBlock) {
-              parent.elseBlock = undefined;
-            } else {
-              break; // stop pruning if we hit a non-empty block
-            }
-          } else {
-            if (node.statements.length === 0) {
-              parent.elseBlock = undefined;
-            } else {
-              break; // stop pruning if we hit a non-empty block
-            }
-          }
-        }
+      } else if (pruneFrom !== undefined) {
+        pruneFrom.elseBlock = undefined;
       }
     } else if (tstl.isDoStatement(stmt)) {
       optimizeControlFlow(stmt.statements);
@@ -211,18 +181,16 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
   }
 }
 
-export const createVisitors: RuleFactory = (
-  _checker: ts.TypeChecker,
-  _config: PluginConfig,
-): tstl.Visitors => {
+export const createVisitors: RuleFactory = (): tstl.Visitors => {
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context) => {
       const nodes = context.superTransformNode(node);
       const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
 
-      if (!file || !file.statements) return file;
+      if (!file?.statements) return file;
 
-      // Phase 1: Fold constants (bottom-up simulation via repeated passes)
+      // Fold constants via repeated bottom-up passes until stable (max 10 to bound
+      // pathological cases — in practice 1–2 passes suffice for real code).
       let changed = true;
       let passes = 0;
       while (changed && passes < 10) {
@@ -260,7 +228,6 @@ export const createVisitors: RuleFactory = (
         });
       }
 
-      // Phase 2: Control flow optimization
       optimizeControlFlow(file.statements);
 
       return file;

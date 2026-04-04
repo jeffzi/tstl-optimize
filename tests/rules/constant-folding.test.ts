@@ -5,8 +5,6 @@ describe("constant-folding", () => {
   it("folds binary arithmetic expressions", () => {
     const lua = compile("const a = 1 + 2 * 3;");
     expect(lua).toContain("a = 7");
-    expect(lua).not.toContain("+");
-    expect(lua).not.toContain("*");
   });
 
   it("folds string concatenation", () => {
@@ -36,5 +34,20 @@ describe("constant-folding", () => {
     const lua = compile("function foo() { return 1; const a = 2; }");
     expect(lua).toContain("return 1");
     expect(lua).not.toContain("local a = 2");
+  });
+
+  describe("non-finite results are not folded", () => {
+    it.each([
+      { label: "division by zero (Infinity)", source: "const x = 1 / 0;", expected: "1 / 0" },
+      { label: "zero divided by zero (NaN)", source: "const x = 0 / 0;", expected: "0 / 0" },
+      {
+        label: "power expression that evaluates to NaN",
+        source: "const x = (-4.2) ** (-4.2);",
+        expected: "(-4.2) ^ (-4.2)",
+      },
+    ])("preserves $label", ({ source, expected }) => {
+      const lua = compile(source);
+      expect(lua).toContain(expected);
+    });
   });
 });

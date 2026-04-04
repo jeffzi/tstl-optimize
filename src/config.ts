@@ -140,7 +140,6 @@ export function resolveConditionalCompilationStrict(
   value: boolean | ConditionalCompilationConfig | undefined,
 ): boolean | undefined {
   if (value === undefined || value === true || value === false) return undefined;
-  // value is ConditionalCompilationConfig — object narrowing, no cast required
   return value.strict;
 }
 
@@ -152,9 +151,7 @@ export function resolveEffectiveStrict(
   globalStrict: boolean,
   perRuleStrict: boolean | undefined,
 ): boolean {
-  // Per-rule false always wins over global true.
   if (perRuleStrict === false) return false;
-  // Global true, or per-rule true, or both — strict is active.
   return globalStrict || perRuleStrict === true;
 }
 
@@ -187,7 +184,8 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
 
     if (STRUCTURED_RULES.has(key)) {
       if (typeof val === "boolean" || isRecord(val)) {
-        // We know key is a valid key of RulesConfig and val matches the expected type
+        // RulesConfig has no index signature, so dynamic write requires the double
+        // widen through unknown — val is already guarded to the correct union member.
         (rules as unknown as Record<string, unknown>)[key] = val;
       }
     } else if (typeof val === "boolean") {
