@@ -112,7 +112,7 @@ class OptimizePlugin implements tstl.Plugin {
     }
 
     for (const key of Object.keys(this.visitors)) {
-      delete (this.visitors as any)[key];
+      Reflect.deleteProperty(this.visitors, key);
     }
     Object.assign(this.visitors, merged);
   }

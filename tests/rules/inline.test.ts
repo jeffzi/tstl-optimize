@@ -133,7 +133,6 @@ describe("inline", () => {
         function compute(x: number): number { const y = x + 1; return y * 2; }
         function caller() { return compute(10); }
       `);
-      // No do...end block should be present at return sites
       expect(lua).not.toMatch(/\bdo\b/);
       expect(lua).toMatch(/10 \+ 1|____inline_arg_0 \+ 1/);
       expect(lua).toContain("return y * 2");
@@ -159,8 +158,16 @@ describe("inline", () => {
   });
 
   describe("switch with break in body", () => {
+    function expectInlinedWithoutWarnings(source: string): void {
+      const { lua, diagnostics } = compileWithDiagnostics(source);
+      expect(diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Warning)).toHaveLength(
+        0,
+      );
+      expect(lua).toContain("do");
+    }
+
     it("inlines multi-statement body with switch containing break", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      expectInlinedWithoutWarnings(`
         /** @inline */
         function classify(x: number): void {
           let label: string;
@@ -174,16 +181,10 @@ describe("inline", () => {
         declare const n: number;
         classify(n);
       `);
-
-      const pluginWarnings = diagnostics.filter(
-        (d) => d.category === ts.DiagnosticCategory.Warning,
-      );
-      expect(pluginWarnings).toHaveLength(0);
-      expect(lua).toContain("do");
     });
 
     it("inlines statementsWithReturn body with switch containing break", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      expectInlinedWithoutWarnings(`
         /** @inline */
         function compute(x: number): string {
           let result: string;
@@ -196,12 +197,6 @@ describe("inline", () => {
         declare const n: number;
         const label = compute(n);
       `);
-
-      const pluginWarnings = diagnostics.filter(
-        (d) => d.category === ts.DiagnosticCategory.Warning,
-      );
-      expect(pluginWarnings).toHaveLength(0);
-      expect(lua).toContain("do");
     });
   });
 
@@ -216,7 +211,7 @@ describe("inline", () => {
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
         `);
-      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("@inline ignored");
     });
 
@@ -230,7 +225,7 @@ describe("inline", () => {
           ${decl}
           f();
         `);
-      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("not supported");
     });
 
@@ -240,6 +235,7 @@ describe("inline", () => {
         function f(x: number) { const y = x + 1; return y; }
         const r = f(1) + 1;
       `);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("cannot be inlined at expression position");
     });
 
@@ -250,6 +246,7 @@ describe("inline", () => {
         declare function foo(): number;
         f(foo());
       `);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("side effects");
     });
   });
@@ -349,6 +346,7 @@ describe("inline", () => {
       `,
         { pluginOptions: { strict: true } },
       );
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
     });
   });
