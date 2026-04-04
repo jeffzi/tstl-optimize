@@ -59,6 +59,7 @@ const EXPECTED_RULE_KEYS = [
   "math-intrinsics",
   "loop-rebase",
   "inline",
+  "dead-local",
   "localizer",
   "debug-strip",
 ];
@@ -89,6 +90,7 @@ describe("property-based", () => {
       "math-intrinsics": fc.boolean(),
       "loop-rebase": fc.boolean(),
       inline: fc.boolean(),
+      "dead-local": fc.boolean(),
       localizer: fc.boolean(),
       "debug-strip": fc.boolean(),
     });

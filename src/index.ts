@@ -4,6 +4,7 @@ import * as tstl from "typescript-to-lua";
 import { isRuleEnabled, type PluginConfig, parseConfig, type RuleFactory } from "./config";
 import { createVisitors as conditionalCompilationVisitors } from "./rules/conditional-compilation";
 import { createVisitors as constantFoldingVisitors } from "./rules/constant-folding";
+import { createVisitors as deadLocalVisitors } from "./rules/dead-local";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
@@ -19,6 +20,7 @@ const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
+  ["dead-local", deadLocalVisitors],
   ["localizer", localizerVisitors],
   ["debug-strip", debugStripVisitors],
 ];
