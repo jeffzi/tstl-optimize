@@ -1,6 +1,6 @@
+import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import ts from "typescript";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
