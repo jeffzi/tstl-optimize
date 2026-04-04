@@ -47,7 +47,7 @@ function evaluateBinary(
       case tstl.SyntaxKind.FloorDivisionOperator:
         return finiteOrUndefined(Math.floor(left / right));
       case tstl.SyntaxKind.ModuloOperator:
-        return finiteOrUndefined(left % right);
+        return finiteOrUndefined(((left % right) + right) % right);
       case tstl.SyntaxKind.PowerOperator:
         return finiteOrUndefined(left ** right);
       case tstl.SyntaxKind.EqualityOperator:
