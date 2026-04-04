@@ -41,6 +41,7 @@ export interface RulesConfig {
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
   inline: boolean | InlineConfig;
+  "dead-local": boolean;
   localizer: boolean | LocalizerConfig;
   "debug-strip": boolean | DebugStripConfig;
 }
@@ -73,6 +74,7 @@ const DEFAULT_RULES: RulesConfig = {
   "math-intrinsics": true,
   "loop-rebase": true,
   inline: true,
+  "dead-local": true,
   localizer: true,
   "debug-strip": false,
 };

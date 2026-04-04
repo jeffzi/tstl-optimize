@@ -6,6 +6,7 @@ import { createVisitors as conditionalCompilationVisitors } from "./rules/condit
 import { createVisitors as constantFoldingVisitors } from "./rules/constant-folding";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
 import { createVisitors as inlineVisitors } from "./rules/inline";
+import { createVisitors as deadLocalVisitors } from "./rules/dead-local";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
@@ -19,6 +20,7 @@ const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
+  ["dead-local", deadLocalVisitors],
   ["localizer", localizerVisitors],
   ["debug-strip", debugStripVisitors],
 ];
