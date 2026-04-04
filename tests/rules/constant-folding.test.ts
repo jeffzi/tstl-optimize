@@ -36,6 +36,18 @@ describe("constant-folding", () => {
     expect(lua).not.toContain("local a = 2");
   });
 
+  it("folds modulo using Lua floored semantics, not JS truncated semantics", () => {
+    // Lua: (-7) % 3 == 2   (floored toward -inf)
+    // JS:  (-7) % 3 == -1  (truncated toward zero)
+    const lua1 = compile("const x = (-7) % 3;");
+    expect(lua1).toContain("x = 2");
+
+    // Lua: 7 % (-3) == -2
+    // JS:  7 % (-3) == 1
+    const lua2 = compile("const x = 7 % (-3);");
+    expect(lua2).toContain("x = -2");
+  });
+
   describe("non-finite results are not folded", () => {
     it.each([
       { label: "division by zero (Infinity)", source: "const x = 1 / 0;", expected: "1 / 0" },
