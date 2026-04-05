@@ -212,6 +212,90 @@ describe("debug-strip", () => {
     });
   });
 
+  describe("console namespace (DBUG-01)", () => {
+    it("strips console.log in statement position", () => {
+      const lua = compile(
+        [
+          "declare namespace console { function log(msg: string): void; }",
+          'console.log("debug msg");',
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+
+    it("strips console.warn in statement position", () => {
+      const lua = compile(
+        [
+          "declare namespace console { function warn(msg: string): void; }",
+          'console.warn("something off");',
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+
+    it("strips console.error in statement position", () => {
+      const lua = compile(
+        [
+          "declare namespace console { function error(msg: string): void; }",
+          'console.error("fatal");',
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+
+    it("still strips debug.* calls (regression check)", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function traceback(): string; }",
+          "debug.traceback();",
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+
+    it("custom namespaces config with only ['debug'] excludes console (opt-out)", () => {
+      const lua = compile(
+        [
+          "declare namespace console { function log(msg: string): void; }",
+          "declare namespace debug { function traceback(): string; }",
+          'console.log("kept");',
+          "debug.traceback();",
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["debug"] } } } },
+      );
+      // console.log is kept because namespaces is overridden to ["debug"] only
+      expect(normalizeLua(lua)).toBe('console.log("kept")\nx = 1');
+    });
+
+    it("strips console.assert via namespace root match", () => {
+      const lua = compile(
+        [
+          "declare namespace console { function assert(cond: boolean): void; }",
+          "declare const cond: boolean;",
+          "console.assert(cond);",
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+
+    // Note: console:method() colon-call syntax is NOT supported by isStrippedCall because
+    // TSTL emits MethodCallExpression for colon-calls, and isStrippedCall only handles
+    // CallExpression. TypeScript `console.log()` dot-access compiles to a regular CallExpression
+    // with TableIndexExpression callee, which IS handled. Pure Lua colon-call syntax
+    // is out of scope per D-08 (targets dot-access calls only).
+  });
+
   describe("preserves non-identifier callees", () => {
     it("keeps IIFE (callee is FunctionExpression, not in any strip list)", () => {
       const lua = compile("(function() { const a = 1; })(); const x = 1;", enabled);
