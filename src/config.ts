@@ -42,6 +42,7 @@ export interface RulesConfig {
   "loop-rebase": boolean;
   inline: boolean | InlineConfig;
   "dead-local": boolean;
+  "merge-locals": boolean;
   localizer: boolean | LocalizerConfig;
   "debug-strip": boolean | DebugStripConfig;
 }
@@ -75,6 +76,7 @@ const DEFAULT_RULES: RulesConfig = {
   "loop-rebase": true,
   inline: true,
   "dead-local": true,
+  "merge-locals": true,
   localizer: true,
   "debug-strip": false,
 };

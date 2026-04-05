@@ -60,7 +60,8 @@ describe("dead-local", () => {
       }
     `);
     // x is captured by the closure — must not be removed
-    expect(lua).toContain("x = 1");
+    // (merge-locals may merge x and fn into one statement, but x must still be declared)
+    expect(lua).toMatch(/local x[,\s]/);
   });
 
   it("removes unused local function declaration (post-inline residue)", () => {

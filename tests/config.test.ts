@@ -60,6 +60,7 @@ const EXPECTED_RULE_KEYS = [
   "loop-rebase",
   "inline",
   "dead-local",
+  "merge-locals",
   "localizer",
   "debug-strip",
 ];
@@ -91,6 +92,7 @@ describe("property-based", () => {
       "loop-rebase": fc.boolean(),
       inline: fc.boolean(),
       "dead-local": fc.boolean(),
+      "merge-locals": fc.boolean(),
       localizer: fc.boolean(),
       "debug-strip": fc.boolean(),
     });
