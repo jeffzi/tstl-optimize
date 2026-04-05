@@ -1,32 +1,9 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { isLuaRhsPure } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
-
-/**
- * Lua-side purity predicate for RHS safety gate (D-03).
- *
- * Only considers an expression pure if it cannot have side effects.
- * CallExpression, MethodCallExpression, BinaryExpression, etc. are impure.
- * Note: the hasSideEffects function in src/ast/ts-ast.ts takes ts.Expression and cannot
- * be used here — this rule runs post-transpile on tstl.Expression nodes only.
- */
-function isLuaRhsPure(expr: tstl.Expression): boolean {
-  if (tstl.isNumericLiteral(expr)) return true;
-  if (tstl.isStringLiteral(expr)) return true;
-  if (tstl.isBooleanLiteral(expr)) return true;
-  if (tstl.isNilLiteral(expr)) return true;
-  if (tstl.isIdentifier(expr)) return true;
-  if (tstl.isFunctionExpression(expr)) return true;
-  if (tstl.isTableExpression(expr)) {
-    return expr.fields.every(
-      (f) => isLuaRhsPure(f.value) && (f.key === undefined || isLuaRhsPure(f.key)),
-    );
-  }
-  // CallExpression, MethodCallExpression, BinaryExpression, etc. — impure
-  return false;
-}
 
 /**
  * Performs a two-pass dead-local elimination on a function body's statement list.
