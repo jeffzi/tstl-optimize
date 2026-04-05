@@ -58,7 +58,7 @@ export interface PluginConfig {
 const DEFAULT_DEBUG_STRIP: DebugStripConfig = {
   enabled: true,
   functions: ["print", "assert"],
-  namespaces: ["debug"],
+  namespaces: ["debug", "console"],
 };
 
 const DEFAULT_LOCALIZER: LocalizerConfig = {
