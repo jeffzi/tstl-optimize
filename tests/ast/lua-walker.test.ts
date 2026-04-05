@@ -15,6 +15,13 @@ function str(value: string): tstl.StringLiteral {
   return tstl.createStringLiteral(value);
 }
 
+function assertNode<T extends tstl.Node>(
+  node: tstl.Node,
+  guard: (n: tstl.Node) => n is T,
+): asserts node is T {
+  if (!guard(node)) throw new Error(`Unexpected node kind: ${node.kind}`);
+}
+
 function collectExprs(statements: tstl.Statement[], shallow?: boolean): tstl.Expression[] {
   const visited: tstl.Expression[] = [];
   walkStatements(statements, {
@@ -142,7 +149,8 @@ describe("walkStatements", () => {
           }
         },
       });
-      const decl = stmts[0] as tstl.VariableDeclarationStatement;
+      const decl = stmts[0];
+      assertNode(decl, tstl.isVariableDeclarationStatement);
       const val = decl.right?.[0];
       expect(val && tstl.isNumericLiteral(val) && val.value).toBe(99);
     });
@@ -156,7 +164,8 @@ describe("walkStatements", () => {
           }
         },
       });
-      const ret = stmts[0] as tstl.ReturnStatement;
+      const ret = stmts[0];
+      assertNode(ret, tstl.isReturnStatement);
       expect(tstl.isNumericLiteral(ret.expressions[1]) && ret.expressions[1].value).toBe(20);
     });
 
@@ -169,7 +178,8 @@ describe("walkStatements", () => {
           }
         },
       });
-      const es = stmts[0] as tstl.ExpressionStatement;
+      const es = stmts[0];
+      assertNode(es, tstl.isExpressionStatement);
       expect(tstl.isIdentifier(es.expression) && es.expression.text).toBe("new");
     });
 
@@ -289,7 +299,8 @@ describe("walkStatements", () => {
           if (tstl.isNumericLiteral(expr)) replace(num(42));
         },
       });
-      const left = stmt.left[0] as tstl.TableIndexExpression;
+      const left = stmt.left[0];
+      assertNode(left, tstl.isTableIndexExpression);
       expect(tstl.isIdentifier(left.table) && left.table.text).toBe("buf");
       expect(tstl.isStringLiteral(left.index) && left.index.value).toBe("pos");
       expect(tstl.isNumericLiteral(stmt.right[0]) && stmt.right[0].value).toBe(42);
@@ -370,7 +381,8 @@ describe("walkStatements", () => {
           if (tstl.isIdentifier(expr) && expr.text === "t") replace(id("myTable"));
         },
       });
-      const call = forIn.expressions[0] as tstl.CallExpression;
+      const call = forIn.expressions[0];
+      assertNode(call, tstl.isCallExpression);
       expect(tstl.isIdentifier(call.params[0]) && call.params[0].text).toBe("myTable");
     });
   });

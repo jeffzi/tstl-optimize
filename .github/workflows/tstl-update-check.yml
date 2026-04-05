@@ -1,0 +1,50 @@
+name: Check for new TSTL release
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Every Monday at 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get pinned and latest TSTL tags
+        id: tags
+        run: |
+          pinned=$(grep -oP 'const TSTL_TAG = "\K[^"]+' scripts/conformance.ts)
+          latest=$(git ls-remote --tags --refs --sort=-v:refname \
+            https://github.com/TypeScriptToLua/TypeScriptToLua.git \
+            | head -1 | sed 's|.*refs/tags/||')
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update issue if outdated
+        if: steps.tags.outputs.pinned != steps.tags.outputs.latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PINNED: ${{ steps.tags.outputs.pinned }}
+          LATEST: ${{ steps.tags.outputs.latest }}
+        run: |
+          title="chore: update TSTL conformance to $LATEST"
+          existing=$(gh issue list --label "tstl-update" --state open --json number --jq '.[0].number // empty')
+
+          body="$(cat <<EOF
+          The pinned TSTL tag in \`scripts/conformance.ts\` is **$PINNED**, but the latest release is **$LATEST**.
+
+          ### Steps
+          1. Update \`TSTL_TAG\` in \`scripts/conformance.ts\` to \`$LATEST\`
+          2. Run \`npm run test:conformance\` — if the patch fails, regenerate \`scripts/conformance.patch\`
+          3. Verify all conformance tests pass
+          EOF
+          )"
+
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            gh label create "tstl-update" --description "New TSTL release needs conformance update" --color "1d76db" 2>/dev/null || true
+            gh issue create --title "$title" --body "$body" --label "tstl-update"
+          fi

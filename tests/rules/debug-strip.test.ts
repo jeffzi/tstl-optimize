@@ -5,19 +5,15 @@ const enabled = { pluginOptions: { rules: { "debug-strip": true } } };
 
 describe("debug-strip", () => {
   describe("functions (bare function stripping)", () => {
-    it("strips print() in statement position", () => {
-      const lua = compile('print("hello"); const x = 1;', enabled);
-      expect(normalizeLua(lua)).toBe("x = 1");
-    });
+    it("strips default-listed function calls in statement position", () => {
+      const lua1 = compile('print("hello"); const x = 1;', enabled);
+      expect(normalizeLua(lua1)).toBe("x = 1");
 
-    it("strips assert() in statement position", () => {
-      const lua = compile("declare const cond: boolean; assert(cond); const x = 1;", enabled);
-      expect(normalizeLua(lua)).toBe("x = 1");
-    });
+      const lua2 = compile("declare const cond: boolean; assert(cond); const x = 1;", enabled);
+      expect(normalizeLua(lua2)).toBe("x = 1");
 
-    it("strips call with multiple arguments", () => {
-      const lua = compile('print("x", "y", "z"); const x = 1;', enabled);
-      expect(normalizeLua(lua)).toBe("x = 1");
+      const lua3 = compile('print("x", "y", "z"); const x = 1;', enabled);
+      expect(normalizeLua(lua3)).toBe("x = 1");
     });
 
     it("does not strip unlisted functions", () => {
@@ -73,27 +69,23 @@ describe("debug-strip", () => {
   });
 
   describe("preserves (return value used — must NOT strip)", () => {
-    it("keeps print() used as variable initializer", () => {
-      const lua = compile(
+    it("keeps calls when return value is used", () => {
+      const asInit = compile(
         'declare function print(msg: string): string; const x = print("x");',
         enabled,
       );
-      expect(normalizeLua(lua)).toBe('x = print("x")');
-    });
+      expect(normalizeLua(asInit)).toBe('x = print("x")');
 
-    it("keeps assert() used as return value", () => {
-      const lua = compile(
+      const asReturn = compile(
         [
           "declare function assert<T>(v: T): T;",
           "function check(v: number): number { return assert(v); }",
         ].join("\n"),
         enabled,
       );
-      expect(normalizeLua(lua)).toBe("function check(v)\nreturn assert(v)\nend");
-    });
+      expect(normalizeLua(asReturn)).toBe("function check(v)\nreturn assert(v)\nend");
 
-    it("keeps print() used as argument", () => {
-      const lua = compile(
+      const asArg = compile(
         [
           "declare function print(msg: string): string;",
           "declare function foo(s: string): void;",
@@ -101,7 +93,7 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalizeLua(lua)).toBe('foo(print("x"))');
+      expect(normalizeLua(asArg)).toBe('foo(print("x"))');
     });
   });
 
@@ -127,18 +119,16 @@ describe("debug-strip", () => {
       expect(normalizeLua(lua)).toBe("debug.traceback()");
     });
 
-    it('"debug-strip": false disables the rule', () => {
-      const lua = compile('print("hello");', {
+    it("disabling the rule preserves all calls", () => {
+      const viaFalse = compile('print("hello");', {
         pluginOptions: { rules: { "debug-strip": false } },
       });
-      expect(normalizeLua(lua)).toBe('print("hello")');
-    });
+      expect(normalizeLua(viaFalse)).toBe('print("hello")');
 
-    it('"debug-strip": { enabled: false } disables the rule', () => {
-      const lua = compile('print("hello");', {
+      const viaEnabled = compile('print("hello");', {
         pluginOptions: { rules: { "debug-strip": { enabled: false } } },
       });
-      expect(normalizeLua(lua)).toBe('print("hello")');
+      expect(normalizeLua(viaEnabled)).toBe('print("hello")');
     });
   });
 

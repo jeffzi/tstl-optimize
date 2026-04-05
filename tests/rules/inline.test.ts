@@ -37,7 +37,8 @@ describe("inline", () => {
         const x = add(1, 2);
       `),
       );
-      expect(lua).toContain("1 + 2");
+      // Constant folding reduces 1 + 2 to 3
+      expect(lua).toContain("(3)");
     });
 
     it("inlines zero-param function", () => {
@@ -132,7 +133,6 @@ describe("inline", () => {
         function compute(x: number): number { const y = x + 1; return y * 2; }
         function caller() { return compute(10); }
       `);
-      // No do...end block should be present at return sites
       expect(lua).not.toMatch(/\bdo\b/);
       expect(lua).toMatch(/10 \+ 1|____inline_arg_0 \+ 1/);
       expect(lua).toContain("return y * 2");
@@ -158,8 +158,16 @@ describe("inline", () => {
   });
 
   describe("switch with break in body", () => {
+    function expectInlinedWithoutWarnings(source: string): void {
+      const { lua, diagnostics } = compileWithDiagnostics(source);
+      expect(diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Warning)).toHaveLength(
+        0,
+      );
+      expect(lua).toContain("do");
+    }
+
     it("inlines multi-statement body with switch containing break", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      expectInlinedWithoutWarnings(`
         /** @inline */
         function classify(x: number): void {
           let label: string;
@@ -173,16 +181,10 @@ describe("inline", () => {
         declare const n: number;
         classify(n);
       `);
-
-      const pluginWarnings = diagnostics.filter(
-        (d) => d.category === ts.DiagnosticCategory.Warning,
-      );
-      expect(pluginWarnings).toHaveLength(0);
-      expect(lua).toContain("do");
     });
 
     it("inlines statementsWithReturn body with switch containing break", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      expectInlinedWithoutWarnings(`
         /** @inline */
         function compute(x: number): string {
           let result: string;
@@ -195,12 +197,6 @@ describe("inline", () => {
         declare const n: number;
         const label = compute(n);
       `);
-
-      const pluginWarnings = diagnostics.filter(
-        (d) => d.category === ts.DiagnosticCategory.Warning,
-      );
-      expect(pluginWarnings).toHaveLength(0);
-      expect(lua).toContain("do");
     });
   });
 
@@ -215,7 +211,7 @@ describe("inline", () => {
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
         `);
-      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("@inline ignored");
     });
 
@@ -229,7 +225,7 @@ describe("inline", () => {
           ${decl}
           f();
         `);
-      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("not supported");
     });
 
@@ -239,6 +235,7 @@ describe("inline", () => {
         function f(x: number) { const y = x + 1; return y; }
         const r = f(1) + 1;
       `);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("cannot be inlined at expression position");
     });
 
@@ -249,6 +246,7 @@ describe("inline", () => {
         declare function foo(): number;
         f(foo());
       `);
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("side effects");
     });
   });
@@ -265,7 +263,8 @@ describe("inline", () => {
           const r = double(10);
         `,
       });
-      expect(lua).toContain("10 * 2");
+      // Constant folding reduces 10 * 2 to 20
+      expect(lua).toContain("(20)");
     });
 
     it("rejects functions with free variables", () => {
@@ -347,7 +346,56 @@ describe("inline", () => {
       `,
         { pluginOptions: { strict: true } },
       );
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+    });
+  });
+
+  describe("export block detection", () => {
+    it.each([
+      {
+        name: "function declaration via export { name }",
+        decl: "function double(x: number) { return x * 2; }",
+        exportStmt: "export { double };",
+      },
+      {
+        name: "arrow function via export { name }",
+        decl: "const double = (x: number) => x * 2;",
+        exportStmt: "export { double };",
+      },
+      {
+        name: "function declaration via export { name as alias }",
+        decl: "function double(x: number) { return x * 2; }",
+        exportStmt: "export { double as myDouble };",
+      },
+    ])("preserves and inlines $name", ({ decl, exportStmt }) => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        ${decl}
+        declare const a: number;
+        const r = double(a);
+        ${exportStmt}
+      `);
+
+      expect(diagnostics).not.toContainEqual(
+        expect.objectContaining({ category: ts.DiagnosticCategory.Warning }),
+      );
+      expect(lua).toContain("function double");
+      expect(lua).toContain("a * 2");
+    });
+
+    it("preserves definition when there is no local call site", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function double(x: number) { return x * 2; }
+        export { double };
+      `);
+
+      expect(diagnostics).not.toContainEqual(
+        expect.objectContaining({ category: ts.DiagnosticCategory.Warning }),
+      );
+      // Without the definition, ____exports.double would reference an undefined local.
+      expect(lua).toContain("function double");
     });
   });
 });

@@ -1,6 +1,8 @@
+import fc from "fast-check";
 import ts from "typescript";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../src/config";
+import { arbSafeString } from "../arbitraries";
 import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
 
 function ccOpts(constants: Record<string, { env: string; default: boolean | number | string }>) {
@@ -10,10 +12,6 @@ function ccOpts(constants: Record<string, { env: string; default: boolean | numb
 }
 
 describe("resolveConditionalCompilationConfig", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("returns false for disabled or missing config", () => {
     expect(resolveConditionalCompilationConfig(undefined)).toBe(false);
     expect(resolveConditionalCompilationConfig(false)).toBe(false);
@@ -58,72 +56,75 @@ describe("resolveConditionalCompilationConfig", () => {
 
 describe("conditional-compilation", () => {
   describe("if-statement folding", () => {
-    it("folds basic if/else branches", () => {
+    it.each([
+      { name: "truthy", value: true, expected: "print(1)" },
+      { name: "falsy", value: false, expected: "print(2)" },
+    ])("folds if/else to $name branch", ({ value, expected }) => {
       const src = "declare const DEBUG: boolean; if (DEBUG) { print(1); } else { print(2); }";
 
-      expect(normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: true } })))).toBe(
-        "print(1)",
-      );
-      expect(normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: false } })))).toBe(
-        "print(2)",
-      );
+      const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: value } })));
+
+      expect(lua).toBe(expected);
     });
 
     it("strips if-statement without else when falsy", () => {
       const src = "declare const DEBUG: boolean; if (DEBUG) { print(1); } print(2);";
-      expect(normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: false } })))).toBe(
-        "print(2)",
-      );
+
+      const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: false } })));
+
+      expect(lua).toBe("print(2)");
     });
 
-    it("handles else-if chains", () => {
+    it("folds to matching else-if branch", () => {
       const src =
         'declare const PLATFORM: string; if (PLATFORM === "web") { print(1); } else if (PLATFORM === "native") { print(2); } else { print(3); }';
-      expect(
-        normalizeLua(compile(src, ccOpts({ PLATFORM: { env: "X", default: "native" } }))),
-      ).toBe("print(2)");
+
+      const lua = normalizeLua(compile(src, ccOpts({ PLATFORM: { env: "X", default: "native" } })));
+
+      expect(lua).toBe("print(2)");
     });
   });
 
   describe("ternary folding", () => {
-    it("folds ternary expressions", () => {
+    it.each([
+      { name: "truthy", value: true, expected: "x = 1" },
+      { name: "falsy", value: false, expected: "x = 2" },
+    ])("folds ternary to $name branch", ({ value, expected }) => {
       const src = "declare const DEBUG: boolean; const x = DEBUG ? 1 : 2;";
-      expect(normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: true } })))).toBe(
-        "x = 1",
-      );
-      expect(normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: false } })))).toBe(
-        "x = 2",
-      );
+
+      const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: value } })));
+
+      expect(lua).toBe(expected);
     });
   });
 
   describe("expression evaluation", () => {
-    it("evaluates logical operators and comparisons", () => {
-      const opts = ccOpts({
-        A: { env: "X", default: true },
-        B: { env: "X", default: false },
-        VAL: { env: "X", default: 42 },
-      });
-
-      expect(
-        normalizeLua(
-          compile("declare const A: boolean, B: boolean; if (A && !B) { print(1); }", opts),
-        ),
-      ).toBe("print(1)");
-      expect(
-        normalizeLua(
-          compile("declare const A: boolean, B: boolean; if (A || B) { print(1); }", opts),
-        ),
-      ).toBe("print(1)");
-      expect(
-        normalizeLua(compile("declare const VAL: number; if (VAL === 42) { print(1); }", opts)),
-      ).toBe("print(1)");
+    const opts = ccOpts({
+      A: { env: "X", default: true },
+      B: { env: "X", default: false },
+      VAL: { env: "X", default: 42 },
     });
 
-    it("handles literal values in conditions", () => {
-      const opts = ccOpts({ DEBUG: { env: "X", default: true } });
-      expect(normalizeLua(compile("if (true) { print(1); }", opts))).toBe("print(1)");
-      expect(normalizeLua(compile("if (false) { print(1); }", opts))).toBe("");
+    it.each([
+      {
+        name: "logical AND with negation",
+        src: "declare const A: boolean, B: boolean; if (A && !B) { print(1); }",
+        expected: "print(1)",
+      },
+      {
+        name: "logical OR",
+        src: "declare const A: boolean, B: boolean; if (A || B) { print(1); }",
+        expected: "print(1)",
+      },
+      {
+        name: "numeric equality",
+        src: "declare const VAL: number; if (VAL === 42) { print(1); }",
+        expected: "print(1)",
+      },
+      { name: "literal true", src: "if (true) { print(1); }", expected: "print(1)" },
+      { name: "literal false", src: "if (false) { print(1); }", expected: "" },
+    ])("folds $name condition", ({ src, expected }) => {
+      expect(normalizeLua(compile(src, opts))).toBe(expected);
     });
   });
 
@@ -138,44 +139,36 @@ describe("conditional-compilation", () => {
       }
     `;
 
-    it("folds to matching case", () => {
-      expect(normalizeLua(compile(src, ccOpts({ P: { env: "X", default: "a" } })))).toBe(
-        "print(1)",
-      );
-      expect(normalizeLua(compile(src, ccOpts({ P: { env: "X", default: "b" } })))).toBe(
-        "print(2)",
-      );
-    });
+    it.each([
+      { name: "direct match", value: "a", expected: "print(1)" },
+      { name: "fall-through match", value: "b", expected: "print(2)" },
+      { name: "default", value: "z", expected: "print(3)" },
+    ])("folds to $name case", ({ value, expected }) => {
+      const lua = normalizeLua(compile(src, ccOpts({ P: { env: "X", default: value } })));
 
-    it("folds to default case", () => {
-      expect(normalizeLua(compile(src, ccOpts({ P: { env: "X", default: "z" } })))).toBe(
-        "print(3)",
-      );
+      expect(lua).toBe(expected);
     });
   });
 
   describe("diagnostics", () => {
+    const partialSrc =
+      "declare const DEBUG: boolean, unknown: boolean; if (DEBUG && unknown) { print(1); }";
+
     it("warns on partially resolvable conditions", () => {
       const { diagnostics } = compileWithDiagnostics(
-        "declare const DEBUG: boolean, unknown: boolean; if (DEBUG && unknown) { print(1); }",
+        partialSrc,
         ccOpts({ DEBUG: { env: "X", default: true } }),
       );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("could not be fully resolved");
     });
 
-    it("respects strict mode for partial resolutions", () => {
-      const src =
-        "declare const DEBUG: boolean, unknown: boolean; if (DEBUG && unknown) { print(1); }";
-      const opts = {
-        pluginOptions: {
-          strict: true,
-          rules: {
-            "conditional-compilation": { constants: { DEBUG: { env: "X", default: true } } },
-          },
-        },
-      };
-      const { diagnostics } = compileWithDiagnostics(src, opts);
+    it("promotes warning to error in strict mode", () => {
+      const { pluginOptions } = ccOpts({ DEBUG: { env: "X", default: true } });
+      const { diagnostics } = compileWithDiagnostics(partialSrc, {
+        pluginOptions: { ...pluginOptions, strict: true },
+      });
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
     });
   });
@@ -189,19 +182,100 @@ describe("conditional-compilation", () => {
     });
 
     it("interacts with other rules correctly", () => {
-      const opts = {
+      const lua = compile("declare const DEBUG: boolean; if (DEBUG) { print(Math.floor(1.5)); }", {
         pluginOptions: {
           rules: {
             "conditional-compilation": { constants: { DEBUG: { env: "X", default: true } } },
             "math-intrinsics": true,
           },
         },
-      };
-      const lua = compile(
-        "declare const DEBUG: boolean; if (DEBUG) { print(Math.floor(1.5)); }",
-        opts,
-      );
-      expect(normalizeLua(lua)).toBe("print(1.5 - 1.5 % 1)");
+      });
+      // math-intrinsics converts Math.floor(1.5) to 1.5 - 1.5 % 1,
+      // then constant-folding reduces it to 1
+      expect(normalizeLua(lua)).toBe("print(1)");
     });
   });
+});
+
+describe("property-based", () => {
+  const NUM_RUNS = 50;
+  const TIMEOUT = 15_000;
+
+  it(
+    "boolean constant selects correct branch",
+    () => {
+      fc.assert(
+        fc.property(fc.boolean(), (value) => {
+          const src = `
+            declare const MY_FLAG: boolean;
+            if (MY_FLAG) { const kept = "yes"; } else { const removed = "no"; }
+          `;
+
+          const lua = compile(src, ccOpts({ MY_FLAG: { env: "X", default: value } }));
+
+          if (value) {
+            expect(lua).toContain('"yes"');
+            expect(lua).not.toContain('"no"');
+          } else {
+            expect(lua).toContain('"no"');
+            expect(lua).not.toContain('"yes"');
+          }
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "negation inverts branch selection",
+    () => {
+      fc.assert(
+        fc.property(fc.boolean(), (value) => {
+          const src = `
+            declare const MY_FLAG: boolean;
+            if (!MY_FLAG) { const kept = "yes"; } else { const removed = "no"; }
+          `;
+
+          const lua = compile(src, ccOpts({ MY_FLAG: { env: "X", default: value } }));
+
+          if (value) {
+            expect(lua).toContain('"no"');
+            expect(lua).not.toContain('"yes"');
+          } else {
+            expect(lua).toContain('"yes"');
+            expect(lua).not.toContain('"no"');
+          }
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "string equality selects correct branch",
+    () => {
+      fc.assert(
+        fc.property(arbSafeString, arbSafeString, (constValue, compareValue) => {
+          const src = `
+            declare const PLATFORM: string;
+            if (PLATFORM === "${compareValue}") { const matched = "yes"; } else { const unmatched = "no"; }
+          `;
+
+          const lua = compile(src, ccOpts({ PLATFORM: { env: "X", default: constValue } }));
+
+          if (constValue === compareValue) {
+            expect(lua).toContain('"yes"');
+            expect(lua).not.toContain('"no"');
+          } else {
+            expect(lua).toContain('"no"');
+            expect(lua).not.toContain('"yes"');
+          }
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    },
+    TIMEOUT,
+  );
 });

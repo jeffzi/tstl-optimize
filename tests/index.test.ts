@@ -50,47 +50,39 @@ describe("parseConfig target", () => {
 });
 
 describe("isRuleEnabled", () => {
-  it("returns true for boolean true", () => {
-    const config = parseConfig({ rules: { "math-intrinsics": true } });
-    expect(isRuleEnabled(config.rules, "math-intrinsics")).toBe(true);
+  it("returns the boolean value directly for boolean configs", () => {
+    const enabled = parseConfig({ rules: { "math-intrinsics": true } });
+    expect(isRuleEnabled(enabled.rules, "math-intrinsics")).toBe(true);
+
+    const disabled = parseConfig({ rules: { "math-intrinsics": false } });
+    expect(isRuleEnabled(disabled.rules, "math-intrinsics")).toBe(false);
   });
 
-  it("returns false for boolean false", () => {
-    const config = parseConfig({ rules: { "math-intrinsics": false } });
-    expect(isRuleEnabled(config.rules, "math-intrinsics")).toBe(false);
-  });
+  it("checks enabled field for object configs, defaulting to true", () => {
+    const withTrue = parseConfig({ rules: { localizer: { enabled: true, threshold: 5 } } });
+    expect(isRuleEnabled(withTrue.rules, "localizer")).toBe(true);
 
-  it("returns true for object config with enabled: true", () => {
-    const config = parseConfig({ rules: { localizer: { enabled: true, threshold: 5 } } });
-    expect(isRuleEnabled(config.rules, "localizer")).toBe(true);
-  });
+    const withFalse = parseConfig({ rules: { localizer: { enabled: false } } });
+    expect(isRuleEnabled(withFalse.rules, "localizer")).toBe(false);
 
-  it("returns false for object config with enabled: false", () => {
-    const config = parseConfig({ rules: { localizer: { enabled: false } } });
-    expect(isRuleEnabled(config.rules, "localizer")).toBe(false);
-  });
-
-  it("returns true for object config without enabled field", () => {
-    const config = parseConfig({ rules: { localizer: { threshold: 3 } } });
-    expect(isRuleEnabled(config.rules, "localizer")).toBe(true);
+    const withoutField = parseConfig({ rules: { localizer: { threshold: 3 } } });
+    expect(isRuleEnabled(withoutField.rules, "localizer")).toBe(true);
   });
 });
 
 describe("parseConfig rules edge cases", () => {
-  it("ignores non-boolean non-object localizer value", () => {
-    const config = parseConfig({ rules: { localizer: "invalid" } });
-    // Invalid value ignored — default (true) preserved
-    expect(config.rules.localizer).toBe(true);
-  });
+  it("ignores non-boolean non-object values, falling back to defaults", () => {
+    const loc = parseConfig({ rules: { localizer: "invalid" } });
+    expect(loc.rules.localizer).toBe(true);
 
-  it("ignores non-boolean non-object debug-strip value", () => {
-    const config = parseConfig({ rules: { "debug-strip": "invalid" } });
-    expect(config.rules["debug-strip"]).toBe(false);
-  });
+    const ds = parseConfig({ rules: { "debug-strip": "invalid" } });
+    expect(ds.rules["debug-strip"]).toBe(false);
 
-  it("ignores non-boolean value for simple boolean rules", () => {
-    const config = parseConfig({ rules: { "math-intrinsics": "invalid" } });
-    expect(config.rules["math-intrinsics"]).toBe(true);
+    const mi = parseConfig({ rules: { "math-intrinsics": "invalid" } });
+    expect(mi.rules["math-intrinsics"]).toBe(true);
+
+    const cc = parseConfig({ rules: { "conditional-compilation": "invalid" } });
+    expect(cc.rules["conditional-compilation"]).toBe(false);
   });
 
   it("ignores rules when not an object", () => {
@@ -99,14 +91,12 @@ describe("parseConfig rules edge cases", () => {
     expect(config.rules.localizer).toBe(true);
   });
 
-  it("accepts localizer object config", () => {
-    const config = parseConfig({ rules: { localizer: { threshold: 5 } } });
-    expect(config.rules.localizer).toStrictEqual({ threshold: 5 });
-  });
+  it("accepts object config for structured rules", () => {
+    const loc = parseConfig({ rules: { localizer: { threshold: 5 } } });
+    expect(loc.rules.localizer).toStrictEqual({ threshold: 5 });
 
-  it("accepts debug-strip object config", () => {
-    const config = parseConfig({ rules: { "debug-strip": { functions: ["myFn"] } } });
-    expect(config.rules["debug-strip"]).toStrictEqual({ functions: ["myFn"] });
+    const ds = parseConfig({ rules: { "debug-strip": { functions: ["myFn"] } } });
+    expect(ds.rules["debug-strip"]).toStrictEqual({ functions: ["myFn"] });
   });
 
   it("defaults conditional-compilation to false", () => {
@@ -123,11 +113,6 @@ describe("parseConfig rules edge cases", () => {
     const obj = { constants: { DEBUG: { env: "DEBUG", default: false } } };
     const config = parseConfig({ rules: { "conditional-compilation": obj } });
     expect(config.rules["conditional-compilation"]).toStrictEqual(obj);
-  });
-
-  it("ignores non-boolean non-object conditional-compilation value", () => {
-    const config = parseConfig({ rules: { "conditional-compilation": "invalid" } });
-    expect(config.rules["conditional-compilation"]).toBe(false);
   });
 });
 

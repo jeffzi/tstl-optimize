@@ -1,10 +1,19 @@
+import fc from "fast-check";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { deepCloneExpression, deepCloneStatement } from "../../src/ast/deep-clone";
+import { arbExpression } from "../arbitraries";
 
 function id(text: string, symbolId?: tstl.SymbolId, originalName?: string): tstl.Identifier {
   return tstl.createIdentifier(text, undefined, symbolId, originalName);
+}
+
+function assertNode<T extends tstl.Node>(
+  node: tstl.Node,
+  guard: (n: tstl.Node) => n is T,
+): asserts node is T {
+  if (!guard(node)) throw new Error(`Unexpected node kind: ${node.kind}`);
 }
 
 describe("deepCloneExpression", () => {
@@ -13,7 +22,8 @@ describe("deepCloneExpression", () => {
     const right = id("b", 2 as tstl.SymbolId);
     const bin = tstl.createBinaryExpression(left, right, tstl.SyntaxKind.AdditionOperator);
 
-    const cloned = deepCloneExpression(bin) as tstl.BinaryExpression;
+    const cloned = deepCloneExpression(bin);
+    assertNode(cloned, tstl.isBinaryExpression);
 
     expect(cloned).not.toBe(bin);
     expect(cloned.left).not.toBe(bin.left);
@@ -25,7 +35,8 @@ describe("deepCloneExpression", () => {
     const callExpr = tstl.createCallExpression(id("foo"), [id("x")]);
     const bin = tstl.createBinaryExpression(callExpr, id("y"), tstl.SyntaxKind.AdditionOperator);
 
-    const cloned = deepCloneExpression(bin) as tstl.BinaryExpression;
+    const cloned = deepCloneExpression(bin);
+    assertNode(cloned, tstl.isBinaryExpression);
 
     expect(cloned).not.toBe(bin);
     expect(cloned.left).not.toBe(callExpr);
@@ -44,14 +55,16 @@ describe("deepCloneExpression", () => {
 
   it("clones CallExpression and TableExpression fields independently", () => {
     const call = tstl.createCallExpression(id("fn"), [id("a"), id("b")]);
-    const clonedCall = deepCloneExpression(call) as tstl.CallExpression;
+    const clonedCall = deepCloneExpression(call);
+    assertNode(clonedCall, tstl.isCallExpression);
     expect(clonedCall).not.toBe(call);
     expect(clonedCall.params[0]).not.toBe(call.params[0]);
     expect(clonedCall).toStrictEqual(call);
 
     const field = tstl.createTableFieldExpression(id("v"), id("k"));
     const tbl = tstl.createTableExpression([field]);
-    const clonedTbl = deepCloneExpression(tbl) as tstl.TableExpression;
+    const clonedTbl = deepCloneExpression(tbl);
+    assertNode(clonedTbl, tstl.isTableExpression);
     expect(clonedTbl).not.toBe(tbl);
     expect(clonedTbl.fields[0]).not.toBe(field);
     expect(clonedTbl.fields[0].key).not.toBe(field.key);
@@ -71,7 +84,8 @@ describe("deepCloneExpression", () => {
     const body = tstl.createBlock([bodyStmt]);
     const funcExpr = tstl.createFunctionExpression(body, [id("x", 10 as tstl.SymbolId)]);
 
-    const cloned = deepCloneExpression(funcExpr) as tstl.FunctionExpression;
+    const cloned = deepCloneExpression(funcExpr);
+    assertNode(cloned, tstl.isFunctionExpression);
 
     expect(cloned).not.toBe(funcExpr);
     expect(cloned.body).not.toBe(funcExpr.body);
@@ -81,9 +95,10 @@ describe("deepCloneExpression", () => {
 
   it("handles undefined FunctionExpression body without crashing", () => {
     const funcExpr = tstl.createFunctionExpression(tstl.createBlock([]));
-    (funcExpr as unknown as { body: undefined }).body = undefined;
+    Object.assign(funcExpr, { body: undefined });
 
-    const cloned = deepCloneExpression(funcExpr) as tstl.FunctionExpression;
+    const cloned = deepCloneExpression(funcExpr);
+    assertNode(cloned, tstl.isFunctionExpression);
 
     expect(cloned.body).toBeDefined();
     expect(cloned.body.statements).toHaveLength(0);
@@ -135,13 +150,15 @@ describe("deepCloneStatement", () => {
 
   it("clones VariableDeclaration and Assignment statements", () => {
     const varDecl = tstl.createVariableDeclarationStatement([id("x")], [id("y")]);
-    const clonedVar = deepCloneStatement(varDecl) as tstl.VariableDeclarationStatement;
+    const clonedVar = deepCloneStatement(varDecl);
+    assertNode(clonedVar, tstl.isVariableDeclarationStatement);
     expect(clonedVar.left[0]).not.toBe(varDecl.left[0]);
     expect(clonedVar.right?.[0]).not.toBe(varDecl.right?.[0]);
     expect(clonedVar).toStrictEqual(varDecl);
 
     const assign = tstl.createAssignmentStatement([id("x")], [id("y")]);
-    const clonedAssign = deepCloneStatement(assign) as tstl.AssignmentStatement;
+    const clonedAssign = deepCloneStatement(assign);
+    assertNode(clonedAssign, tstl.isAssignmentStatement);
     expect(clonedAssign.left[0]).not.toBe(assign.left[0]);
     expect(clonedAssign.right[0]).not.toBe(assign.right[0]);
     expect(clonedAssign).toStrictEqual(assign);
@@ -149,13 +166,15 @@ describe("deepCloneStatement", () => {
 
   it("clones For and ForIn statements", () => {
     const forStmt = tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b"));
-    const clonedFor = deepCloneStatement(forStmt) as tstl.ForStatement;
+    const clonedFor = deepCloneStatement(forStmt);
+    assertNode(clonedFor, tstl.isForStatement);
     expect(clonedFor).not.toBe(forStmt);
     expect(clonedFor.controlVariable).not.toBe(forStmt.controlVariable);
     expect(clonedFor).toStrictEqual(forStmt);
 
     const forIn = tstl.createForInStatement(tstl.createBlock([]), [id("k")], [id("v")]);
-    const clonedForIn = deepCloneStatement(forIn) as tstl.ForInStatement;
+    const clonedForIn = deepCloneStatement(forIn);
+    assertNode(clonedForIn, tstl.isForInStatement);
     expect(clonedForIn).not.toBe(forIn);
     expect(clonedForIn.names[0]).not.toBe(forIn.names[0]);
     expect(clonedForIn).toStrictEqual(forIn);
@@ -170,5 +189,96 @@ describe("deepCloneStatement", () => {
     const cloned = deepCloneStatement(stmt);
     expect(cloned).not.toBe(stmt);
     expect(cloned).toStrictEqual(stmt);
+  });
+});
+
+function collectNodes(expr: tstl.Expression): Set<object> {
+  const nodes = new Set<object>();
+
+  function walk(node: tstl.Expression): void {
+    nodes.add(node);
+    if (tstl.isBinaryExpression(node)) {
+      walk(node.left);
+      walk(node.right);
+    } else if (tstl.isUnaryExpression(node)) {
+      walk(node.operand);
+    } else if (tstl.isParenthesizedExpression(node)) {
+      walk(node.expression);
+    }
+  }
+
+  walk(expr);
+  return nodes;
+}
+
+function structurallyEqual(a: tstl.Expression, b: tstl.Expression): boolean {
+  if (a.kind !== b.kind) return false;
+
+  if (tstl.isBinaryExpression(a) && tstl.isBinaryExpression(b)) {
+    return (
+      a.operator === b.operator &&
+      structurallyEqual(a.left, b.left) &&
+      structurallyEqual(a.right, b.right)
+    );
+  }
+
+  if (tstl.isUnaryExpression(a) && tstl.isUnaryExpression(b)) {
+    return a.operator === b.operator && structurallyEqual(a.operand, b.operand);
+  }
+
+  if (tstl.isParenthesizedExpression(a) && tstl.isParenthesizedExpression(b)) {
+    return structurallyEqual(a.expression, b.expression);
+  }
+
+  if (tstl.isIdentifier(a) && tstl.isIdentifier(b)) {
+    return a.text === b.text;
+  }
+
+  if (tstl.isNumericLiteral(a) && tstl.isNumericLiteral(b)) {
+    return a.value === b.value;
+  }
+
+  if (tstl.isStringLiteral(a) && tstl.isStringLiteral(b)) {
+    return a.value === b.value;
+  }
+
+  // Boolean literals: same kind (TrueKeyword / FalseKeyword) already checked above
+  return a.kind === b.kind;
+}
+
+describe("property-based", () => {
+  it("structural equality: clone has same kind and values at every node", () => {
+    fc.assert(
+      fc.property(arbExpression, (expr) => {
+        const cloned = deepCloneExpression(expr);
+
+        expect(structurallyEqual(expr, cloned)).toBe(true);
+      }),
+    );
+  });
+
+  it("referential independence: no node in clone is identical to any original node", () => {
+    fc.assert(
+      fc.property(arbExpression, (expr) => {
+        const originalNodes = collectNodes(expr);
+        const cloned = deepCloneExpression(expr);
+        const clonedNodes = collectNodes(cloned);
+
+        for (const node of clonedNodes) {
+          expect(originalNodes.has(node)).toBe(false);
+        }
+      }),
+    );
+  });
+
+  it("idempotence: cloning twice produces a tree structurally equal to cloning once", () => {
+    fc.assert(
+      fc.property(arbExpression, (expr) => {
+        const once = deepCloneExpression(expr);
+        const twice = deepCloneExpression(once);
+
+        expect(structurallyEqual(once, twice)).toBe(true);
+      }),
+    );
   });
 });
