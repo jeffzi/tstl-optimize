@@ -2,7 +2,25 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { isLuaRhsPure } from "../ast/lua-ast";
+import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
+
+/**
+ * Returns true if any identifier in `expr` matches a name in `names`.
+ * Covers the forms that isLuaRhsPure accepts: Identifier, TableExpression,
+ * and FunctionExpression (treated as opaque — no external references).
+ */
+function referencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boolean {
+  if (tstl.isIdentifier(expr)) return names.has(expr.text);
+  if (tstl.isTableExpression(expr)) {
+    return expr.fields.some(
+      (f) =>
+        referencesAnyOf(f.value, names) || (f.key !== undefined && referencesAnyOf(f.key, names)),
+    );
+  }
+  // Literals and FunctionExpression have no external identifier references.
+  return false;
+}
 
 /**
  * Returns true if `stmt` qualifies for inclusion in a merge run.
@@ -30,6 +48,8 @@ function isMergeable(stmt: tstl.Statement): stmt is tstl.VariableDeclarationStat
 function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
   const result: tstl.Statement[] = [];
   let run: tstl.VariableDeclarationStatement[] = [];
+  // Tracks LHS names declared in the current run so we can detect forward references.
+  let runLhsNames = new Set<string>();
 
   function flushRun(): void {
     if (run.length >= 2) {
@@ -49,10 +69,19 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
       result.push(run[0]);
     }
     run = [];
+    runLhsNames = new Set<string>();
   }
 
   for (const stmt of statements) {
     if (isMergeable(stmt)) {
+      // If this statement's RHS references any LHS already in the current run,
+      // merging would produce `local ..., x = ..., <name>` where <name> is
+      // evaluated before the assignment — breaking Lua's multi-assignment semantics.
+      const rhs = stmt.right?.[0];
+      if (rhs !== undefined && referencesAnyOf(rhs, runLhsNames)) {
+        flushRun();
+      }
+      runLhsNames.add(stmt.left[0].text);
       run.push(stmt);
     } else {
       flushRun();
@@ -61,6 +90,21 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
     }
   }
   flushRun();
+
+  // Recurse into FunctionExpressions found at any expression depth in ALL statements
+  // (including mergeable ones that were placed in runs). The loop above only recurses
+  // into non-mergeable statements; mergeable statements with FunctionExpression values
+  // nested inside table constructors (e.g. `const obj = { fn: function() {...} }`)
+  // would otherwise be missed.
+  walkStatements(result, {
+    expr: (expr, _replace, control) => {
+      if (tstl.isFunctionExpression(expr)) {
+        mergeConsecutiveLocals(expr.body.statements);
+        control.skip();
+      }
+    },
+    shallow: true,
+  });
 
   statements.length = 0;
   statements.push(...result);
@@ -107,13 +151,25 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
       mergeConsecutiveLocals(stmt.body.statements);
     }
   }
+
+  // Additionally: find FunctionExpressions at any expression depth (call arguments,
+  // table field values, etc.) that the loop above misses.
+  walkStatements(statements, {
+    expr: (expr, _replace, control) => {
+      if (tstl.isFunctionExpression(expr)) {
+        mergeConsecutiveLocals(expr.body.statements);
+        control.skip();
+      }
+    },
+    shallow: true,
+  });
 }
 
 export const createVisitors: RuleFactory = () => ({
   [ts.SyntaxKind.SourceFile]: (node, context) => {
     const nodes = context.superTransformNode(node);
-    const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-    if (!file?.statements) return file;
+    const file = Array.isArray(nodes) ? nodes[0] : nodes;
+    if (!file || !tstl.isFile(file) || !file.statements) return file;
     recurseIntoFunctionBodies(file.statements);
     return file;
   },

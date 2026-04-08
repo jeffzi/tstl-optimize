@@ -106,6 +106,8 @@ describe("merge-locals", () => {
           export const b = 2;
         `),
       );
+      expect(lua).toContain("a = 1");
+      expect(lua).toContain("b = 2");
       expect(lua).not.toContain("local a, b");
     });
 
@@ -140,6 +142,44 @@ describe("merge-locals", () => {
       expect(lua).toContain("local a = 1");
       expect(lua).toContain("local b = 2");
       expect(lua).not.toContain("local a, b");
+    });
+  });
+
+  describe("forward reference safety", () => {
+    it("does NOT merge when a later RHS references an LHS declared earlier in the same run", () => {
+      // Merging would produce: local a, b = 1, a
+      // In Lua, all RHS are evaluated before any assignment, so `a` on the RHS
+      // would be nil (or an outer `a`), not 1. The merge must be suppressed.
+      const lua = normalizeLua(
+        compile(`
+          function f(): number {
+            const a = 1;
+            const b = a;
+            return b;
+          }
+        `),
+      );
+
+      expect(lua).toContain("local a = 1");
+      expect(lua).toContain("local b = a");
+      expect(lua).not.toContain("local a, b");
+    });
+
+    it("does NOT merge when a later RHS references a prior LHS inside a table constructor", () => {
+      // Merging would produce: local a, t = 1, {x = a}
+      // The `a` inside the table constructor is evaluated before `a` is assigned.
+      const lua = normalizeLua(
+        compile(`
+          function f(): number {
+            const a = 1;
+            const t = { x: a };
+            return t.x;
+          }
+        `),
+      );
+
+      expect(lua).toContain("local a = 1");
+      expect(lua).not.toContain("local a, t");
     });
   });
 
@@ -185,6 +225,41 @@ describe("merge-locals", () => {
         `),
       );
       expect(lua).toContain("local t, b");
+    });
+  });
+
+  describe("nested function expressions", () => {
+    it.each([
+      {
+        name: "callback passed as a call argument",
+        source: `
+          declare function run(fn: () => number): void;
+          function outer(): void {
+            run(function(): number {
+              const a = 1;
+              const b = 2;
+              return a + b;
+            });
+          }
+        `,
+      },
+      {
+        name: "function stored in a table value",
+        source: `
+          function outer() {
+            const obj = { handler: function(): number {
+              const a = 1;
+              const b = 2;
+              return a + b;
+            } };
+            return obj;
+          }
+        `,
+      },
+    ])("merges consecutive pure locals inside $name", ({ source }) => {
+      const lua = normalizeLua(compile(source));
+
+      expect(lua).toContain("local a, b = 1, 2");
     });
   });
 });
