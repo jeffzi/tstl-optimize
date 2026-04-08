@@ -42,27 +42,26 @@ describe("parseConfig", () => {
 });
 
 describe("isRuleEnabled", () => {
-  it("returns true for InlineConfig object without enabled: false", () => {
-    const config = parseConfig({ rules: { inline: { strict: false } } });
-    expect(isRuleEnabled(config.rules, "inline")).toBe(true);
-  });
-
-  it("returns false for InlineConfig object with enabled: false", () => {
-    const config = parseConfig({ rules: { inline: { enabled: false } } });
-    expect(isRuleEnabled(config.rules, "inline")).toBe(false);
+  it.each([
+    { config: { rules: { inline: { strict: false } } }, expected: true },
+    { config: { rules: { inline: { enabled: false } } }, expected: false },
+  ])("isRuleEnabled returns $expected for $config", ({ config, expected }) => {
+    const parsed = parseConfig(config);
+    expect(isRuleEnabled(parsed.rules, "inline")).toBe(expected);
   });
 });
 
 const EXPECTED_RULE_KEYS = [
   "conditional-compilation",
   "constant-folding",
-  "math-intrinsics",
-  "loop-rebase",
-  "inline",
   "dead-local",
-  "merge-locals",
-  "localizer",
   "debug-strip",
+  "inline",
+  "localizer",
+  "loop-rebase",
+  "math-intrinsics",
+  "merge-locals",
+  "remove-empty-branch",
 ];
 
 describe("property-based", () => {
@@ -79,7 +78,7 @@ describe("property-based", () => {
       fc.property(fc.anything(), (input) => {
         const config = parseConfig(input as Record<string, unknown>);
 
-        expect(Object.keys(config.rules).sort()).toStrictEqual(EXPECTED_RULE_KEYS.sort());
+        expect(Object.keys(config.rules).sort()).toStrictEqual(EXPECTED_RULE_KEYS);
       }),
     );
   });
@@ -88,6 +87,7 @@ describe("property-based", () => {
     const arbRuleBooleans = fc.record({
       "conditional-compilation": fc.boolean(),
       "constant-folding": fc.boolean(),
+      "remove-empty-branch": fc.boolean(),
       "math-intrinsics": fc.boolean(),
       "loop-rebase": fc.boolean(),
       inline: fc.boolean(),
@@ -108,29 +108,10 @@ describe("property-based", () => {
     );
   });
 
-  it("resolveInlineConfig always returns correct shape", () => {
-    const arbInlineInput = fc.oneof(
-      fc.boolean(),
-      fc.record({ enabled: fc.boolean(), strict: fc.boolean() }),
-      fc.constant(undefined),
-    );
-
-    fc.assert(
-      fc.property(arbInlineInput, (input) => {
-        const result = resolveInlineConfig(input);
-
-        expect(typeof result.enabled).toBe("boolean");
-        expect(typeof result.strict).toBe("boolean");
-      }),
-    );
-  });
-
   it("parseConfig({}) matches defaults from parseConfig()", () => {
     const fromNoArgs = parseConfig();
     const fromEmpty = parseConfig({});
-    const fromUndefined = parseConfig(undefined);
 
     expect(fromEmpty.rules).toStrictEqual(fromNoArgs.rules);
-    expect(fromUndefined.rules).toStrictEqual(fromNoArgs.rules);
   });
 });

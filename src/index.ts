@@ -11,6 +11,7 @@ import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
 import { createVisitors as mergeLocalsVisitors } from "./rules/merge-locals";
+import { createVisitors as removeEmptyBranchVisitors } from "./rules/remove-empty-branch";
 
 // Registration order — later entries have higher priority when two rules
 // share a SyntaxKind. conditional-compilation is first (lowest priority)
@@ -18,6 +19,7 @@ import { createVisitors as mergeLocalsVisitors } from "./rules/merge-locals";
 const RULE_ENTRIES: [keyof PluginConfig["rules"], RuleFactory][] = [
   ["conditional-compilation", conditionalCompilationVisitors],
   ["constant-folding", constantFoldingVisitors],
+  ["remove-empty-branch", removeEmptyBranchVisitors],
   ["math-intrinsics", mathIntrinsicsVisitors],
   ["loop-rebase", loopRebaseVisitors],
   ["inline", inlineVisitors],
