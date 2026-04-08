@@ -18,8 +18,8 @@ function assertNode<T extends tstl.Node>(
 
 describe("deepCloneExpression", () => {
   it("clones BinaryExpression with independent child references", () => {
-    const left = id("a", 1 as tstl.SymbolId);
-    const right = id("b", 2 as tstl.SymbolId);
+    const left = id("a", 1);
+    const right = id("b", 2);
     const bin = tstl.createBinaryExpression(left, right, tstl.SyntaxKind.AdditionOperator);
 
     const cloned = deepCloneExpression(bin);
@@ -80,9 +80,9 @@ describe("deepCloneExpression", () => {
   });
 
   it("clones FunctionExpression with deep body clone", () => {
-    const bodyStmt = tstl.createReturnStatement([id("x", 10 as tstl.SymbolId)]);
+    const bodyStmt = tstl.createReturnStatement([id("x", 10)]);
     const body = tstl.createBlock([bodyStmt]);
-    const funcExpr = tstl.createFunctionExpression(body, [id("x", 10 as tstl.SymbolId)]);
+    const funcExpr = tstl.createFunctionExpression(body, [id("x", 10)]);
 
     const cloned = deepCloneExpression(funcExpr);
     assertNode(cloned, tstl.isFunctionExpression);

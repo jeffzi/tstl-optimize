@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import ts from "typescript";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../src/config";
 import { arbSafeString } from "../arbitraries";
 import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
@@ -15,10 +15,6 @@ function ccOpts(constants: Record<string, { env: string; default: boolean | numb
 }
 
 describe("resolveConditionalCompilationConfig", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("returns false for disabled or missing config", () => {
     expect(resolveConditionalCompilationConfig(undefined)).toBe(false);
     expect(resolveConditionalCompilationConfig(false)).toBe(false);

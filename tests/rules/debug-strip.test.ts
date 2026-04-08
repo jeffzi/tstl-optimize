@@ -220,8 +220,8 @@ describe("debug-strip", () => {
 
   describe("preserves non-identifier callees", () => {
     it("keeps IIFE (callee is FunctionExpression, not in any strip list)", () => {
-      const lua = compile("(function() { const a = 1; })(); const x = 1;", enabled);
-      expect(normalizeLua(lua)).toBe("(function()\nlocal a = 1\nend)()\nx = 1");
+      const lua = compile("(function() { let a = 1; return a; })(); const x = 1;", enabled);
+      expect(normalizeLua(lua)).toBe("(function()\nlocal a = 1\nreturn a\nend)()\nx = 1");
     });
   });
 
