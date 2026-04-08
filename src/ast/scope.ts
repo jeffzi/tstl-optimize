@@ -54,13 +54,6 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
           control.skip();
         }
       }
-      if (!shallow && tstl.isFunctionExpression(expr) && expr.params) {
-        for (const param of expr.params) {
-          if (tstl.isIdentifier(param)) {
-            scopeDefs.add(param.text);
-          }
-        }
-      }
     },
     stmt: (stmt: tstl.Statement) => {
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
