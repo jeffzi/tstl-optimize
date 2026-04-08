@@ -116,16 +116,18 @@ export const createVisitors: RuleFactory = (checker, config) => {
   type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
   const visitors: Record<number, LooseVisitor> = {
     [ts.SyntaxKind.CallExpression]: (node, context) => {
+      if (!ts.isCallExpression(node)) return undefined;
       // LuaJIT's C function dispatch is faster than inline Lua expressions
       if (config.target !== "luajit") {
-        const result = handleCallExpression(node as ts.CallExpression, checker, context);
+        const result = handleCallExpression(node, checker, context);
         if (result) return result;
       }
       return undefined;
     },
 
     [ts.SyntaxKind.BinaryExpression]: (node, context) => {
-      const binNode = node as ts.BinaryExpression;
+      if (!ts.isBinaryExpression(node)) return undefined;
+      const binNode = node;
       // x ** 2 → x * x
       if (
         binNode.operatorToken.kind !== ts.SyntaxKind.AsteriskAsteriskToken ||

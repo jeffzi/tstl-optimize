@@ -417,7 +417,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context: tstl.TransformationContext) => {
       const result = context.superTransformNode(node);
-      const fileNode = result[0];
+      const fileNode = Array.isArray(result) ? result[0] : result;
       if (fileNode && tstl.isFile(fileNode)) {
         processFile(fileNode, resolved, context, isRootAllowed);
         return fileNode;
