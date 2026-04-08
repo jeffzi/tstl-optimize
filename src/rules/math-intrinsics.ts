@@ -1,6 +1,7 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
 
@@ -137,7 +138,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
       const luaBase = context.transformExpression(binNode.left);
       return tstl.createBinaryExpression(
         luaBase,
-        tstl.cloneNode(luaBase),
+        deepCloneExpression(luaBase),
         tstl.SyntaxKind.MultiplicationOperator,
       );
     },
