@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../src/config";
 import { arbSafeString } from "../arbitraries";
 import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
@@ -15,6 +15,10 @@ function ccOpts(constants: Record<string, { env: string; default: boolean | numb
 }
 
 describe("resolveConditionalCompilationConfig", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns false for disabled or missing config", () => {
     expect(resolveConditionalCompilationConfig(undefined)).toBe(false);
     expect(resolveConditionalCompilationConfig(false)).toBe(false);
@@ -300,7 +304,7 @@ describe("conditional-compilation", () => {
       // SWITCH_VAL is resolved to "nomatch", which doesn't match "other".
       // But there's an unresolved case CASE_UNRESOLVED that might match at runtime.
       // So the switch must be preserved, not folded to default.
-      expect(lua).toContain("switch");
+      expect(lua).toContain("repeat");
       expect(lua).toContain("print(1)");
       expect(lua).toContain("print(2)");
       expect(lua).toContain("print(3)");
@@ -326,7 +330,7 @@ describe("conditional-compilation", () => {
       // We cannot statically determine if CASE_VALUE == "test", so we must preserve
       // the switch with the unresolved case, NOT fold to default.
       // The code should keep the switch structure intact.
-      expect(lua).toContain("switch");
+      expect(lua).toContain("repeat");
       expect(lua).toContain("print(1)");
       expect(lua).toContain("print(2)");
     });
