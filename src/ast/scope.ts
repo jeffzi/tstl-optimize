@@ -60,6 +60,11 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
         for (const lhs of stmt.left) {
           if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
         }
+        if (tstl.isFunctionDefinition(stmt)) {
+          for (const p of stmt.right[0].params?.filter(tstl.isIdentifier) ?? []) {
+            scopeDefs.add(p.text);
+          }
+        }
       }
       if (tstl.isForInStatement(stmt)) {
         for (const name of stmt.names) {
