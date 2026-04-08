@@ -74,7 +74,25 @@ function unwrapBlock(stmt: ts.Statement): readonly ts.Statement[] {
 }
 
 function containsBreakOrReturn(statements: readonly ts.Statement[]): boolean {
-  return statements.some((s) => ts.isBreakStatement(s) || ts.isReturnStatement(s));
+  for (const s of statements) {
+    if (ts.isBreakStatement(s) || ts.isReturnStatement(s)) return true;
+    if (ts.isIfStatement(s)) {
+      const thenStmts = ts.isBlock(s.thenStatement)
+        ? s.thenStatement.statements
+        : [s.thenStatement];
+      if (containsBreakOrReturn(thenStmts)) return true;
+      if (s.elseStatement) {
+        const elseStmts = ts.isBlock(s.elseStatement)
+          ? s.elseStatement.statements
+          : [s.elseStatement];
+        if (containsBreakOrReturn(elseStmts)) return true;
+      }
+    }
+    if (ts.isBlock(s)) {
+      if (containsBreakOrReturn(s.statements)) return true;
+    }
+  }
+  return false;
 }
 
 function referencesKnownConstants(
