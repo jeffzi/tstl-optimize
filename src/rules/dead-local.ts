@@ -6,32 +6,21 @@ import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
 /**
- * Performs a two-pass dead-local elimination on a function body's statement list.
+ * Two-pass dead-local elimination on a single function body's statement list.
  *
- * Pass 1 (shallow): Collect single-var VariableDeclarationStatement nodes using
- * walkStatements with shallow: true. Shallow mode stops at FunctionExpression
- * boundaries so declarations inside nested functions are not attributed to this scope.
+ * Pass 1 (shallow): collect single-var declarations at this scope only — `shallow: true`
+ * stops at FunctionExpression boundaries so nested declarations aren't misattributed.
  *
- * Pass 2 (deep): Collect all identifier reads via walkStatements without shallow.
- * Deep walk ensures closure captures count as outer-scope uses (Pitfall 2).
- *
- * After processing this function body, recursively processes nested function bodies.
+ * Pass 2 (deep): collect all identifier reads. Deep walk is required so closure captures
+ * inside nested functions count as reads of the outer declaration.
  */
 function eliminateDeadLocals(statements: tstl.Statement[]): void {
-  // Pass 1: collect single-var declarations at this scope level only.
-  // Use walkStatements with shallow: true so declarations inside nested FunctionExpressions
-  // are not attributed to this scope. We filter out nested stmts by checking the stmt hook
-  // fires only for top-level statements of this body (shallow mode stops recursion).
-  // To track which top-level statement each decl belongs to, we track via Set<Statement>.
   const declsBySymbol = new Map<number, { stmt: tstl.Statement; rhs: tstl.Expression }>();
 
   walkStatements(statements, {
-    expr: () => {
-      // No-op: we only care about statement-level declarations in Pass 1
-    },
+    expr: () => {},
     stmt: (stmt) => {
       if (tstl.isVariableDeclarationStatement(stmt)) {
-        // Only handle single-var, single-RHS declarations (D-05)
         if (stmt.left.length === 1 && stmt.right !== undefined && stmt.right.length === 1) {
           const symbolId = stmt.left[0].symbolId;
           if (symbolId !== undefined) {
@@ -44,7 +33,6 @@ function eliminateDeadLocals(statements: tstl.Statement[]): void {
   });
 
   if (declsBySymbol.size > 0) {
-    // Pass 2: collect reads (deep — closure captures count as outer-scope uses)
     const reads = new Set<number>();
     walkStatements(statements, {
       expr: (expr) => {
@@ -52,42 +40,32 @@ function eliminateDeadLocals(statements: tstl.Statement[]): void {
           reads.add(expr.symbolId);
         }
       },
-      // No shallow flag — default deep walk so closure reads are captured
     });
 
-    // Determine which statements to remove
     const toRemove = new Set<tstl.Statement>();
     for (const [symbolId, { stmt, rhs }] of declsBySymbol) {
-      if (reads.has(symbolId)) {
-        // Variable is read — keep it
-        continue;
-      }
-      if (isLuaRhsPure(rhs)) {
-        // Pure RHS — safe to drop the declaration entirely
+      if (!reads.has(symbolId) && isLuaRhsPure(rhs)) {
         toRemove.add(stmt);
       }
-      // Impure RHS (call expression, etc.) — must execute; keep the declaration (D-03)
+      // Impure RHS must execute even when the variable is never read — keep it.
     }
 
     if (toRemove.size > 0) {
-      // Filter statements in-place, preserving original array reference
       const kept = statements.filter((s) => !toRemove.has(s));
       statements.length = 0;
       statements.push(...kept);
     }
   }
 
-  // Recurse into nested function bodies (after modifying the current level)
   recurseIntoFunctionBodies(statements);
 }
 
 /**
  * Recursively processes nested function bodies to eliminate dead locals in each scope.
  *
- * TSTL represents all function declarations as AssignmentStatement or
- * VariableDeclarationStatement with FunctionExpression RHS. walkStatements with
- * shallow: true stops at FunctionExpression boundaries, so we must find and
- * recurse into them explicitly here.
+ * TSTL emits function declarations as AssignmentStatement or VariableDeclarationStatement
+ * with a FunctionExpression RHS. Because walkStatements with shallow:true stops at those
+ * boundaries, we must descend into them explicitly.
  */
 function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
   for (const stmt of statements) {
@@ -126,7 +104,7 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => ({
     const nodes = context.superTransformNode(node);
     const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
     if (!file?.statements) return file;
-    // D-02: module-level locals are out of scope — process only function bodies
+    // Module-level locals are intentionally excluded — only function-scope dead locals are removed.
     recurseIntoFunctionBodies(file.statements);
     return file;
   },

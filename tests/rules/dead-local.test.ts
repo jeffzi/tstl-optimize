@@ -46,7 +46,6 @@ describe("dead-local", () => {
         return a + b;
       }
     `);
-    // Both names must still appear in output
     expect(lua).toContain("a");
     expect(lua).toContain("b");
   });
@@ -71,7 +70,6 @@ describe("dead-local", () => {
       const r1 = add(1, 2);
       const r2 = add(3, 4);
     `);
-    // The inlined function declaration should not appear
     expect(lua).not.toContain("local function add");
   });
 
@@ -79,7 +77,6 @@ describe("dead-local", () => {
     const lua = compile("function f() { const x = 42; }", {
       pluginOptions: { rules: { "dead-local": false } },
     });
-    // With rule disabled, unused local remains
     expect(lua).toContain("x = 42");
   });
 });
