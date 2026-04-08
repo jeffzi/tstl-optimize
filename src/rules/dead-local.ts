@@ -133,9 +133,9 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
 }
 
 export const createVisitors: RuleFactory = (): tstl.Visitors => ({
-  [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context) => {
+  [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context): tstl.File => {
     const nodes = context.superTransformNode(node);
-    const file = Array.isArray(nodes) ? nodes[0] : nodes;
+    const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
     if (!file || !tstl.isFile(file) || !file.statements) return file;
     // Module-level locals are intentionally excluded — only function-scope dead locals are removed.
     recurseIntoFunctionBodies(file.statements);
