@@ -99,12 +99,24 @@ describe("dead-local", () => {
         name: "function stored in a table value",
         source: `
           function outer() {
-            const obj = { handler: function(): number {
+            const obj = { fn: function(): number {
               const unused = 42;
               const result = 1;
               return result;
             } };
             return obj;
+          }
+        `,
+      },
+      {
+        name: "IIFE callee",
+        source: `
+          function outer() {
+            (function() {
+              const unused = 42;
+              const result = 1;
+              return result;
+            })();
           }
         `,
       },

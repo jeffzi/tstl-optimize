@@ -61,55 +61,25 @@ function eliminateDeadLocals(statements: tstl.Statement[]): void {
 }
 
 /**
- * Visits FunctionExpression nodes found in "stored" expression positions — variable/assignment
- * RHS, call arguments, table field values — but NOT call callee positions (IIFEs).
- * Calls the visitor for each found FunctionExpression; does not descend into their bodies
- * (the visitor is responsible for that).
- */
-function visitStoredFunctionExprs(
-  expr: tstl.Expression,
-  visitor: (fn: tstl.FunctionExpression) => void,
-): void {
-  if (tstl.isFunctionExpression(expr)) {
-    visitor(expr);
-  } else if (tstl.isCallExpression(expr)) {
-    // Visit params (arguments), but NOT expr.expression (the callee) to avoid processing IIFEs.
-    for (const param of expr.params) {
-      visitStoredFunctionExprs(param, visitor);
-    }
-  } else if (tstl.isMethodCallExpression(expr)) {
-    for (const param of expr.params) {
-      visitStoredFunctionExprs(param, visitor);
-    }
-  } else if (tstl.isTableExpression(expr)) {
-    for (const field of expr.fields) {
-      visitStoredFunctionExprs(field.value, visitor);
-    }
-  } else if (tstl.isParenthesizedExpression(expr)) {
-    visitStoredFunctionExprs(expr.expression, visitor);
-  }
-}
-
-/**
  * Recursively processes nested function bodies to eliminate dead locals in each scope.
  *
  * Finds FunctionExpression nodes in stored positions (variable/assignment RHS, call
- * arguments, table field values) within all reachable statement lists, including compound
- * statement bodies (do, if, while, for, etc.). Skips IIFEs (callee positions).
+ * arguments, table field values, IIFE callees) within all reachable statement lists,
+ * including compound statement bodies (do, if, while, for, etc.).
  */
 function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
+  walkStatements(statements, {
+    shallow: true,
+    expr: (expr, _replace, control) => {
+      if (tstl.isFunctionExpression(expr)) {
+        eliminateDeadLocals(expr.body.statements);
+        control.skip();
+      }
+    },
+  });
+
   for (const stmt of statements) {
-    if (tstl.isVariableDeclarationStatement(stmt)) {
-      for (const rhs of stmt.right ?? []) {
-        visitStoredFunctionExprs(rhs, (fn) => eliminateDeadLocals(fn.body.statements));
-      }
-    } else if (tstl.isAssignmentStatement(stmt)) {
-      for (const rhs of stmt.right) {
-        visitStoredFunctionExprs(rhs, (fn) => eliminateDeadLocals(fn.body.statements));
-      }
-    } else if (tstl.isExpressionStatement(stmt)) {
-      visitStoredFunctionExprs(stmt.expression, (fn) => eliminateDeadLocals(fn.body.statements));
-    } else if (tstl.isDoStatement(stmt)) {
+    if (tstl.isDoStatement(stmt)) {
       recurseIntoFunctionBodies(stmt.statements);
     } else if (tstl.isIfStatement(stmt)) {
       recurseIntoFunctionBodies(stmt.ifBlock.statements);
