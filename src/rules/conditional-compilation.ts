@@ -56,12 +56,16 @@ export function evaluateCondition(
 
     if (
       op === ts.SyntaxKind.EqualsEqualsEqualsToken ||
-      op === ts.SyntaxKind.ExclamationEqualsEqualsToken
+      op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+      op === ts.SyntaxKind.EqualsEqualsToken ||
+      op === ts.SyntaxKind.ExclamationEqualsToken
     ) {
       const left = evaluateCondition(expr.left, constants);
       const right = evaluateCondition(expr.right, constants);
       if (left === undefined || right === undefined) return undefined;
-      return op === ts.SyntaxKind.EqualsEqualsEqualsToken ? left === right : left !== right;
+      const isEq =
+        op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+      return isEq ? left === right : left !== right;
     }
   }
 
@@ -73,24 +77,18 @@ function unwrapBlock(stmt: ts.Statement): readonly ts.Statement[] {
   return ts.isBlock(stmt) ? stmt.statements : [stmt];
 }
 
+/**
+ * Check if statements contain a direct (unconditional) break or return.
+ * A break/return inside an if statement is conditional and does not count.
+ * Only direct statements at the top level count as stopping fallthrough.
+ */
 function containsBreakOrReturn(statements: readonly ts.Statement[]): boolean {
   for (const s of statements) {
     if (ts.isBreakStatement(s) || ts.isReturnStatement(s)) return true;
-    if (ts.isIfStatement(s)) {
-      const thenStmts = ts.isBlock(s.thenStatement)
-        ? s.thenStatement.statements
-        : [s.thenStatement];
-      if (containsBreakOrReturn(thenStmts)) return true;
-      if (s.elseStatement) {
-        const elseStmts = ts.isBlock(s.elseStatement)
-          ? s.elseStatement.statements
-          : [s.elseStatement];
-        if (containsBreakOrReturn(elseStmts)) return true;
-      }
-    }
     if (ts.isBlock(s)) {
       if (containsBreakOrReturn(s.statements)) return true;
     }
+    // Do NOT recurse into if statements — breaks inside them are conditional
   }
   return false;
 }
@@ -215,6 +213,19 @@ export const createVisitors: RuleFactory = (_checker, config) => {
 
       const { clauses } = node.caseBlock;
 
+      // Check if there are any unresolved cases
+      let hasUnresolvedCase = false;
+      for (let i = 0; i < clauses.length; i++) {
+        const clause = clauses[i];
+        if (ts.isCaseClause(clause)) {
+          const caseValue = evaluateCondition(clause.expression, resolved);
+          if (caseValue === undefined) {
+            hasUnresolvedCase = true;
+            break;
+          }
+        }
+      }
+
       // Find the first matching CaseClause, or fall back to DefaultClause
       let matchIndex = -1;
       for (let i = 0; i < clauses.length; i++) {
@@ -227,6 +238,13 @@ export const createVisitors: RuleFactory = (_checker, config) => {
           }
         }
       }
+
+      // If no resolved case matches and there are unresolved cases,
+      // we cannot determine the outcome at compile time. Preserve the switch.
+      if (matchIndex === -1 && hasUnresolvedCase) {
+        return context.superTransformStatements(node);
+      }
+
       if (matchIndex === -1) {
         matchIndex = clauses.findIndex((c) => ts.isDefaultClause(c));
       }

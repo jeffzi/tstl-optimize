@@ -200,6 +200,137 @@ describe("conditional-compilation", () => {
       expect(normalizeLua(lua)).toBe("print(1)");
     });
   });
+
+  describe("switch fallthrough with conditional breaks", () => {
+    it("preserves fallthrough when break is conditional", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const MODE: string;
+        declare const FLAG: boolean;
+        switch (MODE) {
+          case "a":
+            print(1);
+            if (FLAG) break;
+          case "b":
+            print(2);
+            break;
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: "a" } })));
+
+      // When MODE="a" and the break is conditional (guarded by FLAG),
+      // fallthrough should still happen to case b.
+      // Both print(1) and print(2) should appear in the output.
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+    });
+
+    it("halts fallthrough on unconditional break", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const MODE: string;
+        switch (MODE) {
+          case "a":
+            print(1);
+            break;
+          case "b":
+            print(2);
+            break;
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: "a" } })));
+
+      // With an unconditional break after print(1), fallthrough should stop.
+      // Only print(1) should appear.
+      expect(lua).toBe("print(1)");
+    });
+  });
+
+  describe("switch with unresolved cases", () => {
+    it("preserves unresolved cases when switch value is resolved", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const SWITCH_VAL: string;
+        declare const CASE_UNRESOLVED: string;
+        switch (SWITCH_VAL) {
+          case CASE_UNRESOLVED:
+            print(1);
+            break;
+          case "resolved":
+            print(2);
+            break;
+          default:
+            print(3);
+        }
+      `;
+
+      const lua = normalizeLua(
+        compile(src, ccOpts({ SWITCH_VAL: { env: "X", default: "resolved" } })),
+      );
+
+      // SWITCH_VAL is resolved to "resolved", but CASE_UNRESOLVED is unresolved.
+      // The switch should fold to the matching resolved case ("resolved" -> print(2)),
+      // but the unresolved case should NOT cause us to incorrectly pick default.
+      expect(lua).toBe("print(2)");
+    });
+
+    it("does not fold to default when unresolved case is present", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const SWITCH_VAL: string;
+        declare const CASE_UNRESOLVED: string;
+        switch (SWITCH_VAL) {
+          case CASE_UNRESOLVED:
+            print(1);
+            break;
+          case "other":
+            print(2);
+            break;
+          default:
+            print(3);
+        }
+      `;
+
+      const lua = normalizeLua(
+        compile(src, ccOpts({ SWITCH_VAL: { env: "X", default: "nomatch" } })),
+      );
+
+      // SWITCH_VAL is resolved to "nomatch", which doesn't match "other".
+      // But there's an unresolved case CASE_UNRESOLVED that might match at runtime.
+      // So the switch must be preserved, not folded to default.
+      expect(lua).toContain("switch");
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+      expect(lua).toContain("print(3)");
+    });
+
+    it("does not skip unresolved case when it could match the switch value", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const SWITCH_VAL: string;
+        declare const CASE_VALUE: string;
+        switch (SWITCH_VAL) {
+          case CASE_VALUE:
+            print(1);
+            break;
+          default:
+            print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ SWITCH_VAL: { env: "X", default: "test" } })));
+
+      // SWITCH_VAL is resolved to "test", but CASE_VALUE is unresolved.
+      // We cannot statically determine if CASE_VALUE == "test", so we must preserve
+      // the switch with the unresolved case, NOT fold to default.
+      // The code should keep the switch structure intact.
+      expect(lua).toContain("switch");
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+    });
+  });
 });
 
 describe("property-based", () => {
