@@ -3,21 +3,18 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { isLuaRhsPure } from "../ast/lua-ast";
 import type { RuleFactory } from "../config";
-import { isRuleEnabled } from "../config";
 
 /**
  * Returns true if `stmt` qualifies for inclusion in a merge run.
  *
- * Requirements (per D-01, D-03):
  * - Must be a VariableDeclarationStatement
  * - Must have exactly one LHS identifier (multi-LHS breaks the run)
  * - RHS must be absent or provably pure (no side effects)
  */
 function isMergeable(stmt: tstl.Statement): stmt is tstl.VariableDeclarationStatement {
   if (!tstl.isVariableDeclarationStatement(stmt)) return false;
-  if (stmt.left.length !== 1) return false; // multi-LHS breaks run (D-03)
+  if (stmt.left.length !== 1) return false;
   const rhs = stmt.right;
-  // No RHS (local a) → treated as pure (nil initializer)
   if (!rhs || rhs.length === 0) return true;
   return isLuaRhsPure(rhs[0]);
 }
@@ -27,10 +24,8 @@ function isMergeable(stmt: tstl.Statement): stmt is tstl.VariableDeclarationStat
  * in-place within the given statements array.
  *
  * A run of N>=2 eligible statements is collapsed into one multi-var statement.
- * Runs of length 1 are left as-is (no merging).
- *
- * After processing non-mergeable statements, recurses into compound statements
- * that contain function bodies (per D-06: module-level is NOT merged here).
+ * Runs of length 1 are left as-is. After processing non-mergeable statements,
+ * recurses into compound statements that contain function bodies.
  */
 function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
   const result: tstl.Statement[] = [];
@@ -62,7 +57,6 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
     } else {
       flushRun();
       result.push(stmt);
-      // Recurse into compound statements that can contain function bodies
       recurseIntoFunctionBodies([stmt]);
     }
   }
@@ -74,10 +68,8 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
 
 /**
  * Recursively find function bodies in statements and apply mergeConsecutiveLocals
- * to each function body's statement list.
- *
- * This is the entry point for module-level processing (D-06): we walk module-level
- * statements looking for function bodies without merging module-level statements.
+ * to each. Module-level statements are walked but not merged — only function body
+ * statement lists are merged.
  */
 function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
   for (const stmt of statements) {
@@ -117,17 +109,12 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
   }
 }
 
-export const createVisitors: RuleFactory = (_checker, config) => {
-  return {
-    [ts.SyntaxKind.SourceFile]: (node, context) => {
-      const nodes = context.superTransformNode(node);
-      const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-      if (!file?.statements) return file;
-      if (!isRuleEnabled(config.rules, "merge-locals")) return file;
-      // D-06: Apply to function bodies only — walk module-level statements
-      // looking for function bodies without merging module-level statements themselves.
-      recurseIntoFunctionBodies(file.statements);
-      return file;
-    },
-  };
-};
+export const createVisitors: RuleFactory = () => ({
+  [ts.SyntaxKind.SourceFile]: (node, context) => {
+    const nodes = context.superTransformNode(node);
+    const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
+    if (!file?.statements) return file;
+    recurseIntoFunctionBodies(file.statements);
+    return file;
+  },
+});

@@ -6,11 +6,11 @@ import { createVisitors as conditionalCompilationVisitors } from "./rules/condit
 import { createVisitors as constantFoldingVisitors } from "./rules/constant-folding";
 import { createVisitors as deadLocalVisitors } from "./rules/dead-local";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
-import { createVisitors as mergeLocalsVisitors } from "./rules/merge-locals";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
+import { createVisitors as mergeLocalsVisitors } from "./rules/merge-locals";
 
 // Registration order — later entries have higher priority when two rules
 // share a SyntaxKind. conditional-compilation is first (lowest priority)
@@ -131,7 +131,6 @@ class OptimizePlugin implements tstl.Plugin {
   ): void {
     if (!isRuleEnabled(this.config.rules, "inline")) return;
     for (const file of result) {
-      // Remove @inline from JSDoc comments in emitted Lua.
       file.code = file.code.replace(/(?:---\s*\n)?--\s*@inline\s*\n/g, "");
     }
   }
