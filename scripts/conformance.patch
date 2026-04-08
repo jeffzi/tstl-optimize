@@ -56,3 +56,16 @@ index 501b24b..2b98a0d 100644
          this.expectToHaveDiagnostics(expected);
  
          const diagnosticMessages = ts.formatDiagnostics(
+
+diff --git a/test/unit/printer/sourcemaps.spec.ts b/test/unit/printer/sourcemaps.spec.ts
+index b180cc8..f5e72cc 100644
+--- a/test/unit/printer/sourcemaps.spec.ts
++++ b/test/unit/printer/sourcemaps.spec.ts
+@@ -254,6 +254,7 @@ test("sourceMapTraceback saves sourcemap in _G", () => {
+         function abc() {
+             return "foo";
+         }
++        abc();
+ 
+         return (globalThis as any).__TS__sourcemap;
+     `;
