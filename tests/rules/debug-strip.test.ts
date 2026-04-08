@@ -9,16 +9,16 @@ const ENV =
 describe("debug-strip", () => {
   describe("functions (bare function stripping)", () => {
     it("strips default-listed function calls in statement position", () => {
-      const lua1 = compile(ENV + 'print("hello"); const x = 1;', enabled);
+      const lua1 = compile(`${ENV}print("hello"); const x = 1;`, enabled);
       expect(normalizeLua(lua1)).toBe("x = 1");
 
       const lua2 = compile(
-        ENV + "declare const cond: boolean; assert(cond); const x = 1;",
+        `${ENV}declare const cond: boolean; assert(cond); const x = 1;`,
         enabled,
       );
       expect(normalizeLua(lua2)).toBe("x = 1");
 
-      const lua3 = compile(ENV + 'print("x", "y", "z"); const x = 1;', enabled);
+      const lua3 = compile(`${ENV}print("x", "y", "z"); const x = 1;`, enabled);
       expect(normalizeLua(lua3)).toBe("x = 1");
     });
 
@@ -106,7 +106,7 @@ describe("debug-strip", () => {
   describe("config", () => {
     it("custom functions list replaces defaults", () => {
       const lua = compile(
-        ENV + 'declare function myDebug(msg: string): void; print("a"); myDebug("b");',
+        `${ENV}declare function myDebug(msg: string): void; print("a"); myDebug("b");`,
         { pluginOptions: { rules: { "debug-strip": { functions: ["myDebug"] } } } },
       );
       expect(normalizeLua(lua)).toBe('print("a")');
@@ -126,12 +126,12 @@ describe("debug-strip", () => {
     });
 
     it("disabling the rule preserves all calls", () => {
-      const viaFalse = compile(ENV + 'print("hello");', {
+      const viaFalse = compile(`${ENV}print("hello");`, {
         pluginOptions: { rules: { "debug-strip": false } },
       });
       expect(normalizeLua(viaFalse)).toBe('print("hello")');
 
-      const viaEnabled = compile(ENV + 'print("hello");', {
+      const viaEnabled = compile(`${ENV}print("hello");`, {
         pluginOptions: { rules: { "debug-strip": { enabled: false } } },
       });
       expect(normalizeLua(viaEnabled)).toBe('print("hello")');
@@ -141,15 +141,14 @@ describe("debug-strip", () => {
   describe("multi-line (mixed stripped and kept statements)", () => {
     it("strips only targeted calls among multiple statements", () => {
       const lua = compile(
-        ENV +
-          [
-            "declare const hp: number;",
-            "declare function heal(n: number): void;",
-            'print("player health:", hp);',
-            "assert(hp > 0);",
-            "heal(10);",
-            'print("healed");',
-          ].join("\n"),
+        `${ENV}${[
+          "declare const hp: number;",
+          "declare function heal(n: number): void;",
+          'print("player health:", hp);',
+          "assert(hp > 0);",
+          "heal(10);",
+          'print("healed");',
+        ].join("\n")}`,
         enabled,
       );
       expect(normalizeLua(lua)).toBe("heal(10)");
@@ -172,17 +171,16 @@ describe("debug-strip", () => {
 
     it("strips a call whose arguments span multiple lines", () => {
       const lua = compile(
-        ENV +
-          [
-            "declare const hp: number;",
-            "declare const mp: number;",
-            "print(",
-            '  "stats:",',
-            "  hp,",
-            "  mp",
-            ");",
-            "const x = hp + mp;",
-          ].join("\n"),
+        `${ENV}${[
+          "declare const hp: number;",
+          "declare const mp: number;",
+          "print(",
+          '  "stats:",',
+          "  hp,",
+          "  mp",
+          ");",
+          "const x = hp + mp;",
+        ].join("\n")}`,
         enabled,
       );
       expect(normalizeLua(lua)).toBe("x = hp + mp");
@@ -206,15 +204,14 @@ describe("debug-strip", () => {
 
     it("strips mixed function and namespace calls in one block", () => {
       const lua = compile(
-        ENV +
-          [
-            "declare namespace debug { function traceback(): string; }",
-            "declare const n: number;",
-            'print("start");',
-            "debug.traceback();",
-            "const result = n * 2;",
-            "assert(n > 0);",
-          ].join("\n"),
+        `${ENV}${[
+          "declare namespace debug { function traceback(): string; }",
+          "declare const n: number;",
+          'print("start");',
+          "debug.traceback();",
+          "const result = n * 2;",
+          "assert(n > 0);",
+        ].join("\n")}`,
         enabled,
       );
       expect(normalizeLua(lua)).toBe("result = n * 2");
