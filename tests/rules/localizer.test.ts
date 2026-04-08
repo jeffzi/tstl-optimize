@@ -81,7 +81,6 @@ describe("localizer", () => {
         ].join("\n"),
         { ...ALL_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
       );
-      // Should appear only once as a module-level local
       const matches = lua.match(/local ____math_ceil = math\.ceil/g);
       expect(matches).toHaveLength(1);
     });
@@ -131,17 +130,6 @@ describe("localizer", () => {
       expect(lua).toContain("local ____a_x = a.x");
       expect(lua).toContain("local ____b_x = b.x");
     });
-  });
-
-  describe("negative cases (not hoisted)", () => {
-    it("does not hoist chain used only once", () => {
-      const lua = compile("declare const x: number; const a = Math.ceil(x);", {
-        ...MODULE_SCOPE,
-        luaTarget: tstl.LuaTarget.LuaJIT,
-      });
-      expect(lua).not.toContain("local ____math_ceil = math.ceil");
-      expect(lua).toContain("math.ceil");
-    });
 
     it("hoists chain even when last segment matches an existing local (prefixed name avoids collision)", () => {
       const lua = compile(
@@ -155,24 +143,6 @@ describe("localizer", () => {
       );
       expect(lua).toContain("local ____math_floor = math.floor");
       expect(lua).toContain("____math_floor(x)");
-    });
-
-    it("does not hoist chain whose base is locally defined in the same scope", () => {
-      const lua = compile(
-        [
-          "const config = { graphics: { width: 1920, height: 1080 } };",
-          "const a = config.graphics.width;",
-          "const b = config.graphics.width;",
-        ].join("\n"),
-        {
-          pluginOptions: {
-            rules: { localizer: { scope: "module" as const, include: ["config"] } },
-          },
-        },
-      );
-      // config is a local — hoisting above its definition would make config nil
-      expect(lua).not.toContain("local ____config_graphics_width = config.graphics.width");
-      expect(lua).toContain("config.graphics.width");
     });
 
     it("hoists chain even when last segment matches a function parameter (prefixed name avoids collision)", () => {
@@ -207,6 +177,35 @@ describe("localizer", () => {
         },
       );
       expect(lua).toContain("local ____obj_x = obj.x");
+    });
+  });
+
+  describe("negative cases (not hoisted)", () => {
+    it("does not hoist chain used only once", () => {
+      const lua = compile("declare const x: number; const a = Math.ceil(x);", {
+        ...MODULE_SCOPE,
+        luaTarget: tstl.LuaTarget.LuaJIT,
+      });
+      expect(lua).not.toContain("local ____math_ceil = math.ceil");
+      expect(lua).toContain("math.ceil");
+    });
+
+    it("does not hoist chain whose base is locally defined in the same scope", () => {
+      const lua = compile(
+        [
+          "const config = { graphics: { width: 1920, height: 1080 } };",
+          "const a = config.graphics.width;",
+          "const b = config.graphics.width;",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
+      );
+      // config is a local — hoisting above its definition would make config nil
+      expect(lua).not.toContain("local ____config_graphics_width = config.graphics.width");
+      expect(lua).toContain("config.graphics.width");
     });
 
     it("does not hoist chain whose base is a function parameter to module level", () => {

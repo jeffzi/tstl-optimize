@@ -106,7 +106,6 @@ describe("merge-locals", () => {
           export const b = 2;
         `),
       );
-      // The key assertion: they should NOT be merged into a single local statement
       expect(lua).not.toContain("local a, b");
     });
 

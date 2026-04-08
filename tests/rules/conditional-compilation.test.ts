@@ -5,6 +5,9 @@ import { resolveConditionalCompilationConfig } from "../../src/config";
 import { arbSafeString } from "../arbitraries";
 import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
 
+// Lua global not in TypeScript's lib — declare it so TS does not error on test sources.
+const PRINT_DECL = "declare function print(...args: unknown[]): void;";
+
 function ccOpts(constants: Record<string, { env: string; default: boolean | number | string }>) {
   return {
     pluginOptions: { rules: { "conditional-compilation": { constants } } },
@@ -60,7 +63,7 @@ describe("conditional-compilation", () => {
       { name: "truthy", value: true, expected: "print(1)" },
       { name: "falsy", value: false, expected: "print(2)" },
     ])("folds if/else to $name branch", ({ value, expected }) => {
-      const src = "declare const DEBUG: boolean; if (DEBUG) { print(1); } else { print(2); }";
+      const src = `${PRINT_DECL} declare const DEBUG: boolean; if (DEBUG) { print(1); } else { print(2); }`;
 
       const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: value } })));
 
@@ -68,7 +71,7 @@ describe("conditional-compilation", () => {
     });
 
     it("strips if-statement without else when falsy", () => {
-      const src = "declare const DEBUG: boolean; if (DEBUG) { print(1); } print(2);";
+      const src = `${PRINT_DECL} declare const DEBUG: boolean; if (DEBUG) { print(1); } print(2);`;
 
       const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: false } })));
 
@@ -76,8 +79,7 @@ describe("conditional-compilation", () => {
     });
 
     it("folds to matching else-if branch", () => {
-      const src =
-        'declare const PLATFORM: string; if (PLATFORM === "web") { print(1); } else if (PLATFORM === "native") { print(2); } else { print(3); }';
+      const src = `${PRINT_DECL} declare const PLATFORM: string; if (PLATFORM === "web") { print(1); } else if (PLATFORM === "native") { print(2); } else { print(3); }`;
 
       const lua = normalizeLua(compile(src, ccOpts({ PLATFORM: { env: "X", default: "native" } })));
 
@@ -108,21 +110,21 @@ describe("conditional-compilation", () => {
     it.each([
       {
         name: "logical AND with negation",
-        src: "declare const A: boolean, B: boolean; if (A && !B) { print(1); }",
+        src: `${PRINT_DECL} declare const A: boolean, B: boolean; if (A && !B) { print(1); }`,
         expected: "print(1)",
       },
       {
         name: "logical OR",
-        src: "declare const A: boolean, B: boolean; if (A || B) { print(1); }",
+        src: `${PRINT_DECL} declare const A: boolean, B: boolean; if (A || B) { print(1); }`,
         expected: "print(1)",
       },
       {
         name: "numeric equality",
-        src: "declare const VAL: number; if (VAL === 42) { print(1); }",
+        src: `${PRINT_DECL} declare const VAL: number; if (VAL === 42) { print(1); }`,
         expected: "print(1)",
       },
-      { name: "literal true", src: "if (true) { print(1); }", expected: "print(1)" },
-      { name: "literal false", src: "if (false) { print(1); }", expected: "" },
+      { name: "literal true", src: `${PRINT_DECL} if (true) { print(1); }`, expected: "print(1)" },
+      { name: "literal false", src: `${PRINT_DECL} if (false) { print(1); }`, expected: "" },
     ])("folds $name condition", ({ src, expected }) => {
       expect(normalizeLua(compile(src, opts))).toBe(expected);
     });
@@ -130,6 +132,7 @@ describe("conditional-compilation", () => {
 
   describe("switch-statement folding", () => {
     const src = `
+      ${PRINT_DECL}
       declare const P: string;
       switch (P) {
         case "a": print(1); break;
@@ -151,8 +154,7 @@ describe("conditional-compilation", () => {
   });
 
   describe("diagnostics", () => {
-    const partialSrc =
-      "declare const DEBUG: boolean, unknown: boolean; if (DEBUG && unknown) { print(1); }";
+    const partialSrc = `${PRINT_DECL} declare const DEBUG: boolean, unknown: boolean; if (DEBUG && unknown) { print(1); }`;
 
     it("warns on partially resolvable conditions", () => {
       const { diagnostics } = compileWithDiagnostics(
@@ -175,21 +177,24 @@ describe("conditional-compilation", () => {
 
   describe("edge cases", () => {
     it("does not fold when rule is disabled", () => {
-      const lua = compile("if (true) { print(1); }", {
+      const lua = compile(`${PRINT_DECL} if (true) { print(1); }`, {
         pluginOptions: { rules: { "conditional-compilation": false } },
       });
       expect(lua).toContain("if true then");
     });
 
     it("interacts with other rules correctly", () => {
-      const lua = compile("declare const DEBUG: boolean; if (DEBUG) { print(Math.floor(1.5)); }", {
-        pluginOptions: {
-          rules: {
-            "conditional-compilation": { constants: { DEBUG: { env: "X", default: true } } },
-            "math-intrinsics": true,
+      const lua = compile(
+        `${PRINT_DECL} declare const DEBUG: boolean; if (DEBUG) { print(Math.floor(1.5)); }`,
+        {
+          pluginOptions: {
+            rules: {
+              "conditional-compilation": { constants: { DEBUG: { env: "X", default: true } } },
+              "math-intrinsics": true,
+            },
           },
         },
-      });
+      );
       // math-intrinsics converts Math.floor(1.5) to 1.5 - 1.5 % 1,
       // then constant-folding reduces it to 1
       expect(normalizeLua(lua)).toBe("print(1)");

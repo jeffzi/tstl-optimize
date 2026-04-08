@@ -223,7 +223,7 @@ describe("debug-strip", () => {
     it("coexists with other rules (different SyntaxKinds)", () => {
       const lua = compile(
         ["declare const x: number;", "const a = Math.floor(x);", 'print("debug");'].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": true } } },
+        enabled,
       );
       expect(normalizeLua(lua)).toBe("a = x - x % 1");
     });

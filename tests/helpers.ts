@@ -42,7 +42,7 @@ function transpile(
 
 function extractLua(result: tstl.TranspileVirtualProjectResult): string {
   const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.code >= 100_000,
+    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
   );
   if (errors.length > 0) {
     const msgs = errors
@@ -51,7 +51,7 @@ function extractLua(result: tstl.TranspileVirtualProjectResult): string {
     throw new Error(msgs);
   }
   const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
-  if (file === undefined) {
+  if (file === undefined || file.lua === undefined) {
     throw new Error("No Lua output.");
   }
   return file.lua;
