@@ -1,4 +1,8 @@
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import createPlugin from "../../src/index";
 import { compile, normalizeLua } from "../helpers";
 
 describe("merge-locals", () => {
@@ -327,6 +331,101 @@ describe("merge-locals", () => {
       );
       // The function captures global_var (not in the current run), so it CAN be merged with 'a'.
       expect(lua).toContain("local a, fn");
+    });
+  });
+
+  describe("source position propagation", () => {
+    /**
+     * Compile TS source with the optimize plugin and capture the Lua AST via afterPrint.
+     * Returns the top-level Lua File node so tests can inspect AST properties like line/column.
+     */
+    function compileToAst(source: string): tstl.File {
+      const plugin = createPlugin();
+      let capturedAst: tstl.File | undefined;
+
+      const spyPlugin: tstl.Plugin = {
+        afterPrint(_program, _options, _emitHost, result) {
+          const file = result[0];
+          if (file && "luaAst" in file && file.luaAst) {
+            capturedAst = file.luaAst as tstl.File;
+          }
+        },
+      };
+
+      tstl.transpileVirtualProject(
+        { "main.ts": source },
+        {
+          noHeader: true,
+          luaPlugins: [{ plugin }, { plugin: spyPlugin }],
+          noImplicitSelf: true,
+          luaTarget: tstl.LuaTarget.Lua51,
+          strict: true,
+          target: ts.ScriptTarget.ESNext,
+          lib: ["lib.esnext.d.ts"],
+          types: ["@typescript-to-lua/language-extensions"],
+        },
+      );
+
+      if (!capturedAst) {
+        throw new Error("Failed to capture Lua AST from afterPrint");
+      }
+      return capturedAst;
+    }
+
+    /**
+     * Find the first VariableDeclarationStatement whose left-hand identifiers
+     * match the given names, searching inside the first function body.
+     */
+    function findMergedLocal(
+      ast: tstl.File,
+      names: string[],
+    ): tstl.VariableDeclarationStatement | undefined {
+      // The function declaration is the first top-level statement.
+      // TSTL emits module-level functions as AssignmentStatement (kind=4),
+      // not VariableDeclarationStatement (kind=3).
+      const fnDecl = ast.statements[0];
+      const right = tstl.isVariableDeclarationStatement(fnDecl)
+        ? fnDecl.right
+        : tstl.isAssignmentStatement(fnDecl)
+          ? fnDecl.right
+          : undefined;
+      const fnExpr = right?.[0];
+      if (!fnExpr || !tstl.isFunctionExpression(fnExpr)) return undefined;
+
+      for (const stmt of fnExpr.body.statements) {
+        if (!tstl.isVariableDeclarationStatement(stmt)) continue;
+        const leftNames = stmt.left.map((id) => id.text);
+        if (names.every((n) => leftNames.includes(n))) {
+          return stmt;
+        }
+      }
+      return undefined;
+    }
+
+    it("merged statement carries line and column of the first original statement", () => {
+      const ast = compileToAst(`
+        function f(): number {
+          const a = 1;
+          const b = 2;
+          return a + b;
+        }
+      `);
+
+      const merged = findMergedLocal(ast, ["a", "b"]);
+      if (merged === undefined) {
+        expect.fail("merged local not found");
+      }
+
+      // The first identifier in the merged statement (a) retains position info
+      // from TSTL's transpilation. The merged statement itself should carry
+      // that same position so source maps remain accurate.
+      const firstIdentifier = merged.left[0];
+      expect(firstIdentifier.line).toBeDefined();
+
+      // The merged statement node should inherit position from the first
+      // original statement, not be left as undefined.
+      expect(merged.line).toBe(firstIdentifier.line);
+      expect(merged.column).toBe(firstIdentifier.column);
     });
   });
 });

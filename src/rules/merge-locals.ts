@@ -193,7 +193,11 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
       const rights = hasAnyRhs
         ? run.map((s) => (s.right && s.right.length > 0 ? s.right[0] : tstl.createNilLiteral()))
         : undefined;
-      result.push(tstl.createVariableDeclarationStatement(lefts, rights));
+      const merged = tstl.createVariableDeclarationStatement(lefts, rights);
+      const origin = run[0];
+      if (origin.line !== undefined) merged.line = origin.line;
+      if (origin.column !== undefined) merged.column = origin.column;
+      result.push(merged);
     } else if (run.length === 1) {
       result.push(run[0]);
     }
@@ -222,7 +226,15 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
   // into non-mergeable statements; mergeable statements with FunctionExpression values
   // nested inside table constructors (e.g. `const obj = { fn: function() {...} }`)
   // would otherwise be missed.
-  walkStatements(result, {
+  mergeFunctionBodiesShallow(result);
+
+  statements.length = 0;
+  statements.push(...result);
+}
+
+/** Shallow-walk statements to find FunctionExpressions and merge their bodies. */
+function mergeFunctionBodiesShallow(statements: tstl.Statement[]): void {
+  walkStatements(statements, {
     expr: (expr, _replace, control) => {
       if (tstl.isFunctionExpression(expr)) {
         mergeConsecutiveLocals(expr.body.statements);
@@ -231,9 +243,6 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
     },
     shallow: true,
   });
-
-  statements.length = 0;
-  statements.push(...result);
 }
 
 /**
@@ -243,20 +252,7 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
  */
 function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
   for (const stmt of statements) {
-    if (tstl.isVariableDeclarationStatement(stmt)) {
-      // local fn = function() ... end — recurse into function expression body
-      const rhs = stmt.right?.[0];
-      if (rhs && tstl.isFunctionExpression(rhs)) {
-        mergeConsecutiveLocals(rhs.body.statements);
-      }
-    } else if (tstl.isAssignmentStatement(stmt)) {
-      // function foo() ... end — emitted as assignment with FunctionExpression RHS
-      for (const rhs of stmt.right) {
-        if (tstl.isFunctionExpression(rhs)) {
-          mergeConsecutiveLocals(rhs.body.statements);
-        }
-      }
-    } else if (tstl.isDoStatement(stmt)) {
+    if (tstl.isDoStatement(stmt)) {
       mergeConsecutiveLocals(stmt.statements);
     } else if (tstl.isIfStatement(stmt)) {
       mergeConsecutiveLocals(stmt.ifBlock.statements);
@@ -277,18 +273,6 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
       mergeConsecutiveLocals(stmt.body.statements);
     }
   }
-
-  // Additionally: find FunctionExpressions at any expression depth (call arguments,
-  // table field values, etc.) that the loop above misses.
-  walkStatements(statements, {
-    expr: (expr, _replace, control) => {
-      if (tstl.isFunctionExpression(expr)) {
-        mergeConsecutiveLocals(expr.body.statements);
-        control.skip();
-      }
-    },
-    shallow: true,
-  });
 }
 
 export const createVisitors: RuleFactory = () => ({
@@ -296,7 +280,13 @@ export const createVisitors: RuleFactory = () => ({
     const nodes = context.superTransformNode(node);
     const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
     if (!file || !tstl.isFile(file) || !file.statements) return file;
+
+    // Module-level locals are not merged, but we must recurse into blocks
+    // and find any top-level FunctionExpressions.
     recurseIntoFunctionBodies(file.statements);
+
+    mergeFunctionBodiesShallow(file.statements);
+
     return file;
   },
 });
