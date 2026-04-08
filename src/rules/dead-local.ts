@@ -61,21 +61,54 @@ function eliminateDeadLocals(statements: tstl.Statement[]): void {
 }
 
 /**
+ * Visits FunctionExpression nodes found in "stored" expression positions — variable/assignment
+ * RHS, call arguments, table field values — but NOT call callee positions (IIFEs).
+ * Calls the visitor for each found FunctionExpression; does not descend into their bodies
+ * (the visitor is responsible for that).
+ */
+function visitStoredFunctionExprs(
+  expr: tstl.Expression,
+  visitor: (fn: tstl.FunctionExpression) => void,
+): void {
+  if (tstl.isFunctionExpression(expr)) {
+    visitor(expr);
+  } else if (tstl.isCallExpression(expr)) {
+    // Visit params (arguments), but NOT expr.expression (the callee) to avoid processing IIFEs.
+    for (const param of expr.params) {
+      visitStoredFunctionExprs(param, visitor);
+    }
+  } else if (tstl.isMethodCallExpression(expr)) {
+    for (const param of expr.params) {
+      visitStoredFunctionExprs(param, visitor);
+    }
+  } else if (tstl.isTableExpression(expr)) {
+    for (const field of expr.fields) {
+      visitStoredFunctionExprs(field.value, visitor);
+    }
+  } else if (tstl.isParenthesizedExpression(expr)) {
+    visitStoredFunctionExprs(expr.expression, visitor);
+  }
+}
+
+/**
  * Recursively processes nested function bodies to eliminate dead locals in each scope.
  *
- * TSTL emits function declarations as AssignmentStatement or VariableDeclarationStatement
- * with a FunctionExpression RHS. Because walkStatements with shallow:true stops at those
- * boundaries, we must descend into them explicitly.
+ * Finds FunctionExpression nodes in stored positions (variable/assignment RHS, call
+ * arguments, table field values) within all reachable statement lists, including compound
+ * statement bodies (do, if, while, for, etc.). Skips IIFEs (callee positions).
  */
 function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
   for (const stmt of statements) {
-    if (tstl.isAssignmentStatement(stmt) || tstl.isVariableDeclarationStatement(stmt)) {
-      const rights = tstl.isAssignmentStatement(stmt) ? stmt.right : (stmt.right ?? []);
-      for (const rhs of rights) {
-        if (tstl.isFunctionExpression(rhs)) {
-          eliminateDeadLocals(rhs.body.statements);
-        }
+    if (tstl.isVariableDeclarationStatement(stmt)) {
+      for (const rhs of stmt.right ?? []) {
+        visitStoredFunctionExprs(rhs, (fn) => eliminateDeadLocals(fn.body.statements));
       }
+    } else if (tstl.isAssignmentStatement(stmt)) {
+      for (const rhs of stmt.right) {
+        visitStoredFunctionExprs(rhs, (fn) => eliminateDeadLocals(fn.body.statements));
+      }
+    } else if (tstl.isExpressionStatement(stmt)) {
+      visitStoredFunctionExprs(stmt.expression, (fn) => eliminateDeadLocals(fn.body.statements));
     } else if (tstl.isDoStatement(stmt)) {
       recurseIntoFunctionBodies(stmt.statements);
     } else if (tstl.isIfStatement(stmt)) {
@@ -102,8 +135,8 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
 export const createVisitors: RuleFactory = (): tstl.Visitors => ({
   [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context) => {
     const nodes = context.superTransformNode(node);
-    const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-    if (!file?.statements) return file;
+    const file = Array.isArray(nodes) ? nodes[0] : nodes;
+    if (!file || !tstl.isFile(file) || !file.statements) return file;
     // Module-level locals are intentionally excluded — only function-scope dead locals are removed.
     recurseIntoFunctionBodies(file.statements);
     return file;

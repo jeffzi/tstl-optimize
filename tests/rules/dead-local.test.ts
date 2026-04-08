@@ -46,8 +46,8 @@ describe("dead-local", () => {
         return a + b;
       }
     `);
-    expect(lua).toContain("a");
-    expect(lua).toContain("b");
+    expect(lua).toMatch(/local a, b\b/);
+    expect(lua).toContain("a + b");
   });
 
   it("preserves variable used inside a nested closure", () => {
@@ -78,5 +78,41 @@ describe("dead-local", () => {
       pluginOptions: { rules: { "dead-local": false } },
     });
     expect(lua).toContain("x = 42");
+  });
+
+  describe("nested function expressions", () => {
+    it.each([
+      {
+        name: "callback passed as a call argument",
+        source: `
+          declare function run(fn: () => number): void;
+          function outer() {
+            run(function(): number {
+              const unused = 42;
+              const result = 1;
+              return result;
+            });
+          }
+        `,
+      },
+      {
+        name: "function stored in a table value",
+        source: `
+          function outer() {
+            const obj = { handler: function(): number {
+              const unused = 42;
+              const result = 1;
+              return result;
+            } };
+            return obj;
+          }
+        `,
+      },
+    ])("removes unused local inside $name", ({ source }) => {
+      const lua = compile(source);
+
+      expect(lua).not.toContain("unused");
+      expect(lua).toContain("result");
+    });
   });
 });
