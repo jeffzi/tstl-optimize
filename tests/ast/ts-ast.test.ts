@@ -138,6 +138,18 @@ describe("hasSideEffects", () => {
     it("returns true for method with side-effectful computed key", () => {
       expect(hasSideEffects(parseExpr("({ [foo()]() {} })"))).toBe(true);
     });
+
+    it("returns true for class expression", () => {
+      expect(hasSideEffects(parseExpr("(class {})"))).toBe(true);
+    });
+
+    it("returns true for class expression with static field initializer", () => {
+      expect(hasSideEffects(parseExpr("(class { static x = foo(); })"))).toBe(true);
+    });
+
+    it("returns true for class expression with decorator", () => {
+      expect(hasSideEffects(parseExpr("(class {})"))).toBe(true);
+    });
   });
 
   describe("recursive detection", () => {
@@ -222,6 +234,39 @@ describe("hasSideEffects", () => {
           hasSideEffects(parseExpr("tag`${foo()}`"), SideEffectOptions.AssumeTaggedTemplatePure),
         ).toBe(true);
       });
+    });
+  });
+
+  describe("SideEffectOptions type", () => {
+    it.each([
+      { flag: "None", value: SideEffectOptions.None, expected: 0 },
+      {
+        flag: "AssumeTaggedTemplatePure",
+        value: SideEffectOptions.AssumeTaggedTemplatePure,
+        expected: 1,
+      },
+      {
+        flag: "AssumeConstructorPure",
+        value: SideEffectOptions.AssumeConstructorPure,
+        expected: 2,
+      },
+    ])("accepts individual flag $flag", ({ value, expected }) => {
+      const opt: SideEffectOptions = value;
+      expect(opt).toBe(expected);
+    });
+
+    it("accepts bitwise OR combinations of flags", () => {
+      const combined: SideEffectOptions =
+        SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure;
+
+      expect(combined).toBe(3);
+    });
+
+    it("works with hasSideEffects when both flags are combined", () => {
+      const combined: SideEffectOptions =
+        SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure;
+
+      expect(hasSideEffects(parseExpr("tag`hello`"), combined)).toBe(false);
     });
   });
 });

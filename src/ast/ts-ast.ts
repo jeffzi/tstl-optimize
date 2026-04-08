@@ -7,7 +7,11 @@ export const SideEffectOptions = {
   AssumeConstructorPure: 2,
 } as const;
 
-export type SideEffectOptions = (typeof SideEffectOptions)[keyof typeof SideEffectOptions];
+/**
+ * Bitwise flag set for side effect assumptions.
+ * Combine flags using bitwise OR: `SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure`
+ */
+export type SideEffectOptions = number;
 
 function queueTemplateSpans(templateNode: ts.TemplateExpression, queue: ts.Expression[]): void {
   for (const span of templateNode.templateSpans) queue.push(span.expression);
@@ -140,6 +144,13 @@ export function hasSideEffects(
           }
         }
         break;
+
+      // Class expressions are always side-effectful because they may have:
+      // - static field initializers with side effects
+      // - decorators with side effects
+      // - computed property names with side effects
+      case ts.SyntaxKind.ClassExpression:
+        return true;
     }
 
     if (queue.length === 0) return false;
