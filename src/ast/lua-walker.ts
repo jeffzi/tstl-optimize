@@ -158,6 +158,10 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
           visitExpr(lhs.index, (n) => {
             lhs.index = n;
           });
+        } else if (tstl.isIdentifier(lhs)) {
+          visitExpr(lhs, (_n) => {
+            // No-op replace for identifier LHS (walker just needs to visit it)
+          });
         }
       }
       for (let i = 0; i < stmt.right.length && !stopped; i++) {

@@ -54,11 +54,11 @@ describe("walkStatements", () => {
       expect(exprs.filter(tstl.isNumericLiteral).map((e) => e.value)).toContain(42);
     });
 
-    it("does NOT visit plain Identifier assignment targets", () => {
+    it("visits plain Identifier assignment targets", () => {
       const stmts: tstl.Statement[] = [tstl.createAssignmentStatement(id("x"), num(1))];
       const exprs = collectExprs(stmts);
       const identifiers = exprs.filter(tstl.isIdentifier).map((e) => e.text);
-      expect(identifiers).not.toContain("x");
+      expect(identifiers).toContain("x");
     });
 
     it("visits condition, if-block, and else-block expressions", () => {
