@@ -262,4 +262,71 @@ describe("merge-locals", () => {
       expect(lua).toContain("local a, b = 1, 2");
     });
   });
+
+  describe("closure upvalue capture", () => {
+    it("does NOT merge function that captures upvalue from current run", () => {
+      const lua = normalizeLua(
+        compile(`
+          function f(): number {
+            const a = 1;
+            const fn = function() { return a; };
+            return fn();
+          }
+        `),
+      );
+      // The function captures 'a', so it must NOT be merged with 'a = 1' in the same statement.
+      // In Lua, RHS are evaluated left-to-right BEFORE binding, so `a` in the closure would be nil.
+      // Must have separate local statements.
+      expect(lua).not.toContain("local a, fn");
+      expect(lua).toContain("local a = 1");
+      expect(lua).toContain("local function fn()");
+    });
+
+    it("does NOT merge function with nested capture of upvalue from run", () => {
+      const lua = normalizeLua(
+        compile(`
+          function f(): number {
+            const a = 1;
+            const t = { fn: function() { return a; } };
+            return t.fn();
+          }
+        `),
+      );
+      // The nested function in the table captures 'a', so the table constructor
+      // references 'a'. Must NOT merge with 'a = 1'.
+      expect(lua).not.toContain("local a, t");
+      expect(lua).toContain("local a = 1");
+      expect(lua).toContain("local t = {");
+    });
+
+    it("merges function with NO upvalue capture from run", () => {
+      const lua = normalizeLua(
+        compile(`
+          function f(): number {
+            const a = 1;
+            const fn = function() { return 2; };
+            const b = 3;
+            return fn() + a + b;
+          }
+        `),
+      );
+      // The function does NOT capture 'a' or 'b', so it CAN be merged.
+      expect(lua).toContain("local a, fn, b");
+    });
+
+    it("merges function that captures external variable (not from run)", () => {
+      const lua = normalizeLua(
+        compile(`
+          let global_var = 10;
+          function f(): number {
+            const a = 1;
+            const fn = function() { return global_var; };
+            return fn() + a;
+          }
+        `),
+      );
+      // The function captures global_var (not in the current run), so it CAN be merged with 'a'.
+      expect(lua).toContain("local a, fn");
+    });
+  });
 });
