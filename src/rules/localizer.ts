@@ -360,24 +360,28 @@ function processFile(
 function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingContext): void {
   const { threshold, alreadyHoisted, context, isRootAllowed } = ctx;
 
+  walkStatements(statements, {
+    shallow: true,
+    expr: (expr, _replace, control) => {
+      if (tstl.isFunctionExpression(expr)) {
+        const paramNames = new Set(expr.params?.filter(tstl.isIdentifier).map((p) => p.text));
+        hoistScope(
+          expr.body.statements,
+          threshold,
+          true,
+          alreadyHoisted,
+          context,
+          paramNames,
+          isRootAllowed,
+        );
+        processFunctionBodies(expr.body.statements, ctx);
+        control.skip();
+      }
+    },
+  });
+
   for (const stmt of statements) {
-    if (
-      (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) &&
-      tstl.isFunctionDefinition(stmt)
-    ) {
-      const fn = stmt.right[0];
-      const paramNames = new Set(fn.params?.filter(tstl.isIdentifier).map((p) => p.text));
-      hoistScope(
-        fn.body.statements,
-        threshold,
-        true,
-        alreadyHoisted,
-        context,
-        paramNames,
-        isRootAllowed,
-      );
-      processFunctionBodies(fn.body.statements, ctx);
-    } else if (tstl.isDoStatement(stmt)) {
+    if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
       processFunctionBodies(stmt.ifBlock.statements, ctx);
