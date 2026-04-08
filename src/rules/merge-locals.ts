@@ -11,9 +11,6 @@ import type { RuleFactory } from "../config";
  * capture detection (functions evaluated before binding in multi-assignment).
  */
 function referencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boolean {
-  if (tstl.isFunctionExpression(expr)) {
-    return functionBodyReferencesAnyOf(expr.body.statements, names);
-  }
   return expressionReferencesAnyOf(expr, names);
 }
 
@@ -25,8 +22,24 @@ function functionBodyReferencesAnyOf(
   statements: tstl.Statement[],
   names: ReadonlySet<string>,
 ): boolean {
+  let activeNames = names;
+
   for (const stmt of statements) {
-    if (statementReferencesAnyOf(stmt, names)) return true;
+    if (statementReferencesAnyOf(stmt, activeNames)) return true;
+
+    if (tstl.isVariableDeclarationStatement(stmt)) {
+      let nextNames: Set<string> | undefined;
+      for (const lhs of stmt.left) {
+        if (tstl.isIdentifier(lhs) && activeNames.has(lhs.text)) {
+          if (!nextNames) nextNames = new Set(activeNames);
+          nextNames.delete(lhs.text);
+        }
+      }
+      if (nextNames) {
+        if (nextNames.size === 0) return false;
+        activeNames = nextNames;
+      }
+    }
   }
   return false;
 }
@@ -154,7 +167,21 @@ function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<str
   }
 
   if (tstl.isFunctionExpression(expr)) {
-    return functionBodyReferencesAnyOf(expr.body.statements, names);
+    let activeNames = names;
+    if (expr.params) {
+      let nextNames: Set<string> | undefined;
+      for (const param of expr.params) {
+        if (tstl.isIdentifier(param) && activeNames.has(param.text)) {
+          if (!nextNames) nextNames = new Set(activeNames);
+          nextNames.delete(param.text);
+        }
+      }
+      if (nextNames) {
+        if (nextNames.size === 0) return false;
+        activeNames = nextNames;
+      }
+    }
+    return functionBodyReferencesAnyOf(expr.body.statements, activeNames);
   }
 
   // Literals, nil, boolean, string, number: no references.
