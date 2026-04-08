@@ -1,6 +1,7 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { isLuaExprPure } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import type { ConstantValue, RuleFactory } from "../config";
 
@@ -114,8 +115,22 @@ function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue
     case tstl.SyntaxKind.LengthOperator:
       if (typeof operand === "string") return operand.length;
       break;
+    case tstl.SyntaxKind.NegationOperator:
+      if (typeof operand === "number") return -operand;
+      break;
   }
   return undefined;
+}
+
+/** Returns true only if every condition in the if/elseif chain is side-effect-free. */
+function allConditionsPure(stmt: tstl.IfStatement): boolean {
+  if (!isLuaExprPure(stmt.condition)) return false;
+  let cursor = stmt.elseBlock;
+  while (cursor && tstl.isIfStatement(cursor)) {
+    if (!isLuaExprPure(cursor.condition)) return false;
+    cursor = cursor.elseBlock;
+  }
+  return true;
 }
 
 function optimizeControlFlow(statements: tstl.Statement[]): void {
@@ -161,11 +176,21 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
         }
       }
 
-      if (allBranchesEmpty) {
+      if (allBranchesEmpty && allConditionsPure(stmt)) {
         statements.splice(i, 1);
         i--;
       } else if (pruneFrom !== undefined) {
-        pruneFrom.elseBlock = undefined;
+        // Only prune trailing empty elseif branches whose conditions are pure.
+        let canPrune = true;
+        let toCheck = pruneFrom.elseBlock;
+        while (toCheck && tstl.isIfStatement(toCheck)) {
+          if (!isLuaExprPure(toCheck.condition)) {
+            canPrune = false;
+            break;
+          }
+          toCheck = toCheck.elseBlock;
+        }
+        if (canPrune) pruneFrom.elseBlock = undefined;
       }
     } else if (tstl.isDoStatement(stmt)) {
       optimizeControlFlow(stmt.statements);
@@ -185,9 +210,9 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context) => {
       const nodes = context.superTransformNode(node);
-      const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
+      const file = Array.isArray(nodes) ? nodes[0] : nodes;
 
-      if (!file?.statements) return file;
+      if (!file || !tstl.isFile(file) || !file.statements) return file;
 
       // Fold constants via repeated bottom-up passes until stable (max 10 to bound
       // pathological cases — in practice 1–2 passes suffice for real code).
@@ -212,6 +237,16 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
                 }
               }
             } else if (tstl.isUnaryExpression(expr)) {
+              // Only fold NegationOperator when the operand is itself a unary expression
+              // (i.e. double-negation like -(-x)). Folding -(literal) would produce a
+              // raw NumericLiteral with a negative value that TSTL prints without
+              // parentheses, breaking operator precedence in expressions like (-4.2)^(-4.2).
+              if (
+                expr.operator === tstl.SyntaxKind.NegationOperator &&
+                !tstl.isUnaryExpression(expr.operand)
+              ) {
+                return;
+              }
               const operandVal = getLiteralValue(expr.operand);
               if (operandVal !== undefined) {
                 const folded = evaluateUnary(expr.operator, operandVal);
