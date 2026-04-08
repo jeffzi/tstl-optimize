@@ -107,7 +107,7 @@ function evaluateBinary(
 function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue | undefined {
   switch (op) {
     case tstl.SyntaxKind.NotOperator:
-      return !operand;
+      return typeof operand === "boolean" ? !operand : undefined;
     case tstl.SyntaxKind.BitwiseNotOperator:
       if (typeof operand === "number") return ~operand;
       break;
