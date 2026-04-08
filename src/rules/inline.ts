@@ -3,7 +3,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { deepCloneExpression } from "../ast/deep-clone";
-import { hasSideEffects } from "../ast/ts-ast";
+import { hasSideEffects, SideEffectOptions } from "../ast/ts-ast";
 import { isRecord, type RuleFactory, resolveEffectiveStrict, resolveInlineConfig } from "../config";
 
 const FUNCTION_SCOPE = 2 as Parameters<tstl.TransformationContext["pushScope"]>[0];
@@ -225,7 +225,13 @@ function canInline(
     if (!paramSymbol) return "parameter symbol could not be resolved";
     if (isParamWritten(bodyExpr, paramSymbol, checker)) return "parameter is written inside body";
     const usageCount = countReferences(bodyExpr, paramSymbol, checker);
-    if (usageCount !== 1 && hasSideEffects(callNode.arguments[i]))
+    if (
+      usageCount !== 1 &&
+      hasSideEffects(
+        callNode.arguments[i],
+        usageCount > 1 ? SideEffectOptions.ConsiderIdentityMutating : SideEffectOptions.None,
+      )
+    )
       return usageCount === 0
         ? "argument with side effects is not used"
         : "argument with side effects is used multiple times";

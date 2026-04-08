@@ -5,6 +5,7 @@ export const SideEffectOptions = {
   None: 0,
   AssumeTaggedTemplatePure: 1,
   AssumeConstructorPure: 2,
+  ConsiderIdentityMutating: 4,
 } as const;
 
 /**
@@ -118,10 +119,20 @@ export function hasSideEffects(
 
       // --- Containers: queue children ---
       case ts.SyntaxKind.ArrayLiteralExpression:
-        queue.push(...(current as ts.ArrayLiteralExpression).elements);
-        break;
-
       case ts.SyntaxKind.ObjectLiteralExpression:
+      case ts.SyntaxKind.FunctionExpression:
+      case ts.SyntaxKind.ArrowFunction:
+        if (options & SideEffectOptions.ConsiderIdentityMutating) return true;
+        if (current.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+          queue.push(...(current as ts.ArrayLiteralExpression).elements);
+          break;
+        }
+        if (
+          current.kind === ts.SyntaxKind.FunctionExpression ||
+          current.kind === ts.SyntaxKind.ArrowFunction
+        ) {
+          break; // defining a function is pure
+        }
         for (const child of (current as ts.ObjectLiteralExpression).properties) {
           if (child.name?.kind === ts.SyntaxKind.ComputedPropertyName)
             queue.push(child.name.expression);
