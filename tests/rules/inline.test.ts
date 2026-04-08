@@ -93,6 +93,7 @@ describe("inline", () => {
   describe("void multi-statement inline", () => {
     it("expands body into do...end block", () => {
       const lua = compile(`
+        declare function print(...args: any[]): void;
         /** @inline */
         function setup(x: number) { let a = x + 1; print(a); }
         setup(10);
@@ -105,6 +106,7 @@ describe("inline", () => {
 
     it("hoists arguments to temporaries to preserve order", () => {
       const lua = compile(`
+        declare function print(...args: any[]): void;
         /** @inline */
         function foo(a: number, b: number) { print(a + b); }
         declare function s1(): number; declare function s2(): number;
@@ -168,6 +170,7 @@ describe("inline", () => {
 
     it("inlines multi-statement body with switch containing break", () => {
       expectInlinedWithoutWarnings(`
+        declare function print(...args: any[]): void;
         /** @inline */
         function classify(x: number): void {
           let label: string;
@@ -203,10 +206,11 @@ describe("inline", () => {
   describe("warnings and rejections", () => {
     it.each([
       { body: "if (x > 0) return; print(x);", name: "early return" },
-      { body: "break;", name: "break" },
-      { body: "continue;", name: "continue" },
+      { body: "// @ts-ignore\nbreak;", name: "break" },
+      { body: "// @ts-ignore\ncontinue;", name: "continue" },
     ])("rejects bodies with $name", ({ body }) => {
       const { diagnostics } = compileWithDiagnostics(`
+          declare function print(...args: any[]): void;
           /** @inline */
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
@@ -248,6 +252,20 @@ describe("inline", () => {
       `);
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("side effects");
+    });
+
+    describe("zero-usage param with side-effecting arg", () => {
+      it("rejects inlining and emits a side-effect diagnostic", () => {
+        const { diagnostics } = compileWithDiagnostics(`
+          /** @inline */
+          function f(_x: number) { return 42; }
+          declare function sideEffect(): number;
+          f(sideEffect());
+        `);
+
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0].messageText).toContain("side effects");
+      });
     });
   });
 

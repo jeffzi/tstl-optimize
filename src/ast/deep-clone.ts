@@ -64,6 +64,7 @@ export function deepCloneExpression(node: tstl.Expression): tstl.Expression {
       const { params, dots, body, flags } = node as tstl.FunctionExpression;
       const clonedParams = params?.map((p) => deepCloneExpression(p) as tstl.Identifier);
       const clonedDots = dots ? (tstl.cloneNode(dots) as tstl.DotsLiteral) : undefined;
+      // createFunctionExpression requires a Block — fall back to empty block if body was stripped.
       const clonedBody = body
         ? tstl.createBlock(deepCloneStatements(body.statements))
         : tstl.createBlock([]);

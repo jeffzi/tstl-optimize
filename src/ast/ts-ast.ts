@@ -5,9 +5,14 @@ export const SideEffectOptions = {
   None: 0,
   AssumeTaggedTemplatePure: 1,
   AssumeConstructorPure: 2,
+  ConsiderIdentityMutating: 4,
 } as const;
 
-export type SideEffectOptions = (typeof SideEffectOptions)[keyof typeof SideEffectOptions];
+/**
+ * Bitwise flag set for side effect assumptions.
+ * Combine flags using bitwise OR: `SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure`
+ */
+export type SideEffectOptions = number;
 
 function queueTemplateSpans(templateNode: ts.TemplateExpression, queue: ts.Expression[]): void {
   for (const span of templateNode.templateSpans) queue.push(span.expression);
@@ -114,10 +119,20 @@ export function hasSideEffects(
 
       // --- Containers: queue children ---
       case ts.SyntaxKind.ArrayLiteralExpression:
-        queue.push(...(current as ts.ArrayLiteralExpression).elements);
-        break;
-
       case ts.SyntaxKind.ObjectLiteralExpression:
+      case ts.SyntaxKind.FunctionExpression:
+      case ts.SyntaxKind.ArrowFunction:
+        if (options & SideEffectOptions.ConsiderIdentityMutating) return true;
+        if (current.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+          queue.push(...(current as ts.ArrayLiteralExpression).elements);
+          break;
+        }
+        if (
+          current.kind === ts.SyntaxKind.FunctionExpression ||
+          current.kind === ts.SyntaxKind.ArrowFunction
+        ) {
+          break; // defining a function is pure
+        }
         for (const child of (current as ts.ObjectLiteralExpression).properties) {
           if (child.name?.kind === ts.SyntaxKind.ComputedPropertyName)
             queue.push(child.name.expression);
@@ -140,6 +155,13 @@ export function hasSideEffects(
           }
         }
         break;
+
+      // Class expressions are always side-effectful because they may have:
+      // - static field initializers with side effects
+      // - decorators with side effects
+      // - computed property names with side effects
+      case ts.SyntaxKind.ClassExpression:
+        return true;
     }
 
     if (queue.length === 0) return false;

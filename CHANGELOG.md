@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **constant-folding** rule — evaluate constant expressions at compile time.
+- **dead-local** rule — eliminate unused local variables.
+- **debug-strip** rule now includes `console` in its default namespaces.
+- **merge-locals** rule — merge local variable declarations with subsequent assignments.
+
+### Fixed
+
+- **conditional-compilation** rule now handles loose equality and `switch` edge cases.
+- **inline** rule now correctly validates side-effects for unused arguments, handles cross-module type-only references, variable declaration shadowing, and `export {}` block elimination.
+- **math-intrinsics** rule now uses proper deep clone for power expressions.
+- Core AST traversal now recognizes side effects in class expressions and correctly visits assignment targets.
+
+## [0.5.0] - 2026-04-02
+
+### Added
+
 - **inline** rule now supports multi-statement function bodies at statement-level call sites,
   expanding them in-place wrapped in `do...end` blocks. Supported patterns: void statement,
   variable-declaration, return site, and destructuring (object, array, and `LuaMultiReturn`).
@@ -90,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations
 - Runnable examples with generation script
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.2.0...v0.3.0

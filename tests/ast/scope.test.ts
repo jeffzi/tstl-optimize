@@ -247,22 +247,15 @@ describe("collectScopeInfo", () => {
 });
 
 describe("buildChainExpression", () => {
-  it("builds a two-segment chain", () => {
-    const expr = buildChainExpression("math.floor");
+  it.each([
+    { chain: "math.floor" },
+    { chain: "config.graphics.width" },
+    { chain: "a.b.c.d" },
+    { chain: "os.clock" },
+  ])("builds and round-trips $chain", ({ chain }) => {
+    const expr = buildChainExpression(chain);
     expect(tstl.isTableIndexExpression(expr)).toBe(true);
-    expect(luaPropertyChain(expr)).toBe("math.floor");
-  });
-
-  it("builds a three-segment chain", () => {
-    const expr = buildChainExpression("config.graphics.width");
-    expect(tstl.isTableIndexExpression(expr)).toBe(true);
-    expect(luaPropertyChain(expr)).toBe("config.graphics.width");
-  });
-
-  it("round-trips with luaPropertyChain", () => {
-    expect(luaPropertyChain(buildChainExpression("math.cos"))).toBe("math.cos");
-    expect(luaPropertyChain(buildChainExpression("a.b.c.d"))).toBe("a.b.c.d");
-    expect(luaPropertyChain(buildChainExpression("os.clock"))).toBe("os.clock");
+    expect(luaPropertyChain(expr)).toBe(chain);
   });
 
   it("throws for single-segment chain", () => {

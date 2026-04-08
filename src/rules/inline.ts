@@ -3,7 +3,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { deepCloneExpression } from "../ast/deep-clone";
-import { hasSideEffects } from "../ast/ts-ast";
+import { hasSideEffects, SideEffectOptions } from "../ast/ts-ast";
 import { isRecord, type RuleFactory, resolveEffectiveStrict, resolveInlineConfig } from "../config";
 
 const FUNCTION_SCOPE = 2 as Parameters<tstl.TransformationContext["pushScope"]>[0];
@@ -225,8 +225,16 @@ function canInline(
     if (!paramSymbol) return "parameter symbol could not be resolved";
     if (isParamWritten(bodyExpr, paramSymbol, checker)) return "parameter is written inside body";
     const usageCount = countReferences(bodyExpr, paramSymbol, checker);
-    if (usageCount > 1 && hasSideEffects(callNode.arguments[i]))
-      return "argument with side effects is used multiple times";
+    if (
+      usageCount !== 1 &&
+      hasSideEffects(
+        callNode.arguments[i],
+        usageCount > 1 ? SideEffectOptions.ConsiderIdentityMutating : SideEffectOptions.None,
+      )
+    )
+      return usageCount === 0
+        ? "argument with side effects is not used"
+        : "argument with side effects is used multiple times";
   }
 
   return true;
@@ -1307,17 +1315,29 @@ export const createVisitors: RuleFactory = (checker, config) => {
   // tstl.Visitors type doesn't model this protocol, so we cast here.
   type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
   const visitors: Record<number, LooseVisitor> = {
-    [ts.SyntaxKind.CallExpression]: (node, context) =>
-      handleCallExpression(node as ts.CallExpression, checker, context, strictMode),
-    [ts.SyntaxKind.ExpressionStatement]: (node, context) =>
-      handleExpressionStatement(node as ts.ExpressionStatement, checker, context, strictMode),
-    [ts.SyntaxKind.VariableStatement]: (node, context) =>
-      handleVariableStatement(node as ts.VariableStatement, checker, context, strictMode) ??
-      handleVariableStatementDeclaration(node as ts.VariableStatement),
-    [ts.SyntaxKind.ReturnStatement]: (node, context) =>
-      handleReturnStatement(node as ts.ReturnStatement, checker, context, strictMode),
-    [ts.SyntaxKind.FunctionDeclaration]: (node) =>
-      handleFunctionDeclaration(node as ts.FunctionDeclaration),
+    [ts.SyntaxKind.CallExpression]: (node, context) => {
+      if (!ts.isCallExpression(node)) return undefined;
+      return handleCallExpression(node, checker, context, strictMode);
+    },
+    [ts.SyntaxKind.ExpressionStatement]: (node, context) => {
+      if (!ts.isExpressionStatement(node)) return undefined;
+      return handleExpressionStatement(node, checker, context, strictMode);
+    },
+    [ts.SyntaxKind.VariableStatement]: (node, context) => {
+      if (!ts.isVariableStatement(node)) return undefined;
+      return (
+        handleVariableStatement(node, checker, context, strictMode) ??
+        handleVariableStatementDeclaration(node)
+      );
+    },
+    [ts.SyntaxKind.ReturnStatement]: (node, context) => {
+      if (!ts.isReturnStatement(node)) return undefined;
+      return handleReturnStatement(node, checker, context, strictMode);
+    },
+    [ts.SyntaxKind.FunctionDeclaration]: (node) => {
+      if (!ts.isFunctionDeclaration(node)) return undefined;
+      return handleFunctionDeclaration(node);
+    },
   };
   return visitors as tstl.Visitors;
 };
