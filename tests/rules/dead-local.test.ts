@@ -115,4 +115,58 @@ describe("dead-local", () => {
       expect(lua).toContain("result");
     });
   });
+
+  describe("write-only locals (assignment without read)", () => {
+    it("preserves declaration when local is assigned after initialization", () => {
+      const lua = compile(`
+        function f() {
+          let x = 1;
+          x = 5;
+        }
+      `);
+      // The declaration must be kept because x is assigned to
+      expect(lua).toContain("local x");
+      expect(lua).toMatch(/local x\s*=\s*1/);
+    });
+
+    it("preserves declaration when local with impure RHS is assigned", () => {
+      const lua = compile(`
+        declare function foo(): number;
+        declare function bar(): number;
+        function f() {
+          let x = foo();
+          x = bar();
+        }
+      `);
+      // x is assigned to, so declaration must be kept (even though RHS is impure)
+      expect(lua).toContain("local x");
+      expect(lua).toContain("foo()");
+    });
+
+    it("still removes unused local when NOT followed by assignment", () => {
+      const lua = compile(`
+        function f() {
+          const x = 1;
+          const y = 2;
+          return y;
+        }
+      `);
+      // x is never read and never assigned — should be eliminated
+      expect(lua).not.toContain("x");
+      expect(lua).toContain("y");
+    });
+
+    it("preserves declaration when local is assigned and then read", () => {
+      const lua = compile(`
+        function f() {
+          let x = 1;
+          x = 2;
+          return x;
+        }
+      `);
+      // x is assigned and read — declaration must be kept
+      expect(lua).toContain("local x");
+      expect(lua).toContain("x = 2");
+    });
+  });
 });
