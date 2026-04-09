@@ -60,7 +60,10 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
         for (const lhs of stmt.left) {
           if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
         }
-        if (tstl.isFunctionDefinition(stmt)) {
+        // Only collect function parameters at module scope (shallow=false).
+        // At function scope (shallow=true), nested function parameters should NOT
+        // prevent hoisting of outer scope chains.
+        if (!shallow && tstl.isFunctionDefinition(stmt)) {
           for (const p of stmt.right[0].params?.filter(tstl.isIdentifier) ?? []) {
             scopeDefs.add(p.text);
           }
