@@ -94,14 +94,25 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
     if (expressionReferencesAnyOf(stmt.controlVariableInitializer, names)) return true;
     if (expressionReferencesAnyOf(stmt.limitExpression, names)) return true;
     if (stmt.stepExpression && expressionReferencesAnyOf(stmt.stepExpression, names)) return true;
-    if (functionBodyReferencesAnyOf(stmt.body.statements, names)) return true;
+    // The control variable shadows the outer name inside the loop body.
+    const forBodyNames = names.has(stmt.controlVariable.text)
+      ? new Set([...names].filter((n) => n !== stmt.controlVariable.text))
+      : names;
+    if (forBodyNames.size > 0 && functionBodyReferencesAnyOf(stmt.body.statements, forBodyNames))
+      return true;
     return false;
   }
 
   if (tstl.isForInStatement(stmt)) {
+    if (stmt.expressions.some((expr) => expressionReferencesAnyOf(expr, names))) return true;
+    // Control variables shadow outer names inside the loop body.
+    const shadowedByLoop = stmt.names.filter((id) => names.has(id.text)).map((id) => id.text);
+    const forInBodyNames =
+      shadowedByLoop.length > 0
+        ? new Set([...names].filter((n) => !shadowedByLoop.includes(n)))
+        : names;
     return (
-      stmt.expressions.some((expr) => expressionReferencesAnyOf(expr, names)) ||
-      functionBodyReferencesAnyOf(stmt.body.statements, names)
+      forInBodyNames.size > 0 && functionBodyReferencesAnyOf(stmt.body.statements, forInBodyNames)
     );
   }
 
