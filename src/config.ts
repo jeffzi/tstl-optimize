@@ -115,7 +115,7 @@ export function resolveConditionalCompilationConfig(
 ): ReadonlyMap<string, ConstantValue> | false {
   if (value === false || value === undefined) return false;
 
-  const constants = value === true ? {} : value.constants;
+  const constants = value === true ? {} : (value.constants ?? {});
   if (value !== true && value.enabled === false) return false;
 
   const resolved = new Map<string, ConstantValue>();

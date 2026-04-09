@@ -17,7 +17,7 @@ export function evaluateCondition(
   expr: ts.Expression,
   constants: ReadonlyMap<string, ConstantValue>,
 ): ConstantValue | undefined {
-  if (ts.isParenthesizedExpression(expr)) {
+  if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr)) {
     return evaluateCondition(expr.expression, constants);
   }
 
