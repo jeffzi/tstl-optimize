@@ -40,14 +40,25 @@ function transpile(
   });
 }
 
+function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChain): string {
+  if (typeof messageText === "string") {
+    return messageText;
+  }
+  const parts: string[] = [messageText.messageText];
+  let chain = messageText.next;
+  while (chain && chain.length > 0) {
+    parts.push(...chain.map((c) => extractDiagnosticMessage(c.messageText)));
+    chain = chain[0]?.next;
+  }
+  return parts.join("\n");
+}
+
 function extractLua(result: tstl.TranspileVirtualProjectResult): string {
   const errors = result.diagnostics.filter(
     (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
   );
   if (errors.length > 0) {
-    const msgs = errors
-      .map((d) => (typeof d.messageText === "string" ? d.messageText : d.messageText.messageText))
-      .join("\n");
+    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
     throw new Error(msgs);
   }
   const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
