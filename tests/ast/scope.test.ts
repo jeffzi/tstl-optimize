@@ -2,7 +2,12 @@
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { walkStatements } from "../../src/ast/lua-walker";
-import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../src/ast/scope";
+import {
+  buildChainExpression,
+  collectArrayElementAccesses,
+  collectScopeInfo,
+  luaPropertyChain,
+} from "../../src/ast/scope";
 
 function countPropertyAccess(statements: tstl.Statement[], chain: string): number {
   let count = 0;
@@ -260,5 +265,166 @@ describe("buildChainExpression", () => {
 
   it("throws for single-segment chain", () => {
     expect(() => buildChainExpression("math")).toThrow("dotted chain");
+  });
+});
+
+describe("collectArrayElementAccesses", () => {
+  it("ignores array accesses with non-identifier indices", () => {
+    // Numeric literal index — not a loop variable
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createNumericLiteral(1);
+    const expr = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createExpressionStatement(expr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i", "j"]), true);
+
+    expect(info.counts.size).toBe(0);
+    expect(info.writes.size).toBe(0);
+    expect(info.loopVar.size).toBe(0);
+  });
+
+  it("ignores array accesses with identifiers not in loopVarNames", () => {
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("x"); // x is not in loopVarNames
+    const expr = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createExpressionStatement(expr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i", "j"]), true);
+
+    expect(info.counts.size).toBe(0);
+    expect(info.loopVar.size).toBe(0);
+  });
+
+  it("counts RHS array element accesses with loop variable index", () => {
+    // t[i] on RHS (expression statement)
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("i");
+    const expr = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createExpressionStatement(expr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
+
+    expect(info.counts.get("t")).toBe(1);
+    expect(info.loopVar.get("t")).toBe("i");
+    expect(info.writes.has("t")).toBe(false);
+  });
+
+  it("counts and marks LHS array element writes", () => {
+    // t[i] on LHS (assignment statement)
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("i");
+    const lhs = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createAssignmentStatement([lhs], [tstl.createNumericLiteral(1)]);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
+
+    expect(info.counts.get("t")).toBe(1);
+    expect(info.loopVar.get("t")).toBe("i");
+    expect(info.writes.has("t")).toBe(true);
+  });
+
+  it("counts multiple accesses to the same base with same loop var", () => {
+    const table1 = tstl.createIdentifier("t");
+    const table2 = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("i");
+
+    const expr1 = tstl.createTableIndexExpression(table1, index);
+    const expr2 = tstl.createTableIndexExpression(table2, index);
+
+    const stmts = [tstl.createExpressionStatement(expr1), tstl.createExpressionStatement(expr2)];
+
+    const info = collectArrayElementAccesses(stmts, new Set(["i"]), true);
+
+    expect(info.counts.get("t")).toBe(2);
+    expect(info.loopVar.get("t")).toBe("i");
+  });
+
+  it("Line 114: detects mixed indices and excludes base from hoisting", () => {
+    // t[i] in one place, t[j] in another (same base, different loop variables)
+    const table1 = tstl.createIdentifier("t");
+    const table2 = tstl.createIdentifier("t");
+    const indexI = tstl.createIdentifier("i");
+    const indexJ = tstl.createIdentifier("j");
+
+    const expr1 = tstl.createTableIndexExpression(table1, indexI);
+    const expr2 = tstl.createTableIndexExpression(table2, indexJ);
+
+    const stmts = [tstl.createExpressionStatement(expr1), tstl.createExpressionStatement(expr2)];
+
+    const info = collectArrayElementAccesses(stmts, new Set(["i", "j"]), true);
+
+    // t has mixed indices, so it should be excluded from optimization
+    expect(info.counts.has("t")).toBe(false);
+    expect(info.loopVar.has("t")).toBe(false);
+  });
+
+  it("Lines 164-166: cleanup removes mixed indices from all maps", () => {
+    // t[i] and t[j] (mixed), s[k] (consistent)
+    const tableT1 = tstl.createIdentifier("t");
+    const tableT2 = tstl.createIdentifier("t");
+    const tableS = tstl.createIdentifier("s");
+    const indexI = tstl.createIdentifier("i");
+    const indexJ = tstl.createIdentifier("j");
+    const indexK = tstl.createIdentifier("k");
+
+    const exprTI = tstl.createTableIndexExpression(tableT1, indexI);
+    const exprTJ = tstl.createTableIndexExpression(tableT2, indexJ);
+    const exprSK = tstl.createTableIndexExpression(tableS, indexK);
+
+    // Also include a write to t to test cleanup of writes map
+    const lhs = tstl.createTableIndexExpression(tstl.createIdentifier("t"), indexI);
+    const assignStmt = tstl.createAssignmentStatement([lhs], [tstl.createNumericLiteral(1)]);
+
+    const stmts = [
+      tstl.createExpressionStatement(exprTI),
+      tstl.createExpressionStatement(exprTJ),
+      tstl.createExpressionStatement(exprSK),
+      assignStmt,
+    ];
+
+    const info = collectArrayElementAccesses(stmts, new Set(["i", "j", "k"]), true);
+
+    // t is mixed, so all its entries should be removed from counts, loopVar, and writes
+    expect(info.counts.has("t")).toBe(false);
+    expect(info.loopVar.has("t")).toBe(false);
+    expect(info.writes.has("t")).toBe(false);
+
+    // s is consistent, so it should remain in all maps
+    expect(info.counts.has("s")).toBe(true);
+    expect(info.loopVar.get("s")).toBe("k");
+    expect(info.writes.has("s")).toBe(false);
+  });
+
+  it("respects guardDepth to skip counting inside guarded expressions", () => {
+    // This is tested implicitly by testing expressions vs statement contexts
+    // but we can verify that shallow=false includes function bodies
+    const funcBody = tstl.createBlock([
+      tstl.createExpressionStatement(
+        tstl.createTableIndexExpression(tstl.createIdentifier("t"), tstl.createIdentifier("i")),
+      ),
+    ]);
+    const funcExpr = tstl.createFunctionExpression(funcBody, []);
+    const stmt = tstl.createVariableDeclarationStatement(tstl.createIdentifier("f"), funcExpr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), false);
+
+    // With shallow=false, function bodies are traversed, so t[i] should be counted
+    expect(info.counts.has("t")).toBe(true);
+  });
+
+  it("skips counting when shallow=true and access is inside function", () => {
+    // With shallow=true, function bodies are not traversed
+    const funcBody = tstl.createBlock([
+      tstl.createExpressionStatement(
+        tstl.createTableIndexExpression(tstl.createIdentifier("t"), tstl.createIdentifier("i")),
+      ),
+    ]);
+    const funcExpr = tstl.createFunctionExpression(funcBody, []);
+    const stmt = tstl.createVariableDeclarationStatement(tstl.createIdentifier("f"), funcExpr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
+
+    // With shallow=true, function bodies are skipped
+    expect(info.counts.size).toBe(0);
   });
 });

@@ -105,6 +105,7 @@ describe("conditional-compilation", () => {
       A: { env: "X", default: true },
       B: { env: "X", default: false },
       VAL: { env: "X", default: 42 },
+      DEBUG: { env: "X", default: true },
     });
 
     it.each([
@@ -125,6 +126,11 @@ describe("conditional-compilation", () => {
       },
       { name: "literal true", src: `${PRINT_DECL} if (true) { print(1); }`, expected: "print(1)" },
       { name: "literal false", src: `${PRINT_DECL} if (false) { print(1); }`, expected: "" },
+      {
+        name: "type assertion in parenthesized expression with OR",
+        src: `${PRINT_DECL} declare const DEBUG: boolean; if ((false as any) || DEBUG) { print(1); }`,
+        expected: "print(1)",
+      },
     ])("folds $name condition", ({ src, expected }) => {
       expect(normalizeLua(compile(src, opts))).toBe(expected);
     });

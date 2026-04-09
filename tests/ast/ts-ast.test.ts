@@ -269,4 +269,57 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("tag`hello`"), combined)).toBe(false);
     });
   });
+
+  describe("coverage: line 134 & 154", () => {
+    it("line 134: function expression is pure (returns false without ConsiderIdentityMutating)", () => {
+      // Direct node creation for function expression
+      const fnExpr = ts.factory.createFunctionExpression(
+        undefined,
+        undefined,
+        "myFunc",
+        undefined,
+        [],
+        undefined,
+        ts.factory.createBlock([]),
+      );
+      expect(hasSideEffects(fnExpr, SideEffectOptions.None)).toBe(false);
+    });
+
+    it("line 134: function expression is side-effectful with ConsiderIdentityMutating flag", () => {
+      const fnExpr = ts.factory.createFunctionExpression(
+        undefined,
+        undefined,
+        "myFunc",
+        undefined,
+        [],
+        undefined,
+        ts.factory.createBlock([]),
+      );
+      expect(hasSideEffects(fnExpr, SideEffectOptions.ConsiderIdentityMutating)).toBe(true);
+    });
+
+    it("line 134: arrow function is pure (returns false without ConsiderIdentityMutating)", () => {
+      const arrowFn = ts.factory.createArrowFunction(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
+        ts.factory.createBlock([]),
+      );
+      expect(hasSideEffects(arrowFn, SideEffectOptions.None)).toBe(false);
+    });
+
+    it("line 134: arrow function is side-effectful with ConsiderIdentityMutating flag", () => {
+      const arrowFn = ts.factory.createArrowFunction(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
+        ts.factory.createBlock([]),
+      );
+      expect(hasSideEffects(arrowFn, SideEffectOptions.ConsiderIdentityMutating)).toBe(true);
+    });
+  });
 });

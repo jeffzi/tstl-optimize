@@ -449,4 +449,57 @@ describe("merge-locals", () => {
       expect(merged.column).toBe(firstIdentifier.column);
     });
   });
+
+  describe("extra coverage", () => {
+    it("detects upvalue capture across control flow statements", () => {
+      const code = `
+        function f(): void {
+          const a = 1;
+          const fn1 = function() { if (a as any) {} };
+          const b = 1;
+          const fn2 = function() { while (b as any) {} };
+          const c = 1;
+          const fn3 = function() { do {} while (c as any); };
+          const d = 1;
+          const fn4 = function() { for (let i = 0; i < d; i++) {} };
+          const e = 1;
+          const fn5 = function() { for (const k in e as any) {} };
+        }
+      `;
+      const lua = normalizeLua(compile(code));
+      ["a", "b", "c", "d", "e"].forEach((varName, index) => {
+        const fnName = `fn${index + 1}`;
+        expect(lua).not.toContain(`local ${varName}, ${fnName}`);
+      });
+    });
+
+    it("detects upvalue capture across various expression types", () => {
+      const code = `
+        function f(): void {
+          const a = 1;
+          const fn1 = function() { let x = a; };
+          let b = 1;
+          const fn2 = function() { b = 2; };
+          const c = 1;
+          const fn3 = function() { (c as any)(); };
+          const d = 1;
+          const fn4 = function() { const obj = {d}; (obj as any).method(d); };
+          const e = 1;
+          const fn5 = function() { -e; };
+          const f_var = 1;
+          const fn6 = function() { (f_var); };
+          const g = 1;
+          const fn7 = function() { let t: any = { [g]: 1 }; return t[g]; };
+          const h = 1;
+          const fn8 = function() { return h + 1; };
+        }
+      `;
+      const lua = normalizeLua(compile(code));
+      const vars = ["a", "b", "c", "d", "e", "f_var", "g", "h"];
+      vars.forEach((varName, index) => {
+        const fnName = `fn${index + 1}`;
+        expect(lua).not.toContain(`local ${varName}, ${fnName}`);
+      });
+    });
+  });
 });

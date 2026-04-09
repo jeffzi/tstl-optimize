@@ -1,6 +1,31 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { isRuleEnabled, parseConfig, resolveInlineConfig } from "../src/config";
+import {
+  isRuleEnabled,
+  parseConfig,
+  resolveConditionalCompilationConfig,
+  resolveInlineConfig,
+} from "../src/config";
+
+describe("resolveConditionalCompilationConfig", () => {
+  it("does not throw when object lacks constants property", () => {
+    const config = { enabled: true };
+
+    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed config to test defensive handling
+    const result = resolveConditionalCompilationConfig(config as any);
+
+    expect(result).toStrictEqual(new Map());
+  });
+
+  it("returns empty map when given object without constants", () => {
+    const config = { DEBUG: true };
+
+    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed config to test defensive handling
+    const result = resolveConditionalCompilationConfig(config as any);
+
+    expect(result).toStrictEqual(new Map());
+  });
+});
 
 describe("resolveInlineConfig", () => {
   it.each([
@@ -84,18 +109,9 @@ describe("property-based", () => {
   });
 
   it("boolean shorthand produces correct enabled state", () => {
-    const arbRuleBooleans = fc.record({
-      "conditional-compilation": fc.boolean(),
-      "constant-folding": fc.boolean(),
-      "remove-empty-branch": fc.boolean(),
-      "math-intrinsics": fc.boolean(),
-      "loop-rebase": fc.boolean(),
-      inline: fc.boolean(),
-      "dead-local": fc.boolean(),
-      "merge-locals": fc.boolean(),
-      localizer: fc.boolean(),
-      "debug-strip": fc.boolean(),
-    });
+    const arbRuleBooleans = fc.record(
+      Object.fromEntries(EXPECTED_RULE_KEYS.map((key) => [key, fc.boolean()])),
+    );
 
     fc.assert(
       fc.property(arbRuleBooleans, (ruleBooleans) => {

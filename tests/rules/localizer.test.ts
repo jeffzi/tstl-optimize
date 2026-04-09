@@ -367,6 +367,23 @@ describe("localizer", () => {
       expect(lua).toContain("arr[i]");
     });
 
+    it("localizes array element with write-only access (LHS writes counted)", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "for (const i of $range(0, n - 1)) {",
+          "  arr[i] = 1;",
+          "  arr[i] = 2;",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      // 2 LHS writes ≥ threshold 2 — should localize and write-back
+      expect(lua).toContain("local ____arr = arr[i]");
+      expect(lua).toContain("arr[i] = ____arr");
+    });
+
     it("does not localize non-loop-var index", () => {
       const lua = compile(
         [

@@ -98,4 +98,131 @@ describe("constant-folding", () => {
       expect(lua).toContain("sideEffect()");
     });
   });
+
+  describe("uncovered branches: unary evaluation and control flow dead-code elimination", () => {
+    it("folds double negation to positive value", () => {
+      // Lines 120-122: tests that unary NegationOperator folds correctly
+      // When operand is itself a unary expression (double negation)
+      const lua = compile(`
+        const x = -(-42);
+      `);
+      // Double negation should fold to positive
+      expect(lua).toContain("x = 42");
+    });
+
+    it("folds triple negation correctly", () => {
+      // Lines 120-122: additional test for NegationOperator path
+      const lua = compile(`
+        const x = -(-(-42));
+      `);
+      // Triple negation should fold to single negation
+      expect(lua).toContain("x = -42");
+    });
+
+    // Note: bitwise operations are not supported in Lua 5.1, so we skip testing
+    // the BitwiseNotOperator branch. The evaluateUnary function will return undefined
+    // for non-number operands or for bitwise ops on number operands in Lua 5.1 target.
+
+    it("folds logical-not on boolean literals", () => {
+      // Lines 110-111: tests NotOperator on boolean operand
+      const lua = compile(`
+        const x = !!!true;
+      `);
+      // !!!true = false
+      expect(lua).toContain("x = false");
+    });
+
+    it("removes unreachable statements after unconditional return in nested block", () => {
+      // Lines 143-144: tests the statement truncation after return in optimizeControlFlow
+      // Ensures statements after return are removed (the splicing logic)
+      const lua = compile(`
+        function f() {
+          const x = 1;
+          return x;
+          const unreachable1 = 2;
+          const unreachable2 = 3;
+          return unreachable1;
+        }
+      `);
+      // All statements after the first return should be removed
+      expect(lua).toContain("return x");
+      expect(lua).not.toContain("unreachable1");
+      expect(lua).not.toContain("unreachable2");
+    });
+
+    it("removes unreachable statements in if-block after return", () => {
+      // Lines 143-144: tests truncation within if-block bodies
+      const lua = compile(`
+        function f(cond: boolean) {
+          if (cond) {
+            const x = 1;
+            return x;
+            const unreachable = 2;
+          }
+          const afterIf = 3;
+          return afterIf;
+        }
+      `);
+      // Unreachable inside if block should be removed
+      expect(lua).not.toContain("unreachable");
+      // But afterIf is reachable
+      expect(lua).toContain("afterIf");
+    });
+
+    it("removes unreachable statements after return in do-block", () => {
+      // Lines 143-144: tests truncation within do-block bodies
+      const lua = compile(`
+        function f() {
+          do {
+            const x = 1;
+            return x;
+            const unreachable = 2;
+          } while (false);
+        }
+      `);
+      // Unreachable code after return in do-block should be removed
+      expect(lua).not.toContain("unreachable");
+    });
+
+    it("preserves all statements when no return is present", () => {
+      // Lines 143-144: negative case — no truncation when no return
+      const lua = compile(`
+        function f() {
+          const x = 1;
+          const y = 2;
+          const z = 3;
+          return x + y + z;
+        }
+      `);
+      // All statements should be present when return is at the end
+      expect(lua).toContain("x");
+      expect(lua).toContain("y");
+      expect(lua).toContain("z");
+    });
+
+    it("handles complex control flow with multiple returns", () => {
+      // Lines 143-144: tests truncation across multiple conditional paths
+      const lua = compile(`
+        function f(a: boolean, b: boolean) {
+          if (a) {
+            return 1;
+            const dead1 = 2;
+          }
+          if (b) {
+            return 3;
+            const dead2 = 4;
+          }
+          return 5;
+          const dead3 = 6;
+        }
+      `);
+      // All dead code after each return should be gone
+      expect(lua).not.toContain("dead1");
+      expect(lua).not.toContain("dead2");
+      expect(lua).not.toContain("dead3");
+      expect(lua).toContain("return 1");
+      expect(lua).toContain("return 3");
+      expect(lua).toContain("return 5");
+    });
+  });
 });
