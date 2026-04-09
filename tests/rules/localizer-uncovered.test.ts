@@ -676,7 +676,6 @@ describe("localizer uncovered branches", () => {
       expect(lua).not.toContain("local ____arr");
     });
   });
-
   describe("line 177: do statement early exit check - prevents hoisting when body has return", () => {
     it("prevents hoisting when do block has return at top level", () => {
       const lua = compile(

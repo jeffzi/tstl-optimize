@@ -17,7 +17,12 @@ export function evaluateCondition(
   expr: ts.Expression,
   constants: ReadonlyMap<string, ConstantValue>,
 ): ConstantValue | undefined {
-  if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr)) {
+  if (
+    ts.isParenthesizedExpression(expr) ||
+    ts.isAsExpression(expr) ||
+    ts.isNonNullExpression(expr) ||
+    ts.isTypeAssertionExpression(expr)
+  ) {
     return evaluateCondition(expr.expression, constants);
   }
 
@@ -35,6 +40,13 @@ export function evaluateCondition(
     const operand = evaluateCondition(expr.operand, constants);
     if (operand === undefined) return undefined;
     return !isTruthy(operand);
+  }
+
+  if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.MinusToken) {
+    const operand = evaluateCondition(expr.operand, constants);
+    if (operand === undefined) return undefined;
+    if (typeof operand === "number") return -operand;
+    return undefined;
   }
 
   if (ts.isBinaryExpression(expr)) {
@@ -98,8 +110,14 @@ function referencesKnownConstants(
   constants: ReadonlyMap<string, ConstantValue>,
 ): boolean {
   if (ts.isIdentifier(expr)) return constants.has(expr.text);
-  if (ts.isParenthesizedExpression(expr))
+  if (
+    ts.isParenthesizedExpression(expr) ||
+    ts.isAsExpression(expr) ||
+    ts.isNonNullExpression(expr) ||
+    ts.isTypeAssertionExpression(expr)
+  ) {
     return referencesKnownConstants(expr.expression, constants);
+  }
   if (ts.isPrefixUnaryExpression(expr)) return referencesKnownConstants(expr.operand, constants);
   if (ts.isBinaryExpression(expr))
     return (
@@ -213,28 +231,17 @@ export const createVisitors: RuleFactory = (_checker, config) => {
 
       const { clauses } = node.caseBlock;
 
-      // Check if there are any unresolved cases
       let hasUnresolvedCase = false;
+      let matchIndex = -1;
+
       for (let i = 0; i < clauses.length; i++) {
         const clause = clauses[i];
         if (ts.isCaseClause(clause)) {
           const caseValue = evaluateCondition(clause.expression, resolved);
           if (caseValue === undefined) {
             hasUnresolvedCase = true;
-            break;
-          }
-        }
-      }
-
-      // Find the first matching CaseClause, or fall back to DefaultClause
-      let matchIndex = -1;
-      for (let i = 0; i < clauses.length; i++) {
-        const clause = clauses[i];
-        if (ts.isCaseClause(clause)) {
-          const caseValue = evaluateCondition(clause.expression, resolved);
-          if (caseValue === switchValue) {
+          } else if (matchIndex === -1 && caseValue === switchValue) {
             matchIndex = i;
-            break;
           }
         }
       }
@@ -252,13 +259,33 @@ export const createVisitors: RuleFactory = (_checker, config) => {
       // No match and no default → strip entire switch
       if (matchIndex === -1) return undefined;
 
-      // Collect statements respecting fallthrough semantics
+      // Collect statements respecting fallthrough semantics.
+      // When a top-level statement is a Block, recurse into it and strip its
+      // direct breaks — but never descend into loops or nested switches, since
+      // their breaks belong to those constructs and must be preserved.
+      function collectStrippingCaseBreaks(stmts: readonly ts.Statement[]): ts.Statement[] {
+        const result: ts.Statement[] = [];
+        for (const s of stmts) {
+          if (ts.isBreakStatement(s)) {
+            // skip: case-level break, not a loop/switch break
+          } else if (
+            ts.isBlock(s) &&
+            !ts.isIterationStatement(s, false) &&
+            !ts.isSwitchStatement(s)
+          ) {
+            // Unwrap the block, recursing to strip any nested case-level breaks.
+            result.push(...collectStrippingCaseBreaks(s.statements));
+          } else {
+            result.push(s);
+          }
+        }
+        return result;
+      }
+
       const collected: ts.Statement[] = [];
       for (let i = matchIndex; i < clauses.length; i++) {
         const stmts = clauses[i].statements;
-        for (const s of stmts) {
-          if (!ts.isBreakStatement(s)) collected.push(s);
-        }
+        collected.push(...collectStrippingCaseBreaks(stmts));
         if (containsBreakOrReturn(stmts)) break;
       }
 

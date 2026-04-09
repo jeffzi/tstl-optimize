@@ -181,6 +181,37 @@ describe("conditional-compilation", () => {
     });
   });
 
+  describe("non-null and type assertions", () => {
+    const opts = ccOpts({
+      IS_DEBUG: { env: "X", default: true },
+      IS_ENABLED: { env: "X", default: false },
+    });
+
+    it("folds non-null assertion on boolean constant", () => {
+      const src = `${PRINT_DECL} declare const IS_DEBUG: boolean; if (IS_DEBUG!) { print(1); } else { print(2); }`;
+
+      const lua = normalizeLua(compile(src, opts));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it("folds type assertion on boolean constant", () => {
+      const src = `${PRINT_DECL} declare const IS_DEBUG: boolean; if (<any>IS_DEBUG) { print(1); } else { print(2); }`;
+
+      const lua = normalizeLua(compile(src, opts));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it("folds parenthesized non-null assertion on boolean constant", () => {
+      const src = `${PRINT_DECL} declare const IS_ENABLED: boolean; if ((IS_ENABLED!)) { print(1); } else { print(2); }`;
+
+      const lua = normalizeLua(compile(src, opts));
+
+      expect(lua).toBe("print(2)");
+    });
+  });
+
   describe("edge cases", () => {
     it("does not fold when rule is disabled", () => {
       const lua = compile(`${PRINT_DECL} if (true) { print(1); }`, {
@@ -251,6 +282,50 @@ describe("conditional-compilation", () => {
       // With an unconditional break after print(1), fallthrough should stop.
       // Only print(1) should appear.
       expect(lua).toBe("print(1)");
+    });
+  });
+
+  describe("switch case body in block", () => {
+    it("strips break from case body wrapped in block", () => {
+      const src = `
+        ${PRINT_DECL}
+        const MODE = 1 as const;
+        switch (MODE) {
+          case 1: {
+            print("body");
+            break;
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: 1 } })));
+
+      // The block should be opened and statements executed, but no break
+      expect(lua).toContain('print("body")');
+      expect(lua).not.toContain("break");
+    });
+
+    it("preserves nested break inside for loop in case block", () => {
+      const src = `
+        ${PRINT_DECL}
+        const MODE = 2 as const;
+        switch (MODE) {
+          case 2: {
+            for (let i = 0; i < 5; i++) {
+              if (i === 3) break;
+              print(i);
+            }
+            print("after loop");
+            break;
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: 2 } })));
+
+      // The loop's break should be preserved
+      expect(lua).toContain('print("after loop")');
+      expect(lua).toContain("break");
     });
   });
 
@@ -335,6 +410,34 @@ describe("conditional-compilation", () => {
       expect(lua).toContain("repeat");
       expect(lua).toContain("print(1)");
       expect(lua).toContain("print(2)");
+    });
+  });
+
+  describe("unary minus operator", () => {
+    it("folds negative numeric literal in equality check", () => {
+      const src = `${PRINT_DECL} declare const CONST: number; if (CONST === -1) { print(1); } else { print(2); }`;
+
+      const lua = normalizeLua(compile(src, ccOpts({ CONST: { env: "X", default: -1 } })));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it("negates numeric constant with minus operator", () => {
+      const src = `${PRINT_DECL} declare const FOO: number; if (-FOO === 5) { print(1); } else { print(2); }`;
+
+      const lua = normalizeLua(compile(src, ccOpts({ FOO: { env: "X", default: -5 } })));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it("does not fold negation of boolean constant", () => {
+      const src = `${PRINT_DECL} declare const FLAG: boolean; if (-FLAG === -1) { print(1); } else { print(2); }`;
+
+      const lua = normalizeLua(compile(src, ccOpts({ FLAG: { env: "X", default: true } })));
+
+      // -FLAG is undefined (cannot negate a boolean), so the condition cannot be fully resolved
+      // The if-statement should be preserved
+      expect(lua).toContain("if");
     });
   });
 });
