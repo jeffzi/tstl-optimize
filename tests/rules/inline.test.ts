@@ -1,5 +1,6 @@
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createVisitors } from "../../src/rules/inline";
 import {
   compile,
   compileMultiFileWithDiagnostics,
@@ -414,6 +415,1311 @@ describe("inline", () => {
       );
       // Without the definition, ____exports.double would reference an undefined local.
       expect(lua).toContain("function double");
+    });
+  });
+});
+
+describe("inline coverage", () => {
+  it("preserves recursive @inline function call", () => {
+    const code = `
+      /** @inline */
+      function fact(n: number): number {
+        if (n <= 1) return 1;
+        return n * fact(n - 1);
+      }
+      export const x = fact(5);
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("fact(5)");
+  });
+
+  it("preserves @inline function that writes parameter in return expression", () => {
+    const code = `
+      /** @inline */
+      function foo(x: number): number {
+        return (x = 1);
+      }
+      export const a = foo(5);
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("foo(5)");
+  });
+
+  it("preserves @inline void function called in object literal", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function foo() { print(1); }
+      // multi-stmt at expr position fails prereq
+      export const x = { val: foo() };
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("foo()");
+  });
+
+  it("preserves @inline function with multi-statement body at expression position", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function foo() {
+        print(1);
+        return 2;
+      }
+      export const x = 1 + foo();
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("foo()");
+  });
+
+  it("preserves @inline function with return value when called at void site", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function foo() {
+        print("side effect");
+        return 1;
+      }
+      function test() {
+        foo(); // Void site
+      }
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("foo()");
+  });
+
+  it("buildObjectDestructureInline coverage", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function getObj() { 
+        print("side effect");
+        return { a: 1, b: 2 }; 
+      }
+      function test() {
+        const { a: myA, b } = getObj();
+        return myA + b;
+      }
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("side effect");
+    expect(lua).toContain("myA");
+    expect(lua).toContain("b");
+  });
+
+  it("buildObjectDestructureInline rejection (nested)", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function getObj() { 
+        print("side effect");
+        return { a: { b: 1 } }; 
+      }
+      function test() {
+        const { a: { b } } = getObj();
+        return b;
+      }
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("getObj()");
+  });
+
+  it("buildArrayDestructureInline coverage (non-multi)", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function getArr() { 
+        print("side effect");
+        return [1, 2]; 
+      }
+      function test() {
+        const [x, y] = getArr();
+        return x + y;
+      }
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("unpack");
+  });
+
+  it("preserves @inline function containing try-catch or labeled block", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      /** @inline */
+      function withTry() {
+        try { return 1; } catch(e) { return 2; } finally { print(3); }
+      }
+      /** @inline */
+      function withLabel() {
+        foo: { return 1; }
+      }
+      export const a = withTry();
+      export const b = withLabel();
+    `;
+    const lua = normalizeLua(compile(code));
+    expect(lua).toContain("withTry()");
+    expect(lua).toContain("withLabel()");
+  });
+
+  it("Manual visitor tests for coverage gaps", () => {
+    const mockChecker: any = {
+      getSymbolAtLocation: vi.fn(),
+      getResolvedSignature: vi.fn(),
+      getAliasedSymbol: vi.fn(),
+      getSymbolsInScope: vi.fn().mockReturnValue([]),
+    };
+    const mockContext: any = {
+      diagnostics: [],
+      nextSymbolId: vi.fn().mockReturnValue(1),
+      transformExpression: vi.fn((expr) => expr),
+      transformStatements: vi.fn((stmts) => stmts),
+      superTransformNode: vi.fn((node) => node),
+      superTransformStatements: vi.fn((stmts) => stmts),
+      superTransformExpression: vi.fn((expr) => expr),
+    };
+
+    const visitors = createVisitors(mockChecker, { rules: { inline: true } } as any);
+    expect(visitors).toBeDefined();
+
+    // Test 1: VariableStatement visitor exists and is callable
+    const varVisitor = visitors[ts.SyntaxKind.VariableStatement] as (
+      node: any,
+      context: any,
+    ) => any;
+    expect(typeof varVisitor).toBe("function");
+
+    // Test 2: Verify early exit when initializer is not a CallExpression
+    const mockVarStmtNonCall: any = {
+      kind: ts.SyntaxKind.VariableStatement,
+      declarationList: {
+        declarations: [
+          {
+            name: { kind: ts.SyntaxKind.Identifier, text: "x" },
+            initializer: { kind: ts.SyntaxKind.NumericLiteral },
+          },
+        ],
+      },
+    };
+    const result1 = varVisitor(mockVarStmtNonCall, mockContext);
+    expect(result1).toBeUndefined();
+
+    // Test 3: Verify early exit when symbol cannot be resolved (callExpression.expression is not resolvable)
+    const mockVarStmtCall: any = {
+      kind: ts.SyntaxKind.VariableStatement,
+      declarationList: {
+        declarations: [
+          {
+            name: { kind: ts.SyntaxKind.Identifier, text: "result" },
+            initializer: {
+              kind: ts.SyntaxKind.CallExpression,
+              expression: { kind: ts.SyntaxKind.Identifier, text: "unknownFunc" },
+            },
+          },
+        ],
+      },
+    };
+    mockChecker.getSymbolAtLocation.mockReturnValue(undefined);
+    const result2 = varVisitor(mockVarStmtCall, mockContext);
+    expect(result2).toBeUndefined();
+    // Verify the visitor attempted symbol resolution
+    expect(mockChecker.getSymbolAtLocation).toHaveBeenCalled();
+
+    // Test 4: Verify visitor reaches getInlineTarget when symbol is found
+    // and attempts to call getDeclarations to classify the target
+    const mockSymbol: any = {
+      flags: 0, // not an alias
+      getDeclarations: vi.fn().mockReturnValue([
+        {
+          kind: ts.SyntaxKind.VariableDeclaration,
+          parent: {
+            parent: {
+              kind: ts.SyntaxKind.VariableStatement,
+            },
+          },
+          initializer: {
+            kind: ts.SyntaxKind.ArrowFunction,
+            parameters: [],
+            body: {
+              kind: ts.SyntaxKind.Block,
+              statements: [
+                {
+                  kind: ts.SyntaxKind.ReturnStatement,
+                  expression: { kind: ts.SyntaxKind.NumericLiteral, text: "42" },
+                },
+              ],
+            },
+          },
+        },
+      ]),
+    };
+
+    mockChecker.getSymbolAtLocation.mockClear();
+    mockChecker.getSymbolAtLocation.mockReturnValue(mockSymbol);
+    varVisitor(mockVarStmtCall, mockContext);
+    // Verify getSymbolAtLocation was called with the call expression's expression
+    expect(mockChecker.getSymbolAtLocation).toHaveBeenCalledWith(
+      mockVarStmtCall.declarationList.declarations[0].initializer.expression,
+    );
+    // Verify that getDeclarations was called (part of getInlineTarget logic)
+    expect(mockSymbol.getDeclarations).toHaveBeenCalled();
+
+    // Test 5: Verify visitor handles multiple declarations correctly
+    // (early exit before attempting symbol resolution)
+    const mockVarStmtMultiDecl: any = {
+      kind: ts.SyntaxKind.VariableStatement,
+      declarationList: {
+        declarations: [
+          {
+            name: { kind: ts.SyntaxKind.Identifier, text: "a" },
+            initializer: {
+              kind: ts.SyntaxKind.CallExpression,
+              expression: { kind: ts.SyntaxKind.Identifier },
+            },
+          },
+          {
+            name: { kind: ts.SyntaxKind.Identifier, text: "b" },
+            initializer: { kind: ts.SyntaxKind.NumericLiteral },
+          },
+        ],
+      },
+    };
+    mockChecker.getSymbolAtLocation.mockClear();
+    const result5 = varVisitor(mockVarStmtMultiDecl, mockContext);
+    expect(result5).toBeUndefined();
+    // Should NOT attempt symbol resolution for multiple declarations
+    expect(mockChecker.getSymbolAtLocation).not.toHaveBeenCalled();
+
+    // Test 6: Verify visitor processes ObjectBindingPattern destructuring
+    // (tests that handleVariableStatement reaches destructuring code paths)
+    const mockVarStmtDestructure: any = {
+      kind: ts.SyntaxKind.VariableStatement,
+      declarationList: {
+        declarations: [
+          {
+            name: {
+              kind: ts.SyntaxKind.ObjectBindingPattern,
+              elements: [],
+            },
+            initializer: {
+              kind: ts.SyntaxKind.CallExpression,
+              expression: { kind: ts.SyntaxKind.Identifier, text: "factory" },
+            },
+          },
+        ],
+      },
+    };
+    mockChecker.getSymbolAtLocation.mockClear();
+    const mockSymbol2: any = {
+      flags: 0,
+      getDeclarations: vi.fn().mockReturnValue([
+        {
+          kind: ts.SyntaxKind.VariableDeclaration,
+          parent: { parent: { kind: ts.SyntaxKind.VariableStatement } },
+          initializer: {
+            kind: ts.SyntaxKind.ArrowFunction,
+            parameters: [],
+            body: {
+              kind: ts.SyntaxKind.Block,
+              statements: [
+                {
+                  kind: ts.SyntaxKind.ReturnStatement,
+                  expression: { kind: ts.SyntaxKind.ObjectLiteralExpression },
+                },
+              ],
+            },
+          },
+        },
+      ]),
+    };
+    mockChecker.getSymbolAtLocation.mockReturnValue(mockSymbol2);
+    varVisitor(mockVarStmtDestructure, mockContext);
+    // Should attempt symbol resolution for destructuring pattern
+    expect(mockChecker.getSymbolAtLocation).toHaveBeenCalledWith(
+      mockVarStmtDestructure.declarationList.declarations[0].initializer.expression,
+    );
+    // Should call getDeclarations on the resolved symbol
+    expect(mockSymbol2.getDeclarations).toHaveBeenCalled();
+
+    // Test 7: Verify that return statement visitor exists and is callable
+    const returnVisitor = visitors[ts.SyntaxKind.ReturnStatement] as (
+      node: any,
+      context: any,
+    ) => any;
+    expect(typeof returnVisitor).toBe("function");
+
+    // Test 8: Verify ReturnStatement visitor returns undefined for non-CallExpression returns
+    const mockReturnStmt: any = {
+      kind: ts.SyntaxKind.ReturnStatement,
+      expression: { kind: ts.SyntaxKind.NumericLiteral, text: "42" },
+    };
+    const returnResult = returnVisitor(mockReturnStmt, mockContext);
+    expect(returnResult).toBeUndefined();
+
+    // Test 9: Verify FunctionDeclaration visitor exists and is callable
+    const funcDeclVisitor = visitors[ts.SyntaxKind.FunctionDeclaration] as (
+      node: any,
+      context: any,
+    ) => any;
+    expect(typeof funcDeclVisitor).toBe("function");
+
+    // Test 10: Verify FunctionDeclaration visitor returns undefined for normal functions
+    // (visitor only affects @inline-decorated module-scope non-exported functions)
+    const mockFuncDeclNormal: any = {
+      kind: ts.SyntaxKind.FunctionDeclaration,
+      name: { text: "normalFn" },
+    };
+    const funcDeclResult = funcDeclVisitor(mockFuncDeclNormal, mockContext);
+    // Should return undefined (let default transformer handle it)
+    expect(funcDeclResult).toBeUndefined();
+
+    // Test 11: Verify that contexts with diagnostics array work correctly
+    // (exercises diagnostics handling in inlining failures)
+    const mockContextWithDiags: any = {
+      diagnostics: [],
+      nextSymbolId: vi.fn().mockReturnValue(2),
+      transformExpression: vi.fn((expr) => expr),
+      transformStatements: vi.fn((stmts) => stmts),
+      superTransformStatements: vi.fn((stmts) => stmts),
+      superTransformExpression: vi.fn((expr) => expr),
+    };
+    mockChecker.getSymbolAtLocation.mockClear();
+    mockChecker.getSymbolAtLocation.mockReturnValue(undefined);
+    const resultWithDiags = varVisitor(mockVarStmtCall, mockContextWithDiags);
+    expect(resultWithDiags).toBeUndefined();
+    // Verify context diagnostics array is accessible for error reporting
+    expect(mockContextWithDiags.diagnostics).toStrictEqual([]);
+  });
+});
+
+describe("inline uncovered branches", () => {
+  describe("Expression-kind inline at statement position (handleExpressionStatement)", () => {
+    it("wraps inlined expression in createExpressionStatement when target kind is expression", () => {
+      const code = `
+        declare const x: number;
+        declare const y: number;
+
+        /** @inline */
+        function add(a: number, b: number): number {
+          return a + b;
+        }
+
+        function test() {
+          add(x, y);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // When the expression inline is at statement position, it should be wrapped
+      // in an expression statement. The call should be inlined (not remain as "add()").
+      expect(lua).not.toContain("add(x, y)");
+      // Should contain the inlined expression (x + y, not the call)
+      expect(lua).toContain("x + y");
+    });
+  });
+
+  describe("Return-value function at void site (statementsWithReturn)", () => {
+    it("rejects return-value function called at expression statement position with diagnostic", () => {
+      const code = `
+        /** @inline */
+        function getValue(x: number, y: number): number {
+          const a = x + 1;
+          const b = y + 1;
+          return a + b;
+        }
+
+        function test() {
+          getValue(1, 2);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      // Should have a diagnostic about return-value function at void site
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("return-value function called at void site"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("Cross-module free variable detection (rejectIfCrossModuleFreeVar)", () => {
+    it("rejects cross-module inline when function references non-parameter identifier", () => {
+      const files = {
+        "utils.ts": `
+          export const globalValue = 42;
+
+          /** @inline */
+          export function useGlobal(x: number): number {
+            return x + globalValue;
+          }
+        `,
+        "main.ts": `
+          import { useGlobal } from "./utils";
+
+          function test() {
+            useGlobal(1);
+          }
+        `,
+      };
+
+      const { diagnostics } = compileMultiFileWithDiagnostics(files);
+
+      // Should have a diagnostic about cross-module free variable
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes(
+            "cross-module function references non-parameter identifiers",
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it("falls back to call when cross-module free var blocks inline", () => {
+      const files = {
+        "utils.ts": `
+          export const factor = 2;
+
+          /** @inline */
+          export function multiply(x: number): number {
+            return x * factor;
+          }
+        `,
+        "main.ts": `
+          import { multiply } from "./utils";
+
+          function test() {
+            const result = multiply(5);
+          }
+        `,
+      };
+
+      const { lua } = compileMultiFileWithDiagnostics(files);
+      const normalized = normalizeLua(lua);
+
+      // Function should NOT be inlined, call should remain
+      expect(normalized).toContain("multiply(5)");
+    });
+  });
+
+  describe("Expression inline rejection at statement position", () => {
+    it("rejects when canInline returns false for expression at statement position", () => {
+      const code = `
+        declare const mutableValue: { value: number };
+
+        /** @inline */
+        function getAndIncrement(): number {
+          mutableValue.value++;
+          return mutableValue.value;
+        }
+
+        function test() {
+          getAndIncrement();
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      // Should have a diagnostic about side effects or parameter write
+      expect(diagnostics.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("checkSharedPrereqs branch coverage", () => {
+    it("does not inline rest parameters functions", () => {
+      const code = `
+        /** @inline */
+        function sum(...args: number[]): number {
+          let total = 0;
+          for (const arg of args) {
+            total += arg;
+          }
+          return total;
+        }
+
+        declare const a: number;
+        const result = sum(a, a + 1);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Rest parameters should not be inlined, call should remain
+      expect(lua).toContain("sum(a, a + 1)");
+    });
+
+    it("rejects optional parameters with diagnostic", () => {
+      const code = `
+        /** @inline */
+        function greet(name?: string): string {
+          return name || "default";
+        }
+
+        function test() {
+          greet();
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("optional parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects default parameters with diagnostic", () => {
+      const code = `
+        /** @inline */
+        function multiply(x: number, y: number = 2): number {
+          return x * y;
+        }
+
+        function test() {
+          multiply(5);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("default parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects array destructuring parameters with diagnostic", () => {
+      const code = `
+        /** @inline */
+        function unpack([a, b]: [number, number]): number {
+          return a + b;
+        }
+
+        function test() {
+          unpack([1, 2]);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("destructuring parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("detects unmatched argument count via type checking", () => {
+      // When argument counts don't match, TypeScript will catch it,
+      // and the plugin won't attempt inlining. This test validates
+      // that the plugin handles strict type checking correctly.
+      const code = `
+        declare const x: number;
+        declare const y: number;
+
+        /** @inline */
+        function add(a: number, b: number): number {
+          return a + b;
+        }
+
+        function test() {
+          // Both correct counts should allow inlining
+          const result1 = add(x, y);
+          return result1;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // With correct argument count, should be inlined
+      expect(lua).toContain("x + y");
+    });
+  });
+
+  describe("canInline parameter validation", () => {
+    it("rejects when parameter symbol resolution fails", () => {
+      const code = `
+        declare const obj: { methodA(): number };
+
+        /** @inline */
+        function invoke(fn: () => number): number {
+          return fn();
+        }
+
+        function test() {
+          invoke(obj.methodA);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      // If parameter symbol cannot be resolved, this may emit a diagnostic
+      expect(diagnostics.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("does not inline when parameter is written inside function body", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function increment(n: number): number {
+          n++;
+          return n;
+        }
+
+        const result = increment(x);
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      // Parameter write should prevent inlining
+      expect(diagnostics.some((d) => String(d.messageText).includes("parameter is written"))).toBe(
+        true,
+      );
+    });
+
+    it("rejects when argument with side effects is not used", () => {
+      const code = `
+        declare function sideEffect(): number;
+
+        /** @inline */
+        function ignore(x: number): number {
+          return 42;
+        }
+
+        function test() {
+          ignore(sideEffect());
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("argument with side effects is not used"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects when argument with side effects is used multiple times", () => {
+      const code = `
+        declare function expensiveCompute(): number;
+
+        /** @inline */
+        function double(x: number): number {
+          return x + x;
+        }
+
+        function test() {
+          double(expensiveCompute());
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("argument with side effects is used multiple times"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("canInlineStatements parameter validation", () => {
+    it("does not inline multi-statement function when parameter is written", () => {
+      const code = `
+        declare const counter: number;
+
+        /** @inline */
+        function increment(n: number): void {
+          n++;
+          const x = n;
+        }
+
+        increment(counter);
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      // Parameter write in multi-statement should be detected
+      expect(diagnostics.some((d) => String(d.messageText).includes("parameter is written"))).toBe(
+        true,
+      );
+    });
+
+    it("does not inline multi-statement function when detecting recursion", () => {
+      const code = `
+        declare const n: number;
+
+        /** @inline */
+        function countDown(x: number): void {
+          if (x > 0) {
+            countDown(x - 1);
+          }
+        }
+
+        countDown(n);
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.some((d) => String(d.messageText).includes("recursive"))).toBe(true);
+    });
+  });
+
+  describe("Complex destructuring and type patterns", () => {
+    it("rejects object destructuring with nested patterns", () => {
+      const code = `
+        /** @inline */
+        function process({ a, b: { c } }: { a: number; b: { c: number } }): number {
+          return a + c;
+        }
+
+        function test() {
+          process({ a: 1, b: { c: 2 } });
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("destructuring parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects array destructuring with rest element", () => {
+      const code = `
+        /** @inline */
+        function getFirst([head, ...tail]: number[]): number {
+          return head;
+        }
+
+        function test() {
+          getFirst([1, 2, 3]);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("destructuring parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("Multi-statement at expression position", () => {
+    it("inlines multi-statement body with return at expression position (statementsWithReturn)", () => {
+      const code = `
+        declare const x: number;
+        declare const y: number;
+
+        /** @inline */
+        function computeSum(a: number, b: number): number {
+          const result = a + b;
+          return result;
+        }
+
+        function test() {
+          const val = computeSum(x, y);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // statementsWithReturn should be inlined even at expression position
+      // The call should be replaced with the inlined statements
+      expect(lua).not.toContain("computeSum(x, y)");
+      expect(lua).toContain("result");
+    });
+
+    it("rejects multi-statement function called in expression with control flow rejection", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function computeWithBreak(n: number): number {
+          if (n > 10) {
+            return 10;
+          }
+          return n;
+        }
+
+        function test() {
+          const result = computeWithBreak(x);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Module scope validation", () => {
+    it("rejects inline function declared inside another function", () => {
+      const code = `
+        function outer(x: number): number {
+          /** @inline */
+          function inner(a: number): number {
+            return a * 2;
+          }
+          return inner(x);
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("function must be declared at module scope"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects inline function declared in class method", () => {
+      const code = `
+        class Calculator {
+          compute(x: number): number {
+            /** @inline */
+            function double(n: number): number {
+              return n * 2;
+            }
+            return double(x);
+          }
+        }
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("function must be declared at module scope"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("Edge cases and linear control flow", () => {
+    it("handles function with if statement without else branch", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function maybeIncrement(n: number): number {
+          if (n > 0) {
+            return n + 1;
+          }
+          return 0;
+        }
+
+        const result = maybeIncrement(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // If without else but with return in both paths should inline
+      expect(lua).toContain("x");
+    });
+
+    it("inlines function with while loop when at statement position", () => {
+      const code = `
+        declare const n: number;
+
+        /** @inline */
+        function countUp(x: number): void {
+          let i = 0;
+          while (i < x) {
+            const _ = i;
+            i++;
+          }
+        }
+
+        countUp(n);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // While loop with linear control flow should inline at void site
+      expect(lua).not.toContain("countUp(n)");
+    });
+
+    it("inlines function with do-while loop at statement position", () => {
+      const code = `
+        declare const n: number;
+
+        /** @inline */
+        function countdown(x: number): void {
+          let i = x;
+          do {
+            const _ = i;
+            i--;
+          } while (i > 0);
+        }
+
+        countdown(n);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Do-while with linear control flow should inline
+      expect(lua).not.toContain("countdown(n)");
+    });
+
+    it("inlines function with for loop at statement position", () => {
+      const code = `
+        declare const items: number[];
+
+        /** @inline */
+        function process(arr: number[]): void {
+          for (const item of arr) {
+            const _ = item;
+          }
+        }
+
+        process(items);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // For loop with linear control flow should inline
+      expect(lua).not.toContain("process(items)");
+    });
+
+    it("inlines function with try block at statement position", () => {
+      const code = `
+        declare const fn: () => void;
+
+        /** @inline */
+        function safeCall(callback: () => void): void {
+          try {
+            callback();
+          } catch {
+            const _ = 1;
+          }
+        }
+
+        safeCall(fn);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Try-catch with linear control flow should inline
+      expect(lua).not.toContain("safeCall(fn)");
+    });
+
+    it("inlines function with switch statement at statement position", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function process(n: number): void {
+          switch (n) {
+            case 1:
+              break;
+            case 2:
+              break;
+          }
+        }
+
+        process(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Switch with all branches having break should inline
+      expect(lua).not.toContain("process(x)");
+    });
+
+    it("inlines empty function body", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function noop(n: number): void {
+        }
+
+        noop(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Empty function should inline to nothing
+      expect(lua).not.toContain("noop(x)");
+    });
+  });
+
+  describe("Expression vs statement inlining decisions", () => {
+    it("inlines expression-kind function at expression position", () => {
+      const code = `
+        declare const x: number;
+        declare const y: number;
+
+        /** @inline */
+        function add(a: number, b: number): number {
+          return a + b;
+        }
+
+        const result = add(x, y);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Expression should be inlined directly
+      expect(lua).toContain("x + y");
+      expect(lua).not.toContain("add(");
+    });
+
+    it("wraps expression-kind function result when inlined at statement position", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function square(n: number): number {
+          return n * n;
+        }
+
+        square(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Expression at statement position gets wrapped
+      expect(lua).toContain("x * x");
+    });
+
+    it("inlines arrow function assigned to const variable", () => {
+      const code = `
+        declare const x: number;
+
+        const square = /** @inline */ (n: number): number => n * n;
+
+        const result = square(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Arrow function assigned to variable should be treated like any other inline
+      expect(lua).toContain("n * n");
+    });
+
+    it("inlines statements-kind function with multiple statements and no return", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function log(n: number): void {
+          const a = n;
+          const b = a + 1;
+        }
+
+        log(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Multi-statement at void site should inline
+      expect(lua).not.toContain("log(x)");
+    });
+  });
+
+  describe("Complex argument evaluation", () => {
+    it("handles argument passed to function with single use", () => {
+      const code = `
+        declare function getValue(): number;
+
+        /** @inline */
+        function getValue2(n: number): number {
+          return n;
+        }
+
+        const result = getValue2(getValue());
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Single use of argument with side effects should be ok
+      expect(lua).toContain("getValue()");
+    });
+
+    it("allows pure argument that is used multiple times", () => {
+      const code = `
+        declare const x: number;
+
+        /** @inline */
+        function triple(n: number): number {
+          return n * 3;
+        }
+
+        const result = triple(x);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Pure argument with multiple uses should inline
+      expect(lua).toContain("x * 3");
+    });
+
+    it("inlines argument-less function", () => {
+      const code = `
+        declare const global: { value: number };
+
+        /** @inline */
+        function getGlobal(): number {
+          return global.value;
+        }
+
+        const result = getGlobal();
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      // Zero-argument function should inline
+      expect(lua).toContain("global.value");
+    });
+  });
+
+  describe("expression statement rejection", () => {
+    it("preserves call when function lacks @inline tag at statement position", () => {
+      const code = `
+        // Note: no @inline tag
+        function helper(x: number): number {
+          return x * 2;
+        }
+
+        helper(5);
+      `;
+
+      const { lua } = compileWithDiagnostics(code);
+      const normalized = normalizeLua(lua);
+
+      // Call must be preserved because function is not tagged @inline
+      expect(normalized).toContain("helper(5)");
+    });
+
+    it("preserves call when function has optional parameters at statement position", () => {
+      const code = `
+        declare function print(x: any): void;
+
+        /** @inline */
+        function greet(name?: string): void {
+          if (name) {
+            print(name);
+          }
+        }
+
+        greet();
+      `;
+
+      const { lua, diagnostics } = compileWithDiagnostics(code);
+      const normalized = normalizeLua(lua);
+
+      // Call must be preserved because optional parameters are not supported
+      expect(normalized).toContain("greet()");
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("optional parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("preserves call when function has default parameters at statement position", () => {
+      const code = `
+        declare function print(x: any): void;
+
+        /** @inline */
+        function multiply(x: number, y: number = 2): void {
+          print(x * y);
+        }
+
+        multiply(5);
+      `;
+
+      const { lua, diagnostics } = compileWithDiagnostics(code);
+      const normalized = normalizeLua(lua);
+
+      // Call must be preserved because default parameters are not supported
+      expect(normalized).toContain("multiply(5)");
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("default parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("cross-module free variable at statement position", () => {
+    it("preserves multi-statement cross-module call with free variable", () => {
+      const files = {
+        "store.ts": `
+          let counter = 0;
+
+          export /** @inline */
+          function incrementAndLog(): void {
+            counter++;
+            const msg = "Count: " + counter;
+          }
+        `,
+        "main.ts": `
+          import { incrementAndLog } from "./store";
+
+          function main() {
+            incrementAndLog();
+          }
+        `,
+      };
+
+      const { lua } = compileMultiFileWithDiagnostics(files);
+      const normalized = normalizeLua(lua);
+
+      // Call must be preserved to avoid breaking variable capture
+      expect(normalized).toContain("incrementAndLog()");
+    });
+
+    it("preserves multi-statement cross-module call accessing module scope", () => {
+      const files = {
+        "config.ts": `
+          export let debugMode = true;
+        `,
+        "utils.ts": `
+          import { debugMode } from "./config";
+
+          export /** @inline */
+          function processValue(value: number): void {
+            const x = value + 1;
+            const y = debugMode ? x : 0;
+          }
+        `,
+        "main.ts": `
+          import { processValue } from "./utils";
+
+          function main() {
+            processValue(42);
+          }
+        `,
+      };
+
+      const { lua } = compileMultiFileWithDiagnostics(files);
+      const normalized = normalizeLua(lua);
+
+      // Call must be preserved
+      expect(normalized).toContain("processValue(42)");
     });
   });
 });

@@ -270,8 +270,8 @@ describe("hasSideEffects", () => {
     });
   });
 
-  describe("coverage: line 134 & 154", () => {
-    it("line 134: function expression is pure (returns false without ConsiderIdentityMutating)", () => {
+  describe("function/arrow expression side effects with ConsiderIdentityMutating", () => {
+    it("function expression has no side effects without ConsiderIdentityMutating", () => {
       // Direct node creation for function expression
       const fnExpr = ts.factory.createFunctionExpression(
         undefined,
@@ -285,7 +285,7 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(fnExpr, SideEffectOptions.None)).toBe(false);
     });
 
-    it("line 134: function expression is side-effectful with ConsiderIdentityMutating flag", () => {
+    it("function expression has side effects with ConsiderIdentityMutating", () => {
       const fnExpr = ts.factory.createFunctionExpression(
         undefined,
         undefined,
@@ -298,7 +298,7 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(fnExpr, SideEffectOptions.ConsiderIdentityMutating)).toBe(true);
     });
 
-    it("line 134: arrow function is pure (returns false without ConsiderIdentityMutating)", () => {
+    it("arrow function has no side effects without ConsiderIdentityMutating", () => {
       const arrowFn = ts.factory.createArrowFunction(
         undefined,
         undefined,
@@ -310,7 +310,7 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(arrowFn, SideEffectOptions.None)).toBe(false);
     });
 
-    it("line 134: arrow function is side-effectful with ConsiderIdentityMutating flag", () => {
+    it("arrow function has side effects with ConsiderIdentityMutating", () => {
       const arrowFn = ts.factory.createArrowFunction(
         undefined,
         undefined,

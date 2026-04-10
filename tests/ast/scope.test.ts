@@ -339,7 +339,7 @@ describe("collectArrayElementAccesses", () => {
     expect(info.loopVar.get("t")).toBe("i");
   });
 
-  it("Line 114: detects mixed indices and excludes base from hoisting", () => {
+  it("excludes array base from hoisting when accessed with different loop variables", () => {
     // t[i] in one place, t[j] in another (same base, different loop variables)
     const table1 = tstl.createIdentifier("t");
     const table2 = tstl.createIdentifier("t");
@@ -358,7 +358,7 @@ describe("collectArrayElementAccesses", () => {
     expect(info.loopVar.has("t")).toBe(false);
   });
 
-  it("Lines 164-166: cleanup removes mixed indices from all maps", () => {
+  it("cleanup removes tracking for arrays with mixed loop variable indices", () => {
     // t[i] and t[j] (mixed), s[k] (consistent)
     const tableT1 = tstl.createIdentifier("t");
     const tableT2 = tstl.createIdentifier("t");

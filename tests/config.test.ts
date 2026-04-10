@@ -1,29 +1,23 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  isRecord,
   isRuleEnabled,
   parseConfig,
   resolveConditionalCompilationConfig,
+  resolveConditionalCompilationStrict,
+  resolveDebugStripConfig,
+  resolveEffectiveStrict,
   resolveInlineConfig,
+  resolveLocalizerConfig,
 } from "../src/config";
 
 describe("resolveConditionalCompilationConfig", () => {
-  it("does not throw when object lacks constants property", () => {
-    const config = { enabled: true };
-
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed config to test defensive handling
-    const result = resolveConditionalCompilationConfig(config as any);
-
-    expect(result).toStrictEqual(new Map());
-  });
-
-  it("returns empty map when given object without constants", () => {
-    const config = { DEBUG: true };
-
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed config to test defensive handling
-    const result = resolveConditionalCompilationConfig(config as any);
-
-    expect(result).toStrictEqual(new Map());
+  it("returns empty map when given object without constants property", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed configs to test defensive handling
+    expect(resolveConditionalCompilationConfig({ enabled: true } as any)).toStrictEqual(new Map());
+    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed configs to test defensive handling
+    expect(resolveConditionalCompilationConfig({ DEBUG: true } as any)).toStrictEqual(new Map());
   });
 });
 
@@ -129,5 +123,51 @@ describe("property-based", () => {
     const fromEmpty = parseConfig({});
 
     expect(fromEmpty.rules).toStrictEqual(fromNoArgs.rules);
+  });
+
+  it("ignores non-boolean for simple rules", () => {
+    // "math-intrinsics" is not in STRUCTURED_RULES so falls back to boolean coercion
+    const config = parseConfig({
+      rules: {
+        "math-intrinsics": "not-a-boolean",
+      },
+    });
+
+    expect(config.rules["math-intrinsics"]).toBe(true);
+  });
+});
+
+describe("resolveDebugStripConfig", () => {
+  it("returns false when given false", () => {
+    expect(resolveDebugStripConfig(false)).toBe(false);
+  });
+});
+
+describe("resolveLocalizerConfig", () => {
+  it("returns disabled config when given false", () => {
+    expect(resolveLocalizerConfig(false)).toBe(false);
+  });
+});
+
+describe("resolveConditionalCompilationStrict", () => {
+  it("returns false for non-object inputs", () => {
+    expect(resolveConditionalCompilationStrict(undefined)).toBeUndefined();
+    expect(resolveConditionalCompilationStrict(true)).toBeUndefined();
+  });
+});
+
+describe("resolveEffectiveStrict", () => {
+  it("rule-level override takes precedence", () => {
+    expect(resolveEffectiveStrict(true, false)).toBe(false);
+    expect(resolveEffectiveStrict(true, undefined)).toBe(true);
+    expect(resolveEffectiveStrict(false, true)).toBe(true);
+  });
+});
+
+describe("isRecord", () => {
+  it("returns false for array and null, true for plain object", () => {
+    expect(isRecord([])).toBe(false);
+    expect(isRecord(null)).toBe(false);
+    expect(isRecord({})).toBe(true);
   });
 });

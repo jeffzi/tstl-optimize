@@ -1,6 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { isLuaExprPure, isLuaRhsPure } from "../../src/ast/lua-ast";
 import { walkStatements } from "../../src/ast/lua-walker";
 
 function id(name: string): tstl.Identifier {
@@ -835,5 +836,55 @@ describe("walkStatements", () => {
       });
       expect(strings).toStrictEqual(["if", "elseif", "else"]);
     });
+  });
+});
+
+describe("isLuaRhsPure", () => {
+  function id(text: string): tstl.Identifier {
+    return tstl.createIdentifier(text);
+  }
+
+  it("returns true for identifiers", () => {
+    expect(isLuaRhsPure(id("a"))).toBe(true);
+  });
+
+  it("returns correct purity for TableExpression fields", () => {
+    const pureField = tstl.createTableFieldExpression(id("v"), id("k"));
+    const nonPureField = tstl.createTableFieldExpression(
+      tstl.createCallExpression(id("f"), []),
+      id("k"),
+    );
+    const nonPureKeyField = tstl.createTableFieldExpression(
+      id("v"),
+      tstl.createCallExpression(id("f"), []),
+    );
+
+    expect(isLuaRhsPure(tstl.createTableExpression([pureField]))).toBe(true);
+    expect(isLuaRhsPure(tstl.createTableExpression([nonPureField]))).toBe(false);
+    expect(isLuaRhsPure(tstl.createTableExpression([nonPureKeyField]))).toBe(false);
+  });
+});
+
+describe("isLuaExprPure", () => {
+  function id(text: string): tstl.Identifier {
+    return tstl.createIdentifier(text);
+  }
+
+  it("returns false for call and method expressions", () => {
+    expect(isLuaExprPure(tstl.createCallExpression(id("f"), []))).toBe(false);
+  });
+
+  it("returns true for various pure expressions", () => {
+    expect(isLuaExprPure(id("a"))).toBe(true);
+    expect(isLuaExprPure(tstl.createStringLiteral("s"))).toBe(true);
+    expect(
+      isLuaExprPure(
+        tstl.createBinaryExpression(id("a"), id("b"), tstl.SyntaxKind.AdditionOperator),
+      ),
+    ).toBe(true);
+    expect(
+      isLuaExprPure(tstl.createUnaryExpression(id("a"), tstl.SyntaxKind.NegationOperator)),
+    ).toBe(true);
+    expect(isLuaExprPure(tstl.createParenthesizedExpression(id("a")))).toBe(true);
   });
 });

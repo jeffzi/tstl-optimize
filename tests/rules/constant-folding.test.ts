@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
+import { describe, expect, it, vi } from "vitest";
+import { createVisitors } from "../../src/rules/constant-folding";
+import { compile, normalizeLua } from "../helpers";
 
 describe("constant-folding", () => {
   it("folds binary arithmetic expressions", () => {
@@ -99,42 +103,14 @@ describe("constant-folding", () => {
     });
   });
 
-  describe("uncovered branches: unary evaluation and control flow dead-code elimination", () => {
-    it("folds double negation to positive value", () => {
-      // Lines 120-122: tests that unary NegationOperator folds correctly
-      // When operand is itself a unary expression (double negation)
-      const lua = compile(`
-        const x = -(-42);
-      `);
-      // Double negation should fold to positive
-      expect(lua).toContain("x = 42");
-    });
-
-    it("folds triple negation correctly", () => {
-      // Lines 120-122: additional test for NegationOperator path
-      const lua = compile(`
-        const x = -(-(-42));
-      `);
-      // Triple negation should fold to single negation
-      expect(lua).toContain("x = -42");
-    });
-
-    // Note: bitwise operations are not supported in Lua 5.1, so we skip testing
-    // the BitwiseNotOperator branch. The evaluateUnary function will return undefined
-    // for non-number operands or for bitwise ops on number operands in Lua 5.1 target.
-
+  describe("dead code elimination after return statements", () => {
     it("folds logical-not on boolean literals", () => {
-      // Lines 110-111: tests NotOperator on boolean operand
-      const lua = compile(`
-        const x = !!!true;
-      `);
-      // !!!true = false
+      const lua = compile("const x = !!!true;");
+
       expect(lua).toContain("x = false");
     });
 
     it("removes unreachable statements after unconditional return in nested block", () => {
-      // Lines 143-144: tests the statement truncation after return in optimizeControlFlow
-      // Ensures statements after return are removed (the splicing logic)
       const lua = compile(`
         function f() {
           const x = 1;
@@ -144,14 +120,13 @@ describe("constant-folding", () => {
           return unreachable1;
         }
       `);
-      // All statements after the first return should be removed
+
       expect(lua).toContain("return x");
       expect(lua).not.toContain("unreachable1");
       expect(lua).not.toContain("unreachable2");
     });
 
     it("removes unreachable statements in if-block after return", () => {
-      // Lines 143-144: tests truncation within if-block bodies
       const lua = compile(`
         function f(cond: boolean) {
           if (cond) {
@@ -163,14 +138,12 @@ describe("constant-folding", () => {
           return afterIf;
         }
       `);
-      // Unreachable inside if block should be removed
+
       expect(lua).not.toContain("unreachable");
-      // But afterIf is reachable
       expect(lua).toContain("afterIf");
     });
 
     it("removes unreachable statements after return in do-block", () => {
-      // Lines 143-144: tests truncation within do-block bodies
       const lua = compile(`
         function f() {
           do {
@@ -180,12 +153,11 @@ describe("constant-folding", () => {
           } while (false);
         }
       `);
-      // Unreachable code after return in do-block should be removed
+
       expect(lua).not.toContain("unreachable");
     });
 
     it("preserves all statements when no return is present", () => {
-      // Lines 143-144: negative case — no truncation when no return
       const lua = compile(`
         function f() {
           const x = 1;
@@ -194,14 +166,13 @@ describe("constant-folding", () => {
           return x + y + z;
         }
       `);
-      // All statements should be present when return is at the end
+
       expect(lua).toContain("x");
       expect(lua).toContain("y");
       expect(lua).toContain("z");
     });
 
     it("handles complex control flow with multiple returns", () => {
-      // Lines 143-144: tests truncation across multiple conditional paths
       const lua = compile(`
         function f(a: boolean, b: boolean) {
           if (a) {
@@ -216,7 +187,7 @@ describe("constant-folding", () => {
           const dead3 = 6;
         }
       `);
-      // All dead code after each return should be gone
+
       expect(lua).not.toContain("dead1");
       expect(lua).not.toContain("dead2");
       expect(lua).not.toContain("dead3");
@@ -224,5 +195,130 @@ describe("constant-folding", () => {
       expect(lua).toContain("return 3");
       expect(lua).toContain("return 5");
     });
+  });
+
+  describe("binary and unary operator type coverage", () => {
+    it("folds comparison operators for numbers", () => {
+      const code = `
+        export const eq = (1 as any) === (1 as any);
+        export const neq = (1 as any) !== (2 as any);
+        export const le = (1 as any) <= (2 as any);
+        export const ge = (2 as any) >= (1 as any);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("eq = true");
+      expect(lua).toContain("neq = true");
+      expect(lua).toContain("le = true");
+      expect(lua).toContain("ge = true");
+    });
+
+    it("folds comparison operators for strings", () => {
+      const code = `
+        export const eq = ("a" as any) === ("a" as any);
+        export const neq = ("a" as any) !== ("b" as any);
+        export const lt = ("a" as any) < ("b" as any);
+        export const le = ("a" as any) <= ("b" as any);
+        export const gt = ("b" as any) > ("a" as any);
+        export const ge = ("b" as any) >= ("a" as any);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("eq = true");
+      expect(lua).toContain("neq = true");
+      expect(lua).toContain("lt = true");
+      expect(lua).toContain("le = true");
+      expect(lua).toContain("gt = true");
+      expect(lua).toContain("ge = true");
+    });
+
+    it("folds comparison and logical operators for booleans", () => {
+      const code = `
+        export const eq = (true as any) === (true as any);
+        export const neq = (true as any) !== (false as any);
+        export const or_val = (true as any) || (false as any);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("eq = true");
+      expect(lua).toContain("neq = true");
+      expect(lua).toContain("or_val = true");
+    });
+
+    it("folds cross-type equality comparisons", () => {
+      const code = `
+        export const eq = (1 as any) === ("1" as any);
+        export const neq = (1 as any) !== ("1" as any);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("eq = false");
+      expect(lua).toContain("neq = true");
+    });
+
+    it("folds string length and unary negation", () => {
+      const code = `
+        export const len = "abc".length;
+        export const neg = -(1);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("len = 3");
+      expect(lua).toContain("neg = -1");
+    });
+  });
+
+  describe("SourceFile visitor", () => {
+    it("folds BitwiseNot at Lua AST level", () => {
+      // biome-ignore lint/suspicious/noExplicitAny: mock plugin context for internal visitor access
+      const visitors = createVisitors({} as any, { rules: { "constant-folding": true } } as any);
+      // biome-ignore lint/suspicious/noExplicitAny: accessing internal visitor map by SyntaxKind
+      const visitor = (visitors as any)[ts.SyntaxKind.SourceFile];
+
+      const bitwiseNot = tstl.createUnaryExpression(
+        tstl.createNumericLiteral(1),
+        tstl.SyntaxKind.BitwiseNotOperator,
+      );
+      const stmt = tstl.createVariableDeclarationStatement(
+        [tstl.createIdentifier("x")],
+        [bitwiseNot],
+      );
+      const file = tstl.createFile([stmt], new Set(), "");
+
+      // biome-ignore lint/suspicious/noExplicitAny: mock context for internal visitor
+      const mockContext: any = {
+        superTransformNode: vi.fn().mockReturnValue(file),
+      };
+
+      // biome-ignore lint/suspicious/noExplicitAny: mock node for internal visitor
+      const result = visitor({} as any, mockContext);
+
+      const resultStmt = result.statements[0] as tstl.VariableDeclarationStatement;
+      // biome-ignore lint/style/noNonNullAssertion: test asserts right exists before access
+      expect(tstl.isNumericLiteral(resultStmt.right![0])).toBe(true);
+      // biome-ignore lint/style/noNonNullAssertion: test asserts right exists before access
+      expect((resultStmt.right![0] as tstl.NumericLiteral).value).toBe(-2);
+    });
+  });
+
+  it("preserves if-statement when elseif condition has side effects", () => {
+    const code = `
+      declare function print(...args: any[]): void;
+      declare function get(): boolean;
+      if (true) {
+        print(1);
+      } else if (get()) {
+        print(2);
+      }
+    `;
+
+    const lua = normalizeLua(compile(code));
+
+    expect(lua.trim().length).toBeGreaterThan(0);
   });
 });

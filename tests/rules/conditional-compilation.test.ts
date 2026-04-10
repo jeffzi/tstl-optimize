@@ -440,6 +440,433 @@ describe("conditional-compilation", () => {
       expect(lua).toContain("if");
     });
   });
+
+  describe("branch detection in nested control flow", () => {
+    const opts = ccOpts({
+      TRUE_CONST: { env: "TRUE_CONST", default: true },
+      FALSE_CONST: { env: "FALSE_CONST", default: false },
+      VAL_1: { env: "VAL_1", default: 1 },
+    });
+
+    it("preserves loop with break inside nested block", () => {
+      const code = `
+        ${PRINT_DECL}
+        function test() {
+          if (true) {
+            { return 1; }
+          }
+        }
+        function test2() {
+          while(true) {
+            if (true) {
+              { break; }
+            }
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("return 1");
+      expect(lua).toContain("break");
+    });
+
+    it("folds constant inside parenthesized expression", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const TRUE_CONST: boolean;
+        if ((TRUE_CONST)) {
+          print(1);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).not.toContain("if");
+    });
+
+    it("preserves condition with non-constant expression kind", () => {
+      const code = `
+        declare function foo(): any;
+        declare const TRUE_CONST: boolean;
+        export const x = (foo() || { a: TRUE_CONST }) ? 1 : 2;
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("or 2");
+    });
+  });
+
+  describe("partial folding output", () => {
+    const opts = ccOpts({
+      TRUE_CONST: { env: "TRUE_CONST", default: true },
+      FALSE_CONST: { env: "FALSE_CONST", default: false },
+      VAL_1: { env: "VAL_1", default: 1 },
+    });
+
+    it("warns when ternary condition is only partially foldable", () => {
+      const code = `
+        declare const TRUE_CONST: boolean;
+        declare function foo(): boolean;
+        export const x = (TRUE_CONST && foo()) ? 1 : 2;
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("true and foo()");
+    });
+
+    it("warns when switch discriminant is only partially foldable", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const VAL_1: number;
+        declare function foo(): number;
+        switch (VAL_1 + foo()) {
+          case 1: print(1); break;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("1 + foo()");
+    });
+  });
+
+  describe("boolean and logical expression folding", () => {
+    const opts = ccOpts({
+      TRUE_CONST: { env: "TRUE_CONST", default: true },
+      FALSE_CONST: { env: "FALSE_CONST", default: false },
+      VAL_1: { env: "VAL_1", default: 1 },
+    });
+
+    it("folds negation of constant boolean", () => {
+      const code = `
+        declare const TRUE_CONST: boolean;
+        export const x = !TRUE_CONST;
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("x = false");
+    });
+
+    it("folds ternary to else branch when condition is false constant", () => {
+      const code = `
+        declare function foo(): number;
+        declare const FALSE_CONST: boolean;
+        const x = FALSE_CONST ? 1 : foo();
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("foo()");
+      expect(lua).not.toContain("? 1");
+    });
+
+    it("short-circuits && when left operand is false constant", () => {
+      const code = `
+        declare function foo(): boolean;
+        declare const FALSE_CONST: boolean;
+        const x = FALSE_CONST && foo();
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("false");
+      expect(lua).not.toContain("foo()");
+    });
+
+    it("short-circuits || when left operand is true constant", () => {
+      const code = `
+        declare function foo(): boolean;
+        declare const TRUE_CONST: boolean;
+        const x = TRUE_CONST || foo();
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("true");
+      expect(lua).not.toContain("foo()");
+    });
+
+    it("folds if-statement with negated constant condition", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const TRUE_CONST: boolean;
+        if (!TRUE_CONST) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(2)");
+      expect(lua).not.toContain("print(1)");
+    });
+
+    it("folds if-condition with inequality check against constant", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const VAL_1: number;
+        if (VAL_1 !== 2) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).not.toContain("print(2)");
+    });
+
+    it("preserves if-condition when string constant has no resolved value", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const STR_VAL: string;
+        if (STR_VAL) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("STR_VAL");
+    });
+
+    it("folds if-condition to false when constant is zero", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const ZERO: number;
+        if (ZERO) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, ccOpts({ ZERO: { env: "ZERO", default: 0 } })));
+
+      expect(lua).toContain("print(2)");
+      expect(lua).not.toContain("print(1)");
+    });
+
+    it("folds nested if-statements with known constants", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const TRUE_CONST: boolean;
+        declare const FALSE_CONST: boolean;
+        if (TRUE_CONST) {
+          if (FALSE_CONST) {
+            print(1);
+          } else {
+            print(2);
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(2)");
+      expect(lua).not.toContain("print(1)");
+      expect(lua).not.toContain("if");
+    });
+
+    it("folds if-condition with loose equality check against constant", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const VAL_1: number;
+        if (VAL_1 == 1) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).not.toContain("print(2)");
+    });
+
+    it("folds if-condition with loose inequality check against constant", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const VAL_1: number;
+        if (VAL_1 != 2) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).not.toContain("print(2)");
+    });
+
+    it("preserves && chain when left side has partial fold result", () => {
+      const code = `
+        declare function foo(): boolean;
+        declare const TRUE_CONST: boolean;
+        const x = (TRUE_CONST && foo()) && true;
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("foo()");
+    });
+
+    it("preserves || chain when left side has partial fold result", () => {
+      const code = `
+        declare function foo(): boolean;
+        declare const FALSE_CONST: boolean;
+        const x = (FALSE_CONST || foo()) || false;
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("foo()");
+    });
+
+    it("preserves if-condition when first operand is a function call", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare function foo(): boolean;
+        declare const TRUE_CONST: boolean;
+        if (foo() && TRUE_CONST) {
+          print(1);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("foo()");
+      expect(lua).toContain("if");
+    });
+  });
+
+  describe("switch folding edge cases", () => {
+    const opts = ccOpts({
+      TRUE_CONST: { env: "TRUE_CONST", default: true },
+      FALSE_CONST: { env: "FALSE_CONST", default: false },
+      VAL_1: { env: "VAL_1", default: 1 },
+    });
+
+    it("folds switch with fallthrough when constant matches case", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const VAL_1: number;
+        switch (VAL_1) {
+          case 1:
+            print(1);
+          case 2:
+            print(2);
+            break;
+          default:
+            print(0);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+      expect(lua).not.toContain("print(0)");
+    });
+
+    it("eliminates switch when constant matches no case and no default", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const VAL_1: number;
+        switch (VAL_1) {
+          case 2:
+            print(2);
+            break;
+          case 3:
+            print(3);
+            break;
+        }
+        print(4);
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).not.toContain("print(2)");
+      expect(lua).not.toContain("print(3)");
+      expect(lua).toContain("print(4)");
+    });
+
+    it("folds switch to matching case that contains return in block", () => {
+      const oneOpts = ccOpts({ ONE: { env: "ONE", default: 1 } });
+      const code = `
+        ${PRINT_DECL}
+        declare const ONE: number;
+        function test() {
+          switch (ONE) {
+            case 1: {
+              return 1;
+            }
+            case 2:
+              print(2);
+              break;
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, oneOpts));
+
+      expect(lua).toContain("return 1");
+      expect(lua).not.toContain("print(2)");
+    });
+
+    it("preserves switch when case expression is a function call", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare function foo(): number;
+        declare const VAL_1: number;
+        switch (VAL_1) {
+          case foo():
+            print(1);
+            break;
+          case 2:
+            print(2);
+            break;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("foo()");
+      expect(lua).toContain("switch");
+    });
+
+    it("preserves switch when case contains unresolvable expression and no default", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare function foo(): number;
+        declare const VAL_1: number;
+        switch (VAL_1) {
+          case foo():
+            print(1);
+            break;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("switch");
+      expect(lua).toContain("foo()");
+    });
+  });
 });
 
 describe("property-based", () => {

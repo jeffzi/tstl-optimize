@@ -239,4 +239,82 @@ describe("debug-strip", () => {
       expect(normalizeLua(lua)).toBe("a = x - x % 1");
     });
   });
+
+  describe("when config is disabled", () => {
+    it("preserves all calls when not provided in config", () => {
+      const lua = compile(
+        ["declare function print(msg: string): void;", 'print("debug");', "const x = 1;"].join(
+          "\n",
+        ),
+        { pluginOptions: {} },
+      );
+      expect(normalizeLua(lua)).toBe('print("debug")\nx = 1');
+    });
+
+    it("preserves namespace calls when rule is disabled", () => {
+      const lua = compile(
+        [
+          "declare namespace Debug { function log(msg: string): void; }",
+          'Debug.log("test");',
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": false } } },
+      );
+      expect(normalizeLua(lua)).toBe('Debug.log("test")\nx = 1');
+    });
+  });
+
+  describe("namespace and nested callee stripping", () => {
+    it("does not strip when namespace root is not in config", () => {
+      const lua = compile(
+        [
+          "declare namespace Logger { function log(msg: string): void; }",
+          'Logger.log("test");',
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["Debug"] } } } },
+      );
+      expect(normalizeLua(lua)).toBe('Logger.log("test")\nx = 1');
+    });
+
+    it("strips both function and namespace calls simultaneously", () => {
+      const lua = compile(
+        [
+          "declare function debug(msg: string): void;",
+          "declare namespace Logger { function log(msg: string): void; }",
+          'debug("test1");',
+          'Logger.log("test2");',
+          "const x = 1;",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: {
+              "debug-strip": {
+                functions: ["debug"],
+                namespaces: ["Logger"],
+              },
+            },
+          },
+        },
+      );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+  });
+
+  describe("dynamic callee preservation", () => {
+    it("preserves call when callee root is a dynamic expression, not a static identifier", () => {
+      // getLogger().log("msg") — rootIdentifier hits the base-case `return undefined` because
+      // callee.table is a CallExpression → call is NOT stripped
+      const lua = compile(
+        [
+          "declare function getLogger(): { log(msg: string): void };",
+          'getLogger().log("msg");',
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["getLogger"] } } } },
+      );
+
+      expect(normalizeLua(lua)).toBe('getLogger():log("msg")\nx = 1');
+    });
+  });
 });

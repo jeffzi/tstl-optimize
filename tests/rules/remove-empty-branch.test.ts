@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { describe, expect, it, vi } from "vitest";
+import { createVisitors } from "../../src/rules/remove-empty-branch";
 import { compile, normalizeLua } from "../helpers";
 
 const opts = {
@@ -300,7 +302,7 @@ describe("remove-empty-branch rule", () => {
         function noop1(): void { if (true) {} }
         /** @inline */
         function noop2(): void { if (false) {} else {} }
-        
+
         noop1();
         if (true) {
           noop2();
@@ -308,6 +310,31 @@ describe("remove-empty-branch rule", () => {
         const z = 3;
       `;
       expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`"z = 3"`);
+    });
+  });
+
+  describe("SourceFile visitor", () => {
+    it("returns undefined for non-file transform result", () => {
+      // biome-ignore lint/suspicious/noExplicitAny: mock plugin context for internal visitor access
+      const visitors = createVisitors({} as any, { rules: {} } as any);
+      const visitor = visitors[ts.SyntaxKind.SourceFile];
+      const transform = typeof visitor === "object" ? visitor.transform : undefined;
+
+      if (transform) {
+        // biome-ignore lint/suspicious/noExplicitAny: mock context for internal visitor
+        const mockContext: any = {
+          superTransformNode: vi.fn().mockReturnValue(undefined),
+        };
+        // biome-ignore lint/suspicious/noExplicitAny: mock node for internal visitor
+        const mockNode: any = {};
+
+        const result1 = transform(mockNode, mockContext);
+        expect(result1).toBeUndefined();
+
+        mockContext.superTransformNode.mockReturnValue([undefined]);
+        const result2 = transform(mockNode, mockContext);
+        expect(result2).toBeUndefined();
+      }
     });
   });
 });
