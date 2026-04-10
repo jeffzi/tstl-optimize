@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compile } from "../helpers";
 
 describe("loop-rebase", () => {
-  describe("positive cases (rebased)", () => {
+  describe("when loop qualifies for rebase", () => {
     it("rebases $range(0, n-1) with arr[i] to for i = 1, n", () => {
       const lua = compile(
         "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[i]; }",
@@ -44,7 +44,7 @@ describe("loop-rebase", () => {
     });
   });
 
-  describe("negative cases (not rebased)", () => {
+  describe("when loop does not qualify for rebase", () => {
     it("does not rebase $range(1, n) — start is not 0", () => {
       const lua = compile(
         "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(1, n)) { sum += arr[i]; }",
@@ -95,7 +95,7 @@ describe("loop-rebase", () => {
     });
   });
 
-  describe("edge cases", () => {
+  describe("when handling edge cases", () => {
     it("rebases outer loop independently when nested loop shadows variable", () => {
       const lua = compile(
         [
@@ -242,7 +242,7 @@ describe("loop-rebase", () => {
     });
   });
 
-  describe("uncovered branches: pattern matching and step validation", () => {
+  describe("when loop pattern matching and step validation are evaluated", () => {
     it("detects 1 + var pattern (left 1, right var) in array indices during rebase", () => {
       // Lines 22, 24: tests the (lIsOne && rIsVar) branch in analyzeBody
       // When analyzing the loop body, the code checks if left is 1 and right is var.
@@ -258,64 +258,60 @@ describe("loop-rebase", () => {
       expect(lua).toContain("arr[");
     });
 
-    it("does not rebase loop with step expression != 1", () => {
-      // Line 113: tests the stepExpression.value !== 1 branch
-      // When step is not 1, loop-rebase doesn't apply. TSTL converts to while loop.
-      const lua = compile(`
-        declare const arr: number[];
-        const sum = (function () {
-          let sum = 0;
-          for (let i = 0; i < 10; i += 2) {
-            sum += arr[i];
-          }
-          return sum;
-        })();
-      `);
-      // Step is 2, not 1 — loop-rebase should NOT apply
-      // The Lua output uses while loop instead of for loop
-      expect(lua).toContain("while i < 10 do");
-      expect(lua).toContain("i = i + 2");
-      // No Lua for loop means rebase didn't happen
-      expect(lua).not.toContain("for i = 1");
-    });
-
-    it("does not rebase loop with step expression < 1 (fractional step)", () => {
-      // Line 113: additional coverage for non-1 step values
-      const lua = compile(`
-        declare const arr: number[];
-        const sum = (function () {
-          let sum = 0;
-          for (let i = 0; i < 10; i += 0.5) {
-            sum += arr[i];
-          }
-          return sum;
-        })();
-      `);
-      // Step is 0.5, not 1 — loop-rebase should NOT apply
-      // Uses while loop, not for loop
-      expect(lua).toContain("while i < 10 do");
-      expect(lua).toContain("i = i + 0.5");
-      expect(lua).not.toContain("for i = 1");
-    });
-
-    it("does not rebase loop with negative step expression", () => {
-      // Line 113: test negative step (0-based loop with step != 1 should not rebase)
-      const lua = compile(`
-        declare const arr: number[];
-        const sum = (function () {
-          let sum = 0;
-          for (let i = 10; i > 0; i--) {
-            sum += arr[i];
-          }
-          return sum;
-        })();
-      `);
-      // Non-zero init, negative step — loop-rebase should NOT apply
-      // Uses while loop, not for loop
-      expect(lua).toContain("while i > 0 do");
-      expect(lua).toContain("i = i - 1");
-      // No Lua for loop means rebase didn't happen
-      expect(lua).not.toContain("for i = 1");
+    it.each([
+      {
+        label: "step = 2",
+        src: `
+          declare const arr: number[];
+          const sum = (function () {
+            let sum = 0;
+            for (let i = 0; i < 10; i += 2) {
+              sum += arr[i];
+            }
+            return sum;
+          })();
+        `,
+        contains: ["while i < 10 do", "i = i + 2"],
+        notContains: ["for i = 1"],
+      },
+      {
+        label: "step = 0.5 (fractional)",
+        src: `
+          declare const arr: number[];
+          const sum = (function () {
+            let sum = 0;
+            for (let i = 0; i < 10; i += 0.5) {
+              sum += arr[i];
+            }
+            return sum;
+          })();
+        `,
+        contains: ["while i < 10 do", "i = i + 0.5"],
+        notContains: ["for i = 1"],
+      },
+      {
+        label: "step = -1 (negative)",
+        src: `
+          declare const arr: number[];
+          const sum = (function () {
+            let sum = 0;
+            for (let i = 10; i > 0; i--) {
+              sum += arr[i];
+            }
+            return sum;
+          })();
+        `,
+        contains: ["while i > 0 do", "i = i - 1"],
+        notContains: ["for i = 1"],
+      },
+    ])("does not rebase loop when step is $label", ({ src, contains, notContains }) => {
+      const lua = compile(src);
+      for (const s of contains) {
+        expect(lua).toContain(s);
+      }
+      for (const s of notContains) {
+        expect(lua).not.toContain(s);
+      }
     });
   });
 });

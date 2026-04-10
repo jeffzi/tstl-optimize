@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import type { ConditionalCompilationConfig, RulesConfig } from "../src/config";
 import {
   isRecord,
   isRuleEnabled,
@@ -13,11 +14,9 @@ import {
 } from "../src/config";
 
 describe("resolveConditionalCompilationConfig", () => {
-  it("returns empty map when given object without constants property", () => {
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed configs to test defensive handling
-    expect(resolveConditionalCompilationConfig({ enabled: true } as any)).toStrictEqual(new Map());
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally passing malformed configs to test defensive handling
-    expect(resolveConditionalCompilationConfig({ DEBUG: true } as any)).toStrictEqual(new Map());
+  it("returns empty map when constants is empty", () => {
+    const config: ConditionalCompilationConfig = { enabled: true, constants: {} };
+    expect(resolveConditionalCompilationConfig(config)).toStrictEqual(new Map());
   });
 });
 
@@ -35,7 +34,7 @@ describe("resolveInlineConfig", () => {
 });
 
 describe("parseConfig", () => {
-  describe("inline rule", () => {
+  describe("when parsing inline rule config", () => {
     it.each([
       { input: { strict: false }, expected: { strict: false } },
       { input: false, expected: false },
@@ -47,7 +46,7 @@ describe("parseConfig", () => {
     });
   });
 
-  describe("strict field", () => {
+  describe("when parsing strict field", () => {
     it.each<{ input: Record<string, unknown> | undefined; expected: boolean }>([
       { input: { strict: true }, expected: true },
       { input: {}, expected: false },
@@ -70,7 +69,7 @@ describe("isRuleEnabled", () => {
   });
 });
 
-const EXPECTED_RULE_KEYS = [
+const EXPECTED_RULE_KEYS: ReadonlyArray<keyof RulesConfig> = [
   "conditional-compilation",
   "constant-folding",
   "dead-local",
@@ -86,16 +85,16 @@ const EXPECTED_RULE_KEYS = [
 describe("property-based", () => {
   it("parseConfig never throws for arbitrary input", () => {
     fc.assert(
-      fc.property(fc.anything(), (input) => {
-        parseConfig(input as Record<string, unknown>);
+      fc.property(fc.dictionary(fc.string(), fc.anything()), (input) => {
+        parseConfig(input);
       }),
     );
   });
 
   it("parseConfig always returns all rule keys", () => {
     fc.assert(
-      fc.property(fc.anything(), (input) => {
-        const config = parseConfig(input as Record<string, unknown>);
+      fc.property(fc.dictionary(fc.string(), fc.anything()), (input) => {
+        const config = parseConfig(input);
 
         expect(Object.keys(config.rules).sort()).toStrictEqual(EXPECTED_RULE_KEYS);
       }),
@@ -111,8 +110,8 @@ describe("property-based", () => {
       fc.property(arbRuleBooleans, (ruleBooleans) => {
         const config = parseConfig({ rules: ruleBooleans });
 
-        for (const [key, value] of Object.entries(ruleBooleans)) {
-          expect(isRuleEnabled(config.rules, key as keyof typeof config.rules)).toBe(value);
+        for (const key of EXPECTED_RULE_KEYS) {
+          expect(isRuleEnabled(config.rules, key)).toBe(ruleBooleans[key]);
         }
       }),
     );

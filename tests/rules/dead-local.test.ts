@@ -80,7 +80,7 @@ describe("dead-local", () => {
     expect(lua).toContain("x = 42");
   });
 
-  describe("nested function expressions", () => {
+  describe("when removing unused locals in nested function expressions", () => {
     it.each([
       {
         name: "callback passed as a call argument",
@@ -128,7 +128,7 @@ describe("dead-local", () => {
     });
   });
 
-  describe("write-only locals (assignment without read)", () => {
+  describe("when handling write-only locals (assignment without read)", () => {
     it("preserves declaration when local is assigned after initialization", () => {
       const lua = compile(`
         function f() {
@@ -182,10 +182,8 @@ describe("dead-local", () => {
     });
   });
 
-  describe("uncovered branches: symbol tracking and scope recursion", () => {
-    it("removes unused local only when it has no symbolId", () => {
-      // Line 26: tests the symbolId !== undefined check in the declaration pass
-      // Ensures dead-local elimination only applies to tracked symbols
+  describe("when removing unused locals in branching statements", () => {
+    it("removes unused local from a function body", () => {
       const lua = compile(`
         function f() {
           const x = 1;
@@ -193,14 +191,11 @@ describe("dead-local", () => {
           return y;
         }
       `);
-      // x is dead and tracked — should be removed
       expect(lua).not.toContain("x = 1");
       expect(lua).toContain("y = 2");
     });
 
-    it("recurses into if-statement bodies (ifBlock and elseBlock)", () => {
-      // Lines 108-109: tests the isIfStatement branch in recurseIntoFunctionBodies
-      // Specifically tests both ifBlock and elseBlock recursion
+    it("removes unused locals inside if/else branches", () => {
       const lua = compile(`
         function f() {
           if (true) {
@@ -214,17 +209,13 @@ describe("dead-local", () => {
           }
         }
       `);
-      // Dead locals in both if and else branches should be removed
-      // Note: we don't check exact string match since TSTL may combine declarations
       expect(lua).toContain("if true then");
       expect(lua).toContain("result");
       expect(lua).toContain("value");
       expect(lua).toContain("else");
     });
 
-    it("recurses into elseif-statement bodies as nested IfStatement", () => {
-      // Lines 108-109: tests the nested isIfStatement(stmt.elseBlock) branch
-      // Ensures elseif chains are recursed via the isIfStatement check
+    it("removes unused locals inside elseif branches", () => {
       const lua = compile(`
         function f() {
           if (false) {
@@ -236,13 +227,11 @@ describe("dead-local", () => {
           }
         }
       `);
-      // The function should still contain the elseif branch with result
       expect(lua).toContain("elseif true then");
       expect(lua).toContain("result");
     });
 
-    it("recurses into while-statement bodies", () => {
-      // Line 103: tests the isWhileStatement branch in recurseIntoFunctionBodies
+    it("removes unused locals inside while-loop bodies", () => {
       const lua = compile(`
         function f() {
           let x = 0;
@@ -253,13 +242,11 @@ describe("dead-local", () => {
           }
         }
       `);
-      // Verify while loop is present (proves recursion happened)
       expect(lua).toContain("while x < 10 do");
       expect(lua).toContain("value");
     });
 
-    it("recurses into repeat-statement bodies", () => {
-      // Line 104: tests the isRepeatStatement branch in recurseIntoFunctionBodies
+    it("removes unused locals inside repeat-loop bodies", () => {
       const lua = compile(`
         function f() {
           let x = 10;
@@ -270,14 +257,12 @@ describe("dead-local", () => {
           } while (x > 0);
         }
       `);
-      // Verify repeat loop is present (proves recursion happened)
       expect(lua).toContain("repeat");
       expect(lua).toContain("until");
       expect(lua).toContain("value");
     });
 
-    it("recurses into for-statement bodies", () => {
-      // Line 105: tests the isForStatement branch in recurseIntoFunctionBodies
+    it("removes unused locals inside for-loop bodies", () => {
       const lua = compile(`
         declare const items: number[];
         function f() {
@@ -288,16 +273,11 @@ describe("dead-local", () => {
           }
         }
       `);
-      // TSTL transpiles TypeScript for loops to while loops, but the isForStatement
-      // branch of recurseIntoFunctionBodies still applies to detect Lua for statements.
-      // Verify the loop iteration happens with expected values
       expect(lua).toContain("items");
       expect(lua).toContain("value");
-      expect(lua).toContain("while");
     });
 
-    it("recurses into forIn-statement bodies", () => {
-      // Line 106: tests the isForInStatement branch in recurseIntoFunctionBodies
+    it("removes unused locals inside for-in loop bodies", () => {
       const lua = compile(`
         declare const obj: Record<string, number>;
         function f() {
@@ -308,14 +288,12 @@ describe("dead-local", () => {
           }
         }
       `);
-      // Verify for-in loop is present (proves recursion happened)
       expect(lua).toContain("for");
       expect(lua).toContain("obj");
       expect(lua).toContain("val");
     });
 
-    it("recurses into do-statement bodies", () => {
-      // Line 102: tests the isDoStatement branch in recurseIntoFunctionBodies
+    it("removes unused locals inside do-block bodies", () => {
       const lua = compile(`
         function f() {
           do {
@@ -325,7 +303,6 @@ describe("dead-local", () => {
           } while (false);
         }
       `);
-      // Verify do block is present (proves recursion happened)
       expect(lua).toContain("do");
       expect(lua).toContain("value");
     });

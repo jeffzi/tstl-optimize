@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import { deepCloneExpression, deepCloneStatement } from "../../src/ast/deep-clone";
 import { arbExpression } from "../arbitraries";
 
-function id(text: string, symbolId?: tstl.SymbolId, originalName?: string): tstl.Identifier {
-  return tstl.createIdentifier(text, undefined, symbolId, originalName);
+function id(text: string, symbolId?: number, originalName?: string): tstl.Identifier {
+  return tstl.createIdentifier(text, undefined, symbolId as tstl.SymbolId, originalName);
 }
 
 function assertNode<T extends tstl.Node>(
@@ -44,7 +44,7 @@ describe("deepCloneExpression", () => {
   });
 
   it("preserves Identifier symbolId and originalName", () => {
-    const original = id("myVar", 42 as tstl.SymbolId);
+    const original = id("myVar", 42);
     original.originalName = "renamed";
 
     const cloned = deepCloneExpression(original);
@@ -53,22 +53,26 @@ describe("deepCloneExpression", () => {
     expect(cloned).toStrictEqual(original);
   });
 
-  it("clones CallExpression and TableExpression fields independently", () => {
+  it("clones CallExpression fields independently", () => {
     const call = tstl.createCallExpression(id("fn"), [id("a"), id("b")]);
-    const clonedCall = deepCloneExpression(call);
-    assertNode(clonedCall, tstl.isCallExpression);
-    expect(clonedCall).not.toBe(call);
-    expect(clonedCall.params[0]).not.toBe(call.params[0]);
-    expect(clonedCall).toStrictEqual(call);
+    const cloned = deepCloneExpression(call);
+    assertNode(cloned, tstl.isCallExpression);
 
+    expect(cloned).not.toBe(call);
+    expect(cloned.params[0]).not.toBe(call.params[0]);
+    expect(cloned).toStrictEqual(call);
+  });
+
+  it("clones TableExpression fields independently", () => {
     const field = tstl.createTableFieldExpression(id("v"), id("k"));
     const tbl = tstl.createTableExpression([field]);
-    const clonedTbl = deepCloneExpression(tbl);
-    assertNode(clonedTbl, tstl.isTableExpression);
-    expect(clonedTbl).not.toBe(tbl);
-    expect(clonedTbl.fields[0]).not.toBe(field);
-    expect(clonedTbl.fields[0].key).not.toBe(field.key);
-    expect(clonedTbl).toStrictEqual(tbl);
+    const cloned = deepCloneExpression(tbl);
+    assertNode(cloned, tstl.isTableExpression);
+
+    expect(cloned).not.toBe(tbl);
+    expect(cloned.fields[0]).not.toBe(field);
+    expect(cloned.fields[0].key).not.toBe(field.key);
+    expect(cloned).toStrictEqual(tbl);
   });
 
   it("clones literals (leaf nodes)", () => {
@@ -126,6 +130,31 @@ describe("deepCloneExpression", () => {
     expect(cloned).not.toBe(expr);
     expect(cloned).toStrictEqual(expr);
   });
+
+  it("clones MethodCallExpression", () => {
+    const expr = tstl.createMethodCallExpression(id("obj"), id("method"), [id("arg")]);
+    const cloned = deepCloneExpression(expr);
+    expect(cloned).not.toBe(expr);
+    expect(cloned).toStrictEqual(expr);
+  });
+
+  it("clones TableExpression with and without keys", () => {
+    const field1 = tstl.createTableFieldExpression(id("v1"), id("k1"));
+    const field2 = tstl.createTableFieldExpression(id("v2")); // No key
+    const expr = tstl.createTableExpression([field1, field2]);
+    const cloned = deepCloneExpression(expr);
+    expect(cloned).not.toBe(expr);
+    expect(cloned).toStrictEqual(expr);
+  });
+
+  it("clones FunctionExpression with dots", () => {
+    const body = tstl.createBlock([]);
+    const dots = tstl.createDotsLiteral();
+    const expr = tstl.createFunctionExpression(body, [], dots);
+    const cloned = deepCloneExpression(expr);
+    expect(cloned).not.toBe(expr);
+    expect(cloned).toStrictEqual(expr);
+  });
 });
 
 describe("deepCloneStatement", () => {
@@ -148,36 +177,44 @@ describe("deepCloneStatement", () => {
     expect(cloned).toStrictEqual(stmt);
   });
 
-  it("clones VariableDeclaration and Assignment statements", () => {
+  it("clones VariableDeclarationStatement independently", () => {
     const varDecl = tstl.createVariableDeclarationStatement([id("x")], [id("y")]);
-    const clonedVar = deepCloneStatement(varDecl);
-    assertNode(clonedVar, tstl.isVariableDeclarationStatement);
-    expect(clonedVar.left[0]).not.toBe(varDecl.left[0]);
-    expect(clonedVar.right?.[0]).not.toBe(varDecl.right?.[0]);
-    expect(clonedVar).toStrictEqual(varDecl);
+    const cloned = deepCloneStatement(varDecl);
+    assertNode(cloned, tstl.isVariableDeclarationStatement);
 
-    const assign = tstl.createAssignmentStatement([id("x")], [id("y")]);
-    const clonedAssign = deepCloneStatement(assign);
-    assertNode(clonedAssign, tstl.isAssignmentStatement);
-    expect(clonedAssign.left[0]).not.toBe(assign.left[0]);
-    expect(clonedAssign.right[0]).not.toBe(assign.right[0]);
-    expect(clonedAssign).toStrictEqual(assign);
+    expect(cloned.left[0]).not.toBe(varDecl.left[0]);
+    expect(cloned.right?.[0]).not.toBe(varDecl.right?.[0]);
+    expect(cloned).toStrictEqual(varDecl);
   });
 
-  it("clones For and ForIn statements", () => {
-    const forStmt = tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b"));
-    const clonedFor = deepCloneStatement(forStmt);
-    assertNode(clonedFor, tstl.isForStatement);
-    expect(clonedFor).not.toBe(forStmt);
-    expect(clonedFor.controlVariable).not.toBe(forStmt.controlVariable);
-    expect(clonedFor).toStrictEqual(forStmt);
+  it("clones AssignmentStatement independently", () => {
+    const assign = tstl.createAssignmentStatement([id("x")], [id("y")]);
+    const cloned = deepCloneStatement(assign);
+    assertNode(cloned, tstl.isAssignmentStatement);
 
+    expect(cloned.left[0]).not.toBe(assign.left[0]);
+    expect(cloned.right[0]).not.toBe(assign.right[0]);
+    expect(cloned).toStrictEqual(assign);
+  });
+
+  it("clones ForStatement independently", () => {
+    const forStmt = tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b"));
+    const cloned = deepCloneStatement(forStmt);
+    assertNode(cloned, tstl.isForStatement);
+
+    expect(cloned).not.toBe(forStmt);
+    expect(cloned.controlVariable).not.toBe(forStmt.controlVariable);
+    expect(cloned).toStrictEqual(forStmt);
+  });
+
+  it("clones ForInStatement independently", () => {
     const forIn = tstl.createForInStatement(tstl.createBlock([]), [id("k")], [id("v")]);
-    const clonedForIn = deepCloneStatement(forIn);
-    assertNode(clonedForIn, tstl.isForInStatement);
-    expect(clonedForIn).not.toBe(forIn);
-    expect(clonedForIn.names[0]).not.toBe(forIn.names[0]);
-    expect(clonedForIn).toStrictEqual(forIn);
+    const cloned = deepCloneStatement(forIn);
+    assertNode(cloned, tstl.isForInStatement);
+
+    expect(cloned).not.toBe(forIn);
+    expect(cloned.names[0]).not.toBe(forIn.names[0]);
+    expect(cloned).toStrictEqual(forIn);
   });
 
   it.each([
@@ -189,6 +226,54 @@ describe("deepCloneStatement", () => {
     const cloned = deepCloneStatement(stmt);
     expect(cloned).not.toBe(stmt);
     expect(cloned).toStrictEqual(stmt);
+  });
+
+  it("clones RepeatStatement", () => {
+    const stmt = tstl.createRepeatStatement(tstl.createBlock([]), tstl.createBooleanLiteral(true));
+    const cloned = deepCloneStatement(stmt);
+    expect(cloned).not.toBe(stmt);
+    expect(cloned).toStrictEqual(stmt);
+  });
+
+  it("clones LabelStatement", () => {
+    const stmt = tstl.createLabelStatement("lbl");
+    const cloned = deepCloneStatement(stmt);
+    expect(cloned).not.toBe(stmt);
+    expect(cloned).toStrictEqual(stmt);
+  });
+
+  it.each([
+    {
+      name: "with elseif and else clause",
+      stmt: tstl.createIfStatement(
+        id("c1"),
+        tstl.createBlock([]),
+        tstl.createIfStatement(id("c2"), tstl.createBlock([]), tstl.createBlock([])),
+      ),
+    },
+    {
+      name: "with only body block",
+      stmt: tstl.createIfStatement(id("c1"), tstl.createBlock([])),
+    },
+    {
+      name: "with body and else block",
+      stmt: tstl.createIfStatement(id("c1"), tstl.createBlock([]), tstl.createBlock([])),
+    },
+  ])("clones IfStatement $name", ({ stmt }) => {
+    expect(deepCloneStatement(stmt)).toStrictEqual(stmt);
+  });
+
+  it.each([
+    {
+      name: "with step",
+      stmt: tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b"), id("s")),
+    },
+    {
+      name: "without step",
+      stmt: tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b")),
+    },
+  ])("clones ForStatement $name", ({ stmt }) => {
+    expect(deepCloneStatement(stmt)).toStrictEqual(stmt);
   });
 });
 
@@ -246,8 +331,8 @@ function structurallyEqual(a: tstl.Expression, b: tstl.Expression): boolean {
   return a.kind === b.kind;
 }
 
-describe("property-based", () => {
-  it("structural equality: clone has same kind and values at every node", () => {
+describe("when cloning arbitrary expressions (property-based)", () => {
+  it("clone has same kind and values at every node", () => {
     fc.assert(
       fc.property(arbExpression, (expr) => {
         const cloned = deepCloneExpression(expr);
@@ -257,21 +342,20 @@ describe("property-based", () => {
     );
   });
 
-  it("referential independence: no node in clone is identical to any original node", () => {
+  it("no node in clone is identical to any original node", () => {
     fc.assert(
       fc.property(arbExpression, (expr) => {
         const originalNodes = collectNodes(expr);
         const cloned = deepCloneExpression(expr);
         const clonedNodes = collectNodes(cloned);
 
-        for (const node of clonedNodes) {
-          expect(originalNodes.has(node)).toBe(false);
-        }
+        const sharedNodes = [...clonedNodes].filter((node) => originalNodes.has(node));
+        expect(sharedNodes).toHaveLength(0);
       }),
     );
   });
 
-  it("idempotence: cloning twice produces a tree structurally equal to cloning once", () => {
+  it("cloning twice produces a tree structurally equal to cloning once", () => {
     fc.assert(
       fc.property(arbExpression, (expr) => {
         const once = deepCloneExpression(expr);
@@ -280,81 +364,5 @@ describe("property-based", () => {
         expect(structurallyEqual(once, twice)).toBe(true);
       }),
     );
-  });
-});
-
-describe("deepCloneExpression additional node kinds", () => {
-  function id(text: string): tstl.Identifier {
-    return tstl.createIdentifier(text);
-  }
-
-  it("clones MethodCallExpression", () => {
-    const expr = tstl.createMethodCallExpression(id("obj"), id("method"), [id("arg")]);
-    const cloned = deepCloneExpression(expr);
-    expect(cloned).not.toBe(expr);
-    expect(cloned).toStrictEqual(expr);
-  });
-
-  it("clones TableExpression with and without keys", () => {
-    const field1 = tstl.createTableFieldExpression(id("v1"), id("k1"));
-    const field2 = tstl.createTableFieldExpression(id("v2")); // No key
-    const expr = tstl.createTableExpression([field1, field2]);
-    const cloned = deepCloneExpression(expr);
-    expect(cloned).not.toBe(expr);
-    expect(cloned).toStrictEqual(expr);
-  });
-
-  it("clones FunctionExpression with dots", () => {
-    const body = tstl.createBlock([]);
-    const dots = tstl.createDotsLiteral();
-    const expr = tstl.createFunctionExpression(body, [], dots);
-    const cloned = deepCloneExpression(expr);
-    expect(cloned).not.toBe(expr);
-    expect(cloned).toStrictEqual(expr);
-  });
-});
-
-describe("deepCloneStatement additional node kinds", () => {
-  function id(text: string): tstl.Identifier {
-    return tstl.createIdentifier(text);
-  }
-
-  it("clones RepeatStatement", () => {
-    const stmt = tstl.createRepeatStatement(tstl.createBlock([]), tstl.createBooleanLiteral(true));
-    const cloned = deepCloneStatement(stmt);
-    expect(cloned).not.toBe(stmt);
-    expect(cloned).toStrictEqual(stmt);
-  });
-
-  it("clones LabelStatement", () => {
-    const stmt = tstl.createLabelStatement("lbl");
-    const cloned = deepCloneStatement(stmt);
-    expect(cloned).not.toBe(stmt);
-    expect(cloned).toStrictEqual(stmt);
-  });
-
-  it("clones IfStatement with and without elseif/else", () => {
-    const elseif = tstl.createIfStatement(id("c2"), tstl.createBlock([]), tstl.createBlock([]));
-    const stmt1 = tstl.createIfStatement(id("c1"), tstl.createBlock([]), elseif);
-    expect(deepCloneStatement(stmt1)).toStrictEqual(stmt1);
-
-    const stmt2 = tstl.createIfStatement(id("c1"), tstl.createBlock([]));
-    expect(deepCloneStatement(stmt2)).toStrictEqual(stmt2);
-
-    const stmt3 = tstl.createIfStatement(id("c1"), tstl.createBlock([]), tstl.createBlock([]));
-    expect(deepCloneStatement(stmt3)).toStrictEqual(stmt3);
-  });
-
-  it("clones ForStatement with and without step", () => {
-    const withStep = tstl.createForStatement(
-      tstl.createBlock([]),
-      id("i"),
-      id("a"),
-      id("b"),
-      id("s"),
-    );
-    const withoutStep = tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b"));
-    expect(deepCloneStatement(withStep)).toStrictEqual(withStep);
-    expect(deepCloneStatement(withoutStep)).toStrictEqual(withoutStep);
   });
 });

@@ -45,10 +45,10 @@ function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChai
     return messageText;
   }
   const parts: string[] = [messageText.messageText];
-  let chain = messageText.next;
-  while (chain && chain.length > 0) {
-    parts.push(...chain.map((c) => extractDiagnosticMessage(c.messageText)));
-    chain = chain[0]?.next;
+  if (messageText.next) {
+    for (const c of messageText.next) {
+      parts.push(extractDiagnosticMessage(c));
+    }
   }
   return parts.join("\n");
 }

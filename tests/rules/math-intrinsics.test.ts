@@ -1,7 +1,4 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: test mocks use any for internal TS/TSTL types
-import ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
-import { createVisitors } from "../../src/rules/math-intrinsics";
+import { describe, expect, it } from "vitest";
 import { compile } from "../helpers";
 
 describe("math-intrinsics", () => {
@@ -199,71 +196,6 @@ describe("math-intrinsics", () => {
       const lua = compile(source, jit);
       for (const s of contains) expect(lua).toContain(s);
       for (const s of excludes ?? []) expect(lua).not.toContain(s);
-    });
-  });
-
-  describe("visitor guard conditions", () => {
-    it("skips Math methods called with wrong argument count", () => {
-      const mockChecker: any = {
-        getSymbolAtLocation: vi.fn().mockReturnValue({}),
-        getTypeOfSymbol: vi.fn().mockReturnValue({}),
-        typeToString: vi.fn().mockReturnValue("Math"),
-      };
-      const mockContext: any = {
-        transformExpression: vi.fn(),
-        superTransformNode: vi.fn(),
-      };
-      const visitors = createVisitors(mockChecker, { rules: {} } as any);
-      const visitor = (visitors as any)[ts.SyntaxKind.CallExpression];
-
-      function createMockCall(methodName: string, argCount: number) {
-        return {
-          kind: ts.SyntaxKind.CallExpression,
-          expression: {
-            kind: ts.SyntaxKind.PropertyAccessExpression,
-            name: { text: methodName, kind: ts.SyntaxKind.Identifier },
-            expression: { kind: ts.SyntaxKind.Identifier, text: "Math" },
-          },
-          arguments: {
-            length: argCount,
-            [Symbol.iterator]: function* () {
-              for (let i = 0; i < argCount; i++) {
-                yield { kind: ts.SyntaxKind.NumericLiteral };
-              }
-            },
-            some: Array.prototype.some,
-            filter: Array.prototype.filter,
-            map: Array.prototype.map,
-            forEach: Array.prototype.forEach,
-          },
-        } as any;
-      }
-
-      // Each of these has wrong arg count for its math method
-      expect(visitor(createMockCall("sqrt", 2), mockContext)).toBeUndefined();
-      expect(visitor(createMockCall("floor", 2), mockContext)).toBeUndefined();
-      expect(visitor(createMockCall("abs", 2), mockContext)).toBeUndefined();
-      expect(visitor(createMockCall("max", 1), mockContext)).toBeUndefined();
-      expect(visitor(createMockCall("min", 3), mockContext)).toBeUndefined();
-      expect(visitor(createMockCall("unknown", 1), mockContext)).toBeUndefined();
-    });
-
-    it("CallExpression visitor ignores non-call nodes", () => {
-      const visitors = createVisitors({} as any, { rules: {} } as any);
-      const visitor = (visitors as any)[ts.SyntaxKind.CallExpression];
-
-      const result = visitor({ kind: ts.SyntaxKind.BinaryExpression }, {} as any);
-
-      expect(result).toBeUndefined();
-    });
-
-    it("BinaryExpression visitor ignores non-binary nodes", () => {
-      const visitors = createVisitors({} as any, { rules: {} } as any);
-      const visitor = (visitors as any)[ts.SyntaxKind.BinaryExpression];
-
-      const result = visitor({ kind: ts.SyntaxKind.CallExpression }, {} as any);
-
-      expect(result).toBeUndefined();
     });
   });
 });

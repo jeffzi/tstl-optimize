@@ -129,11 +129,9 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("value");
-    expect(lua).toContain("obj");
-    expect(lua).toContain("a");
-    expect(lua).toContain("b");
-    expect(lua).toContain("c");
+    expect(lua).toContain("value - value % 1"); // Math.floor transformed via inline + math-intrinsics
+    expect(lua).not.toContain("helper("); // function was inlined
+    expect(lua).toContain("math.ceil"); // Math.ceil preserved (not in math-intrinsics)
   });
 
   it("transforms nested statements with SourceFile visitor chaining", () => {
@@ -191,10 +189,8 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("val - val % 1");
-    expect(lua).toContain("x");
-    expect(lua).toContain("y");
-    expect(lua).toContain("z");
+    expect(lua).toContain("val - val % 1"); // Math.floor transformed
+    expect(lua).not.toContain("Math.floor"); // math-intrinsics and constant-folding were applied
   });
 
   it("chains SourceFile visitors through superTransformStatements with dead-local", () => {
@@ -214,8 +210,7 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("3");
-    expect(lua).toContain("x");
+    expect(lua).toContain("x = 3"); // Math.floor(3.7) constant-folded to 3
   });
 
   it("applies SourceFile visitor chaining with localizer", () => {
@@ -236,8 +231,8 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("a");
-    expect(lua).toContain("b");
+    // Localizer should hoist obj.x since it appears multiple times
+    expect(lua).toContain("obj.x");
   });
 });
 
@@ -289,7 +284,6 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     expect(lua).toContain("a - a % 1");
     expect(lua).toContain("b - b % 1");
-    expect(lua).toContain("sum");
   });
 
   it("preserves correct behavior after visitor merge cleanup", () => {
@@ -341,9 +335,7 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("3");
-    expect(lua).toContain("x");
-    expect(lua).toContain("y");
+    expect(lua).toContain("x = 3"); // Math.floor(3.2) constant-folded
   });
 
   it("maintains visitor integrity with all SourceFile-registered rules", () => {
@@ -366,7 +358,7 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("doubled");
-    expect(lua).toContain("result");
+    expect(lua).toContain("result"); // result variable preserved in output
+    expect(lua).toContain("doubled"); // doubled variable preserved in output
   });
 });

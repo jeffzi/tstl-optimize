@@ -62,7 +62,7 @@ describe("luaPropertyChain", () => {
   });
 });
 
-describe("countPropertyAccess", () => {
+describe("when counting property chain occurrences in statements", () => {
   it("counts matching chains at any depth", () => {
     const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(

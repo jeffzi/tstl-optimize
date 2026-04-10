@@ -1,8 +1,6 @@
-import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it, vi } from "vitest";
-import { createVisitors } from "../../src/rules/constant-folding";
+import { describe, expect, it } from "vitest";
 import { compile, normalizeLua } from "../helpers";
 
 describe("constant-folding", () => {
@@ -273,36 +271,15 @@ describe("constant-folding", () => {
     });
   });
 
-  describe("SourceFile visitor", () => {
-    it("folds BitwiseNot at Lua AST level", () => {
-      // biome-ignore lint/suspicious/noExplicitAny: mock plugin context for internal visitor access
-      const visitors = createVisitors({} as any, { rules: { "constant-folding": true } } as any);
-      // biome-ignore lint/suspicious/noExplicitAny: accessing internal visitor map by SyntaxKind
-      const visitor = (visitors as any)[ts.SyntaxKind.SourceFile];
-
-      const bitwiseNot = tstl.createUnaryExpression(
-        tstl.createNumericLiteral(1),
-        tstl.SyntaxKind.BitwiseNotOperator,
+  describe("when folding BitwiseNot at Lua AST level", () => {
+    it("folds ~literal to its numeric result", () => {
+      // Use `as number` to prevent TypeScript's own constant folding,
+      // so TSTL emits ~1 in Lua and the SourceFile visitor must fold it.
+      // Lua 5.3+ is required for bitwise operator support.
+      const lua = normalizeLua(
+        compile("const x = ~(1 as number);", { luaTarget: tstl.LuaTarget.Lua53 }),
       );
-      const stmt = tstl.createVariableDeclarationStatement(
-        [tstl.createIdentifier("x")],
-        [bitwiseNot],
-      );
-      const file = tstl.createFile([stmt], new Set(), "");
-
-      // biome-ignore lint/suspicious/noExplicitAny: mock context for internal visitor
-      const mockContext: any = {
-        superTransformNode: vi.fn().mockReturnValue(file),
-      };
-
-      // biome-ignore lint/suspicious/noExplicitAny: mock node for internal visitor
-      const result = visitor({} as any, mockContext);
-
-      const resultStmt = result.statements[0] as tstl.VariableDeclarationStatement;
-      // biome-ignore lint/style/noNonNullAssertion: test asserts right exists before access
-      expect(tstl.isNumericLiteral(resultStmt.right![0])).toBe(true);
-      // biome-ignore lint/style/noNonNullAssertion: test asserts right exists before access
-      expect((resultStmt.right![0] as tstl.NumericLiteral).value).toBe(-2);
+      expect(lua).toContain("x = -2");
     });
   });
 

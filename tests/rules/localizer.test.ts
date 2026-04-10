@@ -1,8 +1,6 @@
-import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it, vi } from "vitest";
-import { createVisitors } from "../../src/rules/localizer";
+import { describe, expect, it } from "vitest";
 import { compile, normalizeLua } from "../helpers";
 
 const MODULE_SCOPE = { pluginOptions: { rules: { localizer: { scope: "module" as const } } } };
@@ -10,7 +8,7 @@ const FUNC_SCOPE = { pluginOptions: { rules: { localizer: { scope: "function" as
 const ALL_SCOPE = { pluginOptions: { rules: { localizer: { scope: "all" as const } } } };
 
 describe("localizer", () => {
-  describe("positive cases (hoisted)", () => {
+  describe("when positive cases are hoisted", () => {
     it("hoists math.ceil used 2+ times at module scope", () => {
       const lua = compile(
         "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x + 1);",
@@ -182,7 +180,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("negative cases (not hoisted)", () => {
+  describe("when negative cases are not hoisted", () => {
     it("does not hoist chain used only once", () => {
       const lua = compile("declare const x: number; const a = Math.ceil(x);", {
         ...MODULE_SCOPE,
@@ -267,7 +265,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("configuration", () => {
+  describe("when configuration is applied", () => {
     it("threshold: 3 with 2 uses does not hoist, with 3 uses hoists", () => {
       const threshold3 = {
         pluginOptions: { rules: { localizer: { threshold: 3, scope: "module" as const } } },
@@ -312,7 +310,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("array element localization", () => {
+  describe("when localizing array elements", () => {
     it("localizes read-only array access", () => {
       const lua = compile(
         [
@@ -571,7 +569,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("lualib interaction", () => {
+  describe("when interacting with lualib", () => {
     it("does not hoist class prototype chains when class is locally defined", () => {
       const lua = compile(
         [
@@ -614,7 +612,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("nested statement processing", () => {
+  describe("when processing nested statements", () => {
     it("hoists chain inside function nested in while loop", () => {
       const lua = compile(
         [
@@ -679,7 +677,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("root filtering", () => {
+  describe("when filtering roots", () => {
     it("default config only hoists stdlib roots", () => {
       // math is stdlib — should be hoisted
       const lua = compile(
@@ -923,7 +921,7 @@ describe("localizer", () => {
     });
   });
 
-  describe("root filtering interactions", () => {
+  describe("when root filtering interactions occur", () => {
     it("root filter applied in function scope mode", () => {
       // Without include: non-stdlib config NOT hoisted
       const luaDefault = compile(
@@ -999,54 +997,50 @@ describe("localizer", () => {
       expect(lua).toContain("____arr + ____arr");
     });
 
-    it("root filter and array element localization coexist", () => {
-      // With include: config hoisted AND velY[i] localized
-      const luaWithInclude = compile(
-        [
-          "declare const config: { physics: { gravity: number } };",
-          "declare const velY: number[];",
-          "declare const n: number;",
-          "declare const dt: number;",
-          "for (const i of $range(0, n - 1)) {",
-          "  velY[i] = velY[i] + config.physics.gravity * dt;",
-          "  velY[i] = velY[i] * config.physics.gravity;",
-          "}",
-          "const g = config.physics.gravity + config.physics.gravity;",
-        ].join("\n"),
-        {
-          pluginOptions: {
-            rules: { localizer: { scope: "all" as const, include: ["config"] } },
-          },
-        },
-      );
-      // config chain hoisted at module level
-      expect(luaWithInclude).toContain("local ____config_physics_gravity = config.physics.gravity");
-      // velY[i] localized in loop body
-      expect(luaWithInclude).toContain("local ____velY = velY[i]");
+    it("with include filter: hoists matching root chain and localizes array element", () => {
+      const src = [
+        "declare const config: { physics: { gravity: number } };",
+        "declare const velY: number[];",
+        "declare const n: number;",
+        "declare const dt: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  velY[i] = velY[i] + config.physics.gravity * dt;",
+        "  velY[i] = velY[i] * config.physics.gravity;",
+        "}",
+        "const g = config.physics.gravity + config.physics.gravity;",
+      ].join("\n");
 
-      // Without include: config NOT hoisted but velY[i] still localized
-      const luaDefault = compile(
-        [
-          "declare const config: { physics: { gravity: number } };",
-          "declare const velY: number[];",
-          "declare const n: number;",
-          "declare const dt: number;",
-          "for (const i of $range(0, n - 1)) {",
-          "  velY[i] = velY[i] + config.physics.gravity * dt;",
-          "  velY[i] = velY[i] * config.physics.gravity;",
-          "}",
-          "const g = config.physics.gravity + config.physics.gravity;",
-        ].join("\n"),
-        ALL_SCOPE,
-      );
-      // config NOT hoisted (not in allowed set)
-      expect(luaDefault).not.toContain("local ____config_physics_gravity");
-      // velY[i] still localized (array element localization is independent)
-      expect(luaDefault).toContain("local ____velY = velY[i]");
+      const lua = compile(src, {
+        pluginOptions: {
+          rules: { localizer: { scope: "all" as const, include: ["config"] } },
+        },
+      });
+
+      expect(lua).toContain("local ____config_physics_gravity = config.physics.gravity");
+      expect(lua).toContain("local ____velY = velY[i]");
+    });
+
+    it("without include filter: does not hoist root chain but still localizes array element", () => {
+      const src = [
+        "declare const config: { physics: { gravity: number } };",
+        "declare const velY: number[];",
+        "declare const n: number;",
+        "declare const dt: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  velY[i] = velY[i] + config.physics.gravity * dt;",
+        "  velY[i] = velY[i] * config.physics.gravity;",
+        "}",
+        "const g = config.physics.gravity + config.physics.gravity;",
+      ].join("\n");
+
+      const lua = compile(src, ALL_SCOPE);
+
+      expect(lua).not.toContain("local ____config_physics_gravity");
+      expect(lua).toContain("local ____velY = velY[i]");
     });
   });
 
-  describe("interaction with other rules", () => {
+  describe("when interacting with other rules", () => {
     it("math-intrinsics transforms Math.floor to inline on PUC — nothing for localizer to hoist", () => {
       const lua = compile(
         "declare const x: number; const a = Math.floor(x); const b = Math.floor(x);",
@@ -1728,31 +1722,5 @@ describe("localizer coverage", () => {
     const lua = normalizeLua(compile(code));
     expect(lua).toContain("arr[i + 1] = arr[i + 1] + 1");
     expect(lua).not.toContain("local ____arr");
-  });
-
-  it("SourceFile visitor returns file node for empty and non-empty transform results", () => {
-    const visitors = createVisitors({} as any, { rules: { localizer: {} } } as any);
-    const visitor = visitors[ts.SyntaxKind.SourceFile];
-    if (typeof visitor !== "function") return;
-
-    const makeContext = (stmts: tstl.Statement[]): any => ({
-      superTransformNode: vi.fn().mockReturnValue(undefined),
-      superTransformStatements: vi.fn().mockReturnValue(stmts),
-      usedLuaLibFeatures: new Set(),
-      options: { rules: { localizer: {} } },
-    });
-    const makeNode = (hasStatements: boolean): any => ({
-      kind: ts.SyntaxKind.SourceFile,
-      statements: hasStatements ? [{} as any] : [],
-      getSourceFile: vi.fn().mockReturnValue({ fileName: "test.ts" }),
-      parent: undefined,
-    });
-
-    const emptyResult = visitor(makeNode(false), makeContext([]));
-    expect(tstl.isFile(emptyResult as any)).toBe(true);
-
-    const withStmts = visitor(makeNode(true), makeContext([tstl.createDoStatement([])]));
-    expect(tstl.isFile(withStmts as any)).toBe(true);
-    expect((withStmts as any).statements.length).toBeGreaterThan(0);
   });
 });

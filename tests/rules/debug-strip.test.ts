@@ -7,19 +7,16 @@ const ENV =
   "declare function print(...args: any[]): void;\ndeclare function assert(cond: any, msg?: string): asserts cond;\n";
 
 describe("debug-strip", () => {
-  describe("functions (bare function stripping)", () => {
-    it("strips default-listed function calls in statement position", () => {
-      const lua1 = compile(`${ENV}print("hello"); const x = 1;`, enabled);
-      expect(normalizeLua(lua1)).toBe("x = 1");
-
-      const lua2 = compile(
-        `${ENV}declare const cond: boolean; assert(cond); const x = 1;`,
-        enabled,
-      );
-      expect(normalizeLua(lua2)).toBe("x = 1");
-
-      const lua3 = compile(`${ENV}print("x", "y", "z"); const x = 1;`, enabled);
-      expect(normalizeLua(lua3)).toBe("x = 1");
+  describe("when function calls match the strip list", () => {
+    it.each([
+      { name: "print with string arg", code: `${ENV}print("hello"); const x = 1;` },
+      {
+        name: "assert with cond",
+        code: `${ENV}declare const cond: boolean; assert(cond); const x = 1;`,
+      },
+      { name: "print with multiple args", code: `${ENV}print("x", "y", "z"); const x = 1;` },
+    ])("strips $name call in statement position", ({ code }) => {
+      expect(normalizeLua(compile(code, enabled))).toBe("x = 1");
     });
 
     it("does not strip unlisted functions", () => {
@@ -28,7 +25,7 @@ describe("debug-strip", () => {
     });
   });
 
-  describe("namespaces (namespace method stripping)", () => {
+  describe("when namespace method calls match the strip list", () => {
     it("strips debug.traceback()", () => {
       const lua = compile(
         "declare namespace debug { function traceback(): string; } debug.traceback(); const x = 1;",
@@ -74,36 +71,36 @@ describe("debug-strip", () => {
     });
   });
 
-  describe("preserves (return value used — must NOT strip)", () => {
-    it("keeps calls when return value is used", () => {
-      const asInit = compile(
-        'declare function print(msg: string): string; const x = print("x");',
-        enabled,
-      );
-      expect(normalizeLua(asInit)).toBe('x = print("x")');
-
-      const asReturn = compile(
-        [
+  describe("when return value is used", () => {
+    it.each([
+      {
+        name: "variable initializer",
+        code: 'declare function print(msg: string): string; const x = print("x");',
+        expected: 'x = print("x")',
+      },
+      {
+        name: "function return value",
+        code: [
           "declare function assert<T>(v: T): T;",
           "function check(v: number): number { return assert(v); }",
         ].join("\n"),
-        enabled,
-      );
-      expect(normalizeLua(asReturn)).toBe("function check(v)\nreturn assert(v)\nend");
-
-      const asArg = compile(
-        [
+        expected: "function check(v)\nreturn assert(v)\nend",
+      },
+      {
+        name: "function argument",
+        code: [
           "declare function print(msg: string): string;",
           "declare function foo(s: string): void;",
           'foo(print("x"));',
         ].join("\n"),
-        enabled,
-      );
-      expect(normalizeLua(asArg)).toBe('foo(print("x"))');
+        expected: 'foo(print("x")',
+      },
+    ])("keeps call used as $name", ({ code, expected }) => {
+      expect(normalizeLua(compile(code, enabled))).toContain(expected);
     });
   });
 
-  describe("config", () => {
+  describe("when config is customized", () => {
     it("custom functions list replaces defaults", () => {
       const lua = compile(
         `${ENV}declare function myDebug(msg: string): void; print("a"); myDebug("b");`,
@@ -125,20 +122,18 @@ describe("debug-strip", () => {
       expect(normalizeLua(lua)).toBe("debug.traceback()");
     });
 
-    it("disabling the rule preserves all calls", () => {
-      const viaFalse = compile(`${ENV}print("hello");`, {
-        pluginOptions: { rules: { "debug-strip": false } },
-      });
-      expect(normalizeLua(viaFalse)).toBe('print("hello")');
-
-      const viaEnabled = compile(`${ENV}print("hello");`, {
-        pluginOptions: { rules: { "debug-strip": { enabled: false } } },
-      });
-      expect(normalizeLua(viaEnabled)).toBe('print("hello")');
+    it.each([
+      { name: "false (boolean)", options: { pluginOptions: { rules: { "debug-strip": false } } } },
+      {
+        name: "{ enabled: false }",
+        options: { pluginOptions: { rules: { "debug-strip": { enabled: false } } } },
+      },
+    ])("disabling via $name preserves all calls", ({ options }) => {
+      expect(normalizeLua(compile(`${ENV}print("hello");`, options))).toBe('print("hello")');
     });
   });
 
-  describe("multi-line (mixed stripped and kept statements)", () => {
+  describe("when code mixes stripped and non-stripped statements", () => {
     it("strips only targeted calls among multiple statements", () => {
       const lua = compile(
         `${ENV}${[
@@ -218,14 +213,14 @@ describe("debug-strip", () => {
     });
   });
 
-  describe("preserves non-identifier callees", () => {
+  describe("when callee is not a simple identifier", () => {
     it("keeps IIFE (callee is FunctionExpression, not in any strip list)", () => {
       const lua = compile("(function() { let a = 1; return a; })(); const x = 1;", enabled);
       expect(normalizeLua(lua)).toBe("(function()\nlocal a = 1\nreturn a\nend)()\nx = 1");
     });
   });
 
-  describe("interaction", () => {
+  describe("when combined with other rules", () => {
     it("coexists with other rules (different SyntaxKinds)", () => {
       const lua = compile(
         [
@@ -264,7 +259,7 @@ describe("debug-strip", () => {
     });
   });
 
-  describe("namespace and nested callee stripping", () => {
+  describe("when namespace or nested callees are targeted", () => {
     it("does not strip when namespace root is not in config", () => {
       const lua = compile(
         [
@@ -301,7 +296,7 @@ describe("debug-strip", () => {
     });
   });
 
-  describe("dynamic callee preservation", () => {
+  describe("when callee is computed dynamically", () => {
     it("preserves call when callee root is a dynamic expression, not a static identifier", () => {
       // getLogger().log("msg") — rootIdentifier hits the base-case `return undefined` because
       // callee.table is a CallExpression → call is NOT stripped

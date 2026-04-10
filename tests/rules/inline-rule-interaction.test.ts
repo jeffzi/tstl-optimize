@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { compile, normalizeLua } from "../helpers";
 
 describe("rule interaction", () => {
-  describe("localizer + blocks", () => {
+  describe("when localizer works with block-scoped code", () => {
     it("hoists repeated chains from inside do...end to module scope", () => {
       const lua = compile(
         `
@@ -58,7 +58,7 @@ describe("rule interaction", () => {
     });
   });
 
-  describe("math-intrinsics + inline", () => {
+  describe("when math-intrinsics and inline rules interact", () => {
     it("replaces Math functions inside inlined expression body", () => {
       const lua = compile(`
         /** @inline */
@@ -85,7 +85,7 @@ describe("rule interaction", () => {
     });
   });
 
-  describe("localizer + inline", () => {
+  describe("when localizer and inline rules interact", () => {
     it("processes property chains and calls from inlined body", () => {
       const src = `
         declare const obj: { pos: { x: number } };

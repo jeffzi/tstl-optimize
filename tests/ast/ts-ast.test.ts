@@ -13,31 +13,35 @@ function parseExpr(code: string): ts.Expression {
 }
 
 describe("hasSideEffects", () => {
-  describe("pure expressions", () => {
-    it("returns false for leaf expressions", () => {
-      expect(hasSideEffects(parseExpr("42"))).toBe(false);
-      expect(hasSideEffects(parseExpr('"hello"'))).toBe(false);
-      expect(hasSideEffects(parseExpr("x"))).toBe(false);
+  describe("when expression is pure", () => {
+    it.each([
+      { expr: "42" },
+      { expr: '"hello"' },
+      { expr: "x" },
+    ])("returns false for leaf expression $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(false);
     });
 
-    it("returns false for transparent wrappers around pure operand", () => {
-      expect(hasSideEffects(parseExpr("void 0"))).toBe(false);
-      expect(hasSideEffects(parseExpr("typeof x"))).toBe(false);
-      expect(hasSideEffects(parseExpr("(a + b)"))).toBe(false);
-      expect(hasSideEffects(parseExpr("x as number"))).toBe(false);
-      expect(hasSideEffects(parseExpr("x!"))).toBe(false);
-      expect(hasSideEffects(parseExpr("x satisfies number"))).toBe(false);
+    // PropertyAccessExpression is a transparent wrapper — same code path as void/typeof/as/!/satisfies/(...)
+    it.each([
+      { expr: "void 0" },
+      { expr: "typeof x" },
+      { expr: "(a + b)" },
+      { expr: "x as number" },
+      { expr: "x!" },
+      { expr: "x satisfies number" },
+      { expr: "obj.x" },
+    ])("returns false for transparent wrapper $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(false);
     });
 
-    it("returns false for prefix unary non-increment with pure operand", () => {
-      expect(hasSideEffects(parseExpr("-x"))).toBe(false);
-      expect(hasSideEffects(parseExpr("+x"))).toBe(false);
-      expect(hasSideEffects(parseExpr("~x"))).toBe(false);
-      expect(hasSideEffects(parseExpr("!x"))).toBe(false);
-    });
-
-    it("returns false for property access on identifier", () => {
-      expect(hasSideEffects(parseExpr("obj.x"))).toBe(false);
+    it.each([
+      { expr: "-x" },
+      { expr: "+x" },
+      { expr: "~x" },
+      { expr: "!x" },
+    ])("returns false for prefix unary non-increment $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(false);
     });
 
     it("returns false for pure binary expression", () => {
@@ -72,9 +76,11 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("({ foo() {} })"))).toBe(false);
     });
 
-    it("returns false for object literal with getter/setter", () => {
-      expect(hasSideEffects(parseExpr("({ get x() { return 1; } })"))).toBe(false);
-      expect(hasSideEffects(parseExpr("({ set x(v) {} })"))).toBe(false);
+    it.each([
+      { expr: "({ get x() { return 1; } })" },
+      { expr: "({ set x(v) {} })" },
+    ])("returns false for object literal with accessor $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(false);
     });
 
     it("returns false for template expression with pure substitutions", () => {
@@ -83,9 +89,12 @@ describe("hasSideEffects", () => {
     });
   });
 
-  describe("side-effectful expressions", () => {
-    it("returns true for call or new expression", () => {
+  describe("when expression has side effects", () => {
+    it("returns true for call expression", () => {
       expect(hasSideEffects(parseExpr("foo()"))).toBe(true);
+    });
+
+    it("returns true for new expression", () => {
       expect(hasSideEffects(parseExpr("new Foo()"))).toBe(true);
     });
 
@@ -93,14 +102,19 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("tag`hello`"))).toBe(true);
     });
 
-    it("returns true for increment or decrement", () => {
+    it("returns true for postfix increment", () => {
       expect(hasSideEffects(parseExpr("x++"))).toBe(true);
+    });
+
+    it("returns true for prefix decrement", () => {
       expect(hasSideEffects(parseExpr("--x"))).toBe(true);
     });
 
-    it("returns true for assignment operators", () => {
-      expect(hasSideEffects(parseExpr("x = 1"))).toBe(true);
-      expect(hasSideEffects(parseExpr("x += 1"))).toBe(true);
+    it.each([
+      { expr: "x = 1" },
+      { expr: "x += 1" },
+    ])("returns true for assignment operator $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
     it("returns true for await expression", () => {
@@ -125,10 +139,12 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("delete obj.x"))).toBe(true);
     });
 
-    it("returns true for unary wrappers around call", () => {
-      expect(hasSideEffects(parseExpr("void foo()"))).toBe(true);
-      expect(hasSideEffects(parseExpr("typeof foo()"))).toBe(true);
-      expect(hasSideEffects(parseExpr("+foo()"))).toBe(true);
+    it.each([
+      { expr: "void foo()" },
+      { expr: "typeof foo()" },
+      { expr: "+foo()" },
+    ])("returns true for unary wrapper around call $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
     it("returns true for object literal with side-effectful computed key", () => {
@@ -139,6 +155,7 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("({ [foo()]() {} })"))).toBe(true);
     });
 
+    // Class expressions are always side-effectful (decorators, static initializers, computed keys)
     it("returns true for class expression", () => {
       expect(hasSideEffects(parseExpr("(class {})"))).toBe(true);
     });
@@ -146,38 +163,42 @@ describe("hasSideEffects", () => {
     it("returns true for class expression with static field initializer", () => {
       expect(hasSideEffects(parseExpr("(class { static x = foo(); })"))).toBe(true);
     });
-
-    it("returns true for class expression with decorator", () => {
-      expect(hasSideEffects(parseExpr("(class {})"))).toBe(true);
-    });
   });
 
-  describe("recursive detection", () => {
+  describe("when detecting effects in nested expressions", () => {
     it("detects call inside property access", () => {
       expect(hasSideEffects(parseExpr("foo().bar"))).toBe(true);
     });
 
-    it("detects call inside element access expression or index", () => {
-      expect(hasSideEffects(parseExpr("foo()[0]"))).toBe(true);
-      expect(hasSideEffects(parseExpr("arr[foo()]"))).toBe(true);
+    it.each([
+      { part: "expression", expr: "foo()[0]" },
+      { part: "index", expr: "arr[foo()]" },
+    ])("detects call in element access $part", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
-    it("detects call through transparent wrappers", () => {
-      expect(hasSideEffects(parseExpr("(foo())"))).toBe(true);
-      expect(hasSideEffects(parseExpr("foo() as number"))).toBe(true);
-      expect(hasSideEffects(parseExpr("foo()!"))).toBe(true);
-      expect(hasSideEffects(parseExpr("foo() satisfies number"))).toBe(true);
+    it.each([
+      { expr: "(foo())" },
+      { expr: "foo() as number" },
+      { expr: "foo()!" },
+      { expr: "foo() satisfies number" },
+    ])("detects call through transparent wrapper $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
-    it("detects call in any branch of conditional expression", () => {
-      expect(hasSideEffects(parseExpr("foo() ? a : b"))).toBe(true);
-      expect(hasSideEffects(parseExpr("x ? foo() : b"))).toBe(true);
-      expect(hasSideEffects(parseExpr("x ? a : foo()"))).toBe(true);
+    it.each([
+      { expr: "foo() ? a : b" },
+      { expr: "x ? foo() : b" },
+      { expr: "x ? a : foo()" },
+    ])("detects call in conditional branch $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
-    it("detects call in either operand of binary expression", () => {
-      expect(hasSideEffects(parseExpr("a + foo()"))).toBe(true);
-      expect(hasSideEffects(parseExpr("foo() + b"))).toBe(true);
+    it.each([
+      { expr: "a + foo()" },
+      { expr: "foo() + b" },
+    ])("detects call in binary operand $expr", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
     it("detects call inside array literal", () => {
@@ -198,8 +219,8 @@ describe("hasSideEffects", () => {
     });
   });
 
-  describe("SideEffectOptions", () => {
-    describe("AssumeConstructorPure", () => {
+  describe("when SideEffectOptions flags are used", () => {
+    describe("when AssumeConstructorPure is set", () => {
       it("treats new as side-effectful by default", () => {
         expect(hasSideEffects(parseExpr("new Foo()"))).toBe(true);
       });
@@ -217,7 +238,7 @@ describe("hasSideEffects", () => {
       });
     });
 
-    describe("AssumeTaggedTemplatePure", () => {
+    describe("when AssumeTaggedTemplatePure is set", () => {
       it("treats tagged template as side-effectful by default", () => {
         expect(hasSideEffects(parseExpr("tag`hello`"))).toBe(true);
       });
@@ -237,32 +258,8 @@ describe("hasSideEffects", () => {
     });
   });
 
-  describe("SideEffectOptions type", () => {
-    it.each([
-      { flag: "None", value: SideEffectOptions.None, expected: 0 },
-      {
-        flag: "AssumeTaggedTemplatePure",
-        value: SideEffectOptions.AssumeTaggedTemplatePure,
-        expected: 1,
-      },
-      {
-        flag: "AssumeConstructorPure",
-        value: SideEffectOptions.AssumeConstructorPure,
-        expected: 2,
-      },
-    ])("accepts individual flag $flag", ({ value, expected }) => {
-      const opt: SideEffectOptions = value;
-      expect(opt).toBe(expected);
-    });
-
-    it("accepts bitwise OR combinations of flags", () => {
-      const combined: SideEffectOptions =
-        SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure;
-
-      expect(combined).toBe(3);
-    });
-
-    it("works with hasSideEffects when both flags are combined", () => {
+  describe("when both AssumeTaggedTemplatePure and AssumeConstructorPure are combined", () => {
+    it("treats both tagged templates and new expressions as pure", () => {
       const combined: SideEffectOptions =
         SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure;
 
@@ -270,7 +267,7 @@ describe("hasSideEffects", () => {
     });
   });
 
-  describe("function/arrow expression side effects with ConsiderIdentityMutating", () => {
+  describe("when ConsiderIdentityMutating is set", () => {
     it("function expression has no side effects without ConsiderIdentityMutating", () => {
       // Direct node creation for function expression
       const fnExpr = ts.factory.createFunctionExpression(

@@ -58,7 +58,7 @@ describe("resolveConditionalCompilationConfig", () => {
 });
 
 describe("conditional-compilation", () => {
-  describe("if-statement folding", () => {
+  describe("when if-statement folding", () => {
     it.each([
       { name: "truthy", value: true, expected: "print(1)" },
       { name: "falsy", value: false, expected: "print(2)" },
@@ -87,7 +87,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("ternary folding", () => {
+  describe("when ternary folding", () => {
     it.each([
       { name: "truthy", value: true, expected: "x = 1" },
       { name: "falsy", value: false, expected: "x = 2" },
@@ -100,7 +100,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("expression evaluation", () => {
+  describe("when expression evaluation", () => {
     const opts = ccOpts({
       A: { env: "X", default: true },
       B: { env: "X", default: false },
@@ -128,7 +128,7 @@ describe("conditional-compilation", () => {
       { name: "literal false", src: `${PRINT_DECL} if (false) { print(1); }`, expected: "" },
       {
         name: "type assertion in parenthesized expression with OR",
-        src: `${PRINT_DECL} declare const DEBUG: boolean; if ((false as any) || DEBUG) { print(1); }`,
+        src: `${PRINT_DECL} declare const A: boolean, DEBUG: boolean; if ((A) || DEBUG) { print(1); }`,
         expected: "print(1)",
       },
     ])("folds $name condition", ({ src, expected }) => {
@@ -136,7 +136,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("switch-statement folding", () => {
+  describe("when switch-statement folding", () => {
     const src = `
       ${PRINT_DECL}
       declare const P: string;
@@ -159,7 +159,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("diagnostics", () => {
+  describe("when diagnostics", () => {
     const partialSrc = `${PRINT_DECL} declare const DEBUG: boolean, unknown: boolean; if (DEBUG && unknown) { print(1); }`;
 
     it("warns on partially resolvable conditions", () => {
@@ -181,7 +181,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("non-null and type assertions", () => {
+  describe("when non-null and type assertions", () => {
     const opts = ccOpts({
       IS_DEBUG: { env: "X", default: true },
       IS_ENABLED: { env: "X", default: false },
@@ -212,7 +212,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("edge cases", () => {
+  describe("when edge cases", () => {
     it("does not fold when rule is disabled", () => {
       const lua = compile(`${PRINT_DECL} if (true) { print(1); }`, {
         pluginOptions: { rules: { "conditional-compilation": false } },
@@ -238,7 +238,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("switch fallthrough with conditional breaks", () => {
+  describe("when switch fallthrough with conditional breaks", () => {
     it("preserves fallthrough when break is conditional", () => {
       const src = `
         ${PRINT_DECL}
@@ -285,11 +285,11 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("switch case body in block", () => {
+  describe("when switch case body in block", () => {
     it("strips break from case body wrapped in block", () => {
       const src = `
         ${PRINT_DECL}
-        const MODE = 1 as const;
+        const MODE: 1 = 1;
         switch (MODE) {
           case 1: {
             print("body");
@@ -308,7 +308,7 @@ describe("conditional-compilation", () => {
     it("preserves nested break inside for loop in case block", () => {
       const src = `
         ${PRINT_DECL}
-        const MODE = 2 as const;
+        const MODE: 2 = 2;
         switch (MODE) {
           case 2: {
             for (let i = 0; i < 5; i++) {
@@ -329,7 +329,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("switch with unresolved cases", () => {
+  describe("when switch with unresolved cases", () => {
     it("preserves unresolved cases when switch value is resolved", () => {
       const src = `
         ${PRINT_DECL}
@@ -413,7 +413,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("unary minus operator", () => {
+  describe("when unary minus operator", () => {
     it("folds negative numeric literal in equality check", () => {
       const src = `${PRINT_DECL} declare const CONST: number; if (CONST === -1) { print(1); } else { print(2); }`;
 
@@ -441,7 +441,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("branch detection in nested control flow", () => {
+  describe("when branch detection in nested control flow", () => {
     const opts = ccOpts({
       TRUE_CONST: { env: "TRUE_CONST", default: true },
       FALSE_CONST: { env: "FALSE_CONST", default: false },
@@ -499,7 +499,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("partial folding output", () => {
+  describe("when partial folding output", () => {
     const opts = ccOpts({
       TRUE_CONST: { env: "TRUE_CONST", default: true },
       FALSE_CONST: { env: "FALSE_CONST", default: false },
@@ -534,7 +534,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("boolean and logical expression folding", () => {
+  describe("when boolean and logical expression folding", () => {
     const opts = ccOpts({
       TRUE_CONST: { env: "TRUE_CONST", default: true },
       FALSE_CONST: { env: "FALSE_CONST", default: false },
@@ -754,7 +754,7 @@ describe("conditional-compilation", () => {
     });
   });
 
-  describe("switch folding edge cases", () => {
+  describe("when switch folding edge cases", () => {
     const opts = ccOpts({
       TRUE_CONST: { env: "TRUE_CONST", default: true },
       FALSE_CONST: { env: "FALSE_CONST", default: false },
@@ -869,13 +869,14 @@ describe("conditional-compilation", () => {
   });
 });
 
-describe("property-based", () => {
+describe("when property-based", () => {
   const NUM_RUNS = 50;
   const TIMEOUT = 15_000;
 
   it(
     "boolean constant selects correct branch",
     () => {
+      expect.hasAssertions();
       fc.assert(
         fc.property(fc.boolean(), (value) => {
           const src = `
@@ -902,6 +903,7 @@ describe("property-based", () => {
   it(
     "negation inverts branch selection",
     () => {
+      expect.hasAssertions();
       fc.assert(
         fc.property(fc.boolean(), (value) => {
           const src = `
@@ -928,6 +930,7 @@ describe("property-based", () => {
   it(
     "string equality selects correct branch",
     () => {
+      expect.hasAssertions();
       fc.assert(
         fc.property(arbSafeString, arbSafeString, (constValue, compareValue) => {
           const src = `

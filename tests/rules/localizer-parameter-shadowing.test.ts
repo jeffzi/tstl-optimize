@@ -24,7 +24,7 @@ describe("localizer: parameter shadowing", () => {
         pluginOptions: {
           rules: {
             localizer: {
-              scope: "function" as const,
+              scope: "function",
               include: ["config"],
             },
           },
