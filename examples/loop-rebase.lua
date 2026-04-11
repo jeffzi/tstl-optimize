@@ -5,8 +5,12 @@ velY = {4, 5, 6}
 count = 3
 dt = 0.5
 for i = 1, count do
-    posX[i] = posX[i] + velX[i] * dt
-    posY[i] = posY[i] + velY[i] * dt
+    local ____posX = posX[i]
+    local ____posY = posY[i]
+    ____posX = ____posX + velX[i] * dt
+    ____posY = ____posY + velY[i] * dt
+    posX[i] = ____posX
+    posY[i] = ____posY
 end
 indices = {}
 for i = 0, count - 1 do
