@@ -11,15 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **constant-folding** rule — evaluate constant expressions at compile time.
 - **dead-local** rule — eliminate unused local variables.
-- **debug-strip** rule now includes `console` in its default namespaces.
 - **merge-locals** rule — merge local variable declarations with subsequent assignments.
+- **remove-empty-branch** rule — drop `if`/`else` branches whose body is empty.
+- **debug-strip** rule now includes `console` in its default namespaces.
 
 ### Fixed
 
-- **conditional-compilation** rule now handles loose equality and `switch` edge cases.
-- **inline** rule now correctly validates side-effects for unused arguments, handles cross-module type-only references, variable declaration shadowing, and `export {}` block elimination.
-- **math-intrinsics** rule now uses proper deep clone for power expressions.
-- Core AST traversal now recognizes side effects in class expressions and correctly visits assignment targets.
+- AST cloning and traversal now preserve call metadata, honor Lua key-before-value table
+  evaluation, and treat indexed reads as side-effectful.
+- Plugin target inference now refreshes correctly when a plugin instance is reused across different
+  Lua targets.
+- **conditional-compilation** now handles loose equality and `switch` edge cases, respects shadowed
+  configured constants, preserves needed block scopes when folding kept `if` and `switch` branches,
+  and stops switch fallthrough after `continue`.
+- **debug-strip** now recognizes method-call syntax and matches configured globals by symbol
+  identity.
+- **inline** now preserves eager argument evaluation for expression-body inlines by hoisting
+  side-effecting call arguments, correctly validates side-effects for unused arguments, handles
+  cross-module type-only references, variable declaration shadowing, and `export {}` block
+  elimination.
+- **localizer** now avoids stale chain hoists, shadowed nested-loop array rewrites, and write-only
+  array element accesses; hoists chains despite parameter shadowing; hardens config resolution.
+- **math-intrinsics** now guards the `Math.floor()` fast path for infinity, avoids unsafe `x ** 2`
+  rewrites on indexed bases, and uses proper deep clone for power expressions.
+- SourceFile visitor chaining now routes statement fallbacks through the normal statement transform
+  path instead of the previous SourceFile visitor.
+- Core AST traversal now recognizes side effects in class expressions and correctly visits
+  assignment targets.
 
 ## [0.5.0] - 2026-04-02
 
@@ -74,37 +92,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **conditional-compilation** rule — strip dead `if`/ternary/`switch` branches and substitute
   compile-time constants resolved from environment variables; emits a diagnostic when a
-  condition mixes constants with runtime expressions
+  condition mixes constants with runtime expressions.
 
 ### Fixed
 
 - Multiple optimization rules targeting the same expression now all apply correctly instead of
-  only the highest-priority rule firing
+  only the highest-priority rule firing.
 
 ## [0.2.0] - 2026-03-02
 
 ### Added
 
 - **debug-strip** rule — remove calls to configurable function names and namespace prefixes
-  (e.g. debug/profiling helpers) from Lua output; off by default
+  (e.g. debug/profiling helpers) from Lua output; off by default.
 
 ## [0.1.0] - 2026-03-02
 
 ### Added
 
 - Plugin infrastructure with configurable rules, target-aware transforms (`puc` / `luajit`
-  auto-detected from `luaTarget`), and per-rule enable/disable via tsconfig
+  auto-detected from `luaTarget`), and per-rule enable/disable via tsconfig.
 - **math-intrinsics** rule — replace `Math.*` calls with Lua expressions; LuaJIT-aware
-  (skips inlining where C function dispatch is already fast)
-- **loop-rebase** rule — eliminate `+1` offset in 0-based to 1-based array loops
+  (skips inlining where C function dispatch is already fast).
+- **loop-rebase** rule — eliminate `+1` offset in 0-based to 1-based array loops.
 - **inline** rule — expand `@inline`-tagged single-expression functions at call sites,
   with side-effect analysis and parameter write detection; emit warnings when inlining
-  is skipped and strip `@inline` JSDoc from Lua output
+  is skipped and strip `@inline` JSDoc from Lua output.
 - **localizer** rule — hoist repeated table access chains (`a.b.c`) to local variables;
   supports both module and function scope, configurable threshold, and array element
-  access patterns (`arr[i]`) within loop bodies
-- Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations
-- Runnable examples with generation script
+  access patterns (`arr[i]`) within loop bodies.
+- Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
+- Runnable examples with generation script.
 
 [Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.4.0...v0.5.0
