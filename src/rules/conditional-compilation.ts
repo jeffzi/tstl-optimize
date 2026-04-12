@@ -68,15 +68,21 @@ export function evaluateCondition(
 
     if (
       op === ts.SyntaxKind.EqualsEqualsEqualsToken ||
-      op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
-      op === ts.SyntaxKind.EqualsEqualsToken ||
-      op === ts.SyntaxKind.ExclamationEqualsToken
+      op === ts.SyntaxKind.ExclamationEqualsEqualsToken
     ) {
       const left = evaluateCondition(expr.left, constants);
       const right = evaluateCondition(expr.right, constants);
       if (left === undefined || right === undefined) return undefined;
-      const isEq =
-        op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+      const isEq = op === ts.SyntaxKind.EqualsEqualsEqualsToken;
+      return isEq ? left === right : left !== right;
+    }
+
+    if (op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken) {
+      const left = evaluateCondition(expr.left, constants);
+      const right = evaluateCondition(expr.right, constants);
+      if (left === undefined || right === undefined) return undefined;
+      if (typeof left !== typeof right) return undefined;
+      const isEq = op === ts.SyntaxKind.EqualsEqualsToken;
       return isEq ? left === right : left !== right;
     }
   }
@@ -90,18 +96,69 @@ function unwrapBlock(stmt: ts.Statement): readonly ts.Statement[] {
 }
 
 /**
- * Check if statements contain a direct (unconditional) break or return.
- * A break/return inside an if statement is conditional and does not count.
+ * Check if statements contain a direct (unconditional) break, return, or throw.
+ * A break/return/throw inside an if statement is conditional and does not count.
  * Only direct statements at the top level count as stopping fallthrough.
  */
 function containsBreakOrReturn(statements: readonly ts.Statement[]): boolean {
   for (const s of statements) {
-    if (ts.isBreakStatement(s) || ts.isReturnStatement(s)) return true;
+    if (ts.isBreakStatement(s) || ts.isReturnStatement(s) || ts.isThrowStatement(s)) return true;
     if (ts.isBlock(s)) {
       if (containsBreakOrReturn(s.statements)) return true;
     }
     // Do NOT recurse into if statements — breaks inside them are conditional
   }
+  return false;
+}
+
+function containsConditionalCaseBreak(
+  statements: readonly ts.Statement[],
+  topLevel = true,
+): boolean {
+  for (const statement of statements) {
+    if (ts.isBreakStatement(statement)) {
+      if (!topLevel) return true;
+      continue;
+    }
+
+    if (ts.isBlock(statement)) {
+      if (containsConditionalCaseBreak(statement.statements, topLevel)) return true;
+      continue;
+    }
+
+    if (ts.isIfStatement(statement)) {
+      if (containsConditionalCaseBreak(unwrapBlock(statement.thenStatement), false)) return true;
+      if (
+        statement.elseStatement &&
+        containsConditionalCaseBreak(unwrapBlock(statement.elseStatement), false)
+      ) {
+        return true;
+      }
+      continue;
+    }
+
+    if (ts.isLabeledStatement(statement)) {
+      if (containsConditionalCaseBreak([statement.statement], false)) return true;
+      continue;
+    }
+
+    if (ts.isTryStatement(statement)) {
+      if (containsConditionalCaseBreak(statement.tryBlock.statements, false)) return true;
+      if (
+        statement.catchClause &&
+        containsConditionalCaseBreak(statement.catchClause.block.statements, false)
+      ) {
+        return true;
+      }
+      if (
+        statement.finallyBlock &&
+        containsConditionalCaseBreak(statement.finallyBlock.statements, false)
+      ) {
+        return true;
+      }
+    }
+  }
+
   return false;
 }
 
@@ -232,6 +289,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
       const { clauses } = node.caseBlock;
 
       let hasUnresolvedCase = false;
+      let hasUnresolvedCaseBeforeMatch = false;
       let matchIndex = -1;
 
       for (let i = 0; i < clauses.length; i++) {
@@ -241,6 +299,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
           if (caseValue === undefined) {
             hasUnresolvedCase = true;
           } else if (matchIndex === -1 && caseValue === switchValue) {
+            hasUnresolvedCaseBeforeMatch = hasUnresolvedCase;
             matchIndex = i;
           }
         }
@@ -248,7 +307,9 @@ export const createVisitors: RuleFactory = (_checker, config) => {
 
       // If no resolved case matches and there are unresolved cases,
       // we cannot determine the outcome at compile time. Preserve the switch.
-      if (matchIndex === -1 && hasUnresolvedCase) {
+      // Likewise, if a resolved match is preceded by an unresolved case,
+      // that earlier clause could shadow the later match at runtime.
+      if ((matchIndex === -1 && hasUnresolvedCase) || hasUnresolvedCaseBeforeMatch) {
         return context.superTransformStatements(node);
       }
 
@@ -285,6 +346,9 @@ export const createVisitors: RuleFactory = (_checker, config) => {
       const collected: ts.Statement[] = [];
       for (let i = matchIndex; i < clauses.length; i++) {
         const stmts = clauses[i].statements;
+        if (containsConditionalCaseBreak(stmts)) {
+          return context.superTransformStatements(node);
+        }
         collected.push(...collectStrippingCaseBreaks(stmts));
         if (containsBreakOrReturn(stmts)) break;
       }

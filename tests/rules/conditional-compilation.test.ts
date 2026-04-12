@@ -134,6 +134,22 @@ describe("conditional-compilation", () => {
     ])("folds $name condition", ({ src, expected }) => {
       expect(normalizeLua(compile(src, opts))).toBe(expected);
     });
+
+    it.each([
+      {
+        name: "loose equality across number and string",
+        src: `${PRINT_DECL} declare const VAL: number | string; if (VAL == "42") { print(1); } else { print(2); }`,
+      },
+      {
+        name: "loose inequality across number and string",
+        src: `${PRINT_DECL} declare const VAL: number | string; if (VAL != "42") { print(1); } else { print(2); }`,
+      },
+    ])("does not fold $name when coercion would matter", ({ src }) => {
+      const lua = normalizeLua(compile(src, opts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+    });
   });
 
   describe("when switch-statement folding", () => {
@@ -283,6 +299,30 @@ describe("conditional-compilation", () => {
       // Only print(1) should appear.
       expect(lua).toBe("print(1)");
     });
+
+    it("preserves switch when stripping would expose a conditional bare break", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const MODE: string;
+        declare const FLAG: boolean;
+        switch (MODE) {
+          case "a":
+            if (FLAG) break;
+            print(1);
+            break;
+          case "b":
+            print(2);
+            break;
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: "a" } })));
+
+      expect(lua).toContain('____switch2 == "a"');
+      expect(lua).toContain('____switch2 == "b"');
+      expect(lua).toContain("until true");
+      expect(lua).not.toBe("print(1)");
+    });
   });
 
   describe("when switch case body in block", () => {
@@ -330,7 +370,7 @@ describe("conditional-compilation", () => {
   });
 
   describe("when switch with unresolved cases", () => {
-    it("preserves unresolved cases when switch value is resolved", () => {
+    it("preserves switch when an earlier unresolved case could shadow a later resolved match", () => {
       const src = `
         ${PRINT_DECL}
         declare const SWITCH_VAL: string;
@@ -351,10 +391,13 @@ describe("conditional-compilation", () => {
         compile(src, ccOpts({ SWITCH_VAL: { env: "X", default: "resolved" } })),
       );
 
-      // SWITCH_VAL is resolved to "resolved", but CASE_UNRESOLVED is unresolved.
-      // The switch should fold to the matching resolved case ("resolved" -> print(2)),
-      // but the unresolved case should NOT cause us to incorrectly pick default.
-      expect(lua).toBe("print(2)");
+      // SWITCH_VAL is resolved to "resolved", but CASE_UNRESOLVED is unresolved and appears first.
+      // It could still match at runtime, so folding to the later resolved case would skip the
+      // earlier branch and change first-match switch semantics.
+      expect(lua).toContain("repeat");
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+      expect(lua).toContain("print(3)");
     });
 
     it("does not fold to default when unresolved case is present", () => {
@@ -826,6 +869,30 @@ describe("conditional-compilation", () => {
 
       expect(lua).toContain("return 1");
       expect(lua).not.toContain("print(2)");
+    });
+
+    it("does not emit later fallthrough clauses after a throw", () => {
+      const oneOpts = ccOpts({ ONE: { env: "ONE", default: 1 } });
+      const code = `
+        ${PRINT_DECL}
+        declare const ONE: number;
+        switch (ONE) {
+          case 1:
+            print(1);
+            throw "boom";
+          case 2:
+            print(2);
+            break;
+          default:
+            print(0);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, oneOpts));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).not.toContain("print(2)");
+      expect(lua).not.toContain("print(0)");
     });
 
     it("preserves switch when case expression is a function call", () => {
