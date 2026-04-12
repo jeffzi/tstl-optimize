@@ -22,7 +22,7 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr(expr))).toBe(false);
     });
 
-    // PropertyAccessExpression is a transparent wrapper — same code path as void/typeof/as/!/satisfies/(...)
+    // Wrappers that cannot trigger getters stay transparent.
     it.each([
       { expr: "void 0" },
       { expr: "typeof x" },
@@ -30,9 +30,12 @@ describe("hasSideEffects", () => {
       { expr: "x as number" },
       { expr: "x!" },
       { expr: "x satisfies number" },
-      { expr: "obj.x" },
     ])("returns false for transparent wrapper $expr", ({ expr }) => {
       expect(hasSideEffects(parseExpr(expr))).toBe(false);
+    });
+
+    it("treats property access as side-effectful to avoid duplicating getters", () => {
+      expect(hasSideEffects(parseExpr("obj.x"))).toBe(true);
     });
 
     it.each([

@@ -48,7 +48,6 @@ export function hasSideEffects(
       case ts.SyntaxKind.NonNullExpression:
       case ts.SyntaxKind.VoidExpression:
       case ts.SyntaxKind.TypeOfExpression:
-      case ts.SyntaxKind.PropertyAccessExpression:
       case ts.SyntaxKind.SpreadElement:
         current = (
           current as
@@ -58,10 +57,13 @@ export function hasSideEffects(
             | ts.NonNullExpression
             | ts.VoidExpression
             | ts.TypeOfExpression
-            | ts.PropertyAccessExpression
             | ts.SpreadElement
         ).expression;
         continue;
+
+      case ts.SyntaxKind.PropertyAccessExpression:
+        // Property reads can invoke getters, so duplicating them is not semantics-preserving.
+        return true;
 
       case ts.SyntaxKind.PrefixUnaryExpression:
         switch ((current as ts.PrefixUnaryExpression).operator) {

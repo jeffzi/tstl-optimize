@@ -38,10 +38,15 @@ function buildFloor(luaArg: tstl.Expression): tstl.Expression {
   return tstl.createBinaryExpression(luaArg, right, tstl.SyntaxKind.SubtractionOperator);
 }
 
-/** Build `(arg < 0) and -arg or arg` */
+/** Build `(arg == 0) and 0 or ((arg < 0) and -arg or arg)` */
 function buildAbs(luaArg: tstl.Expression): tstl.Expression {
-  const condition = tstl.createBinaryExpression(
+  const zeroCheck = tstl.createBinaryExpression(
     luaArg,
+    tstl.createNumericLiteral(0),
+    tstl.SyntaxKind.EqualityOperator,
+  );
+  const condition = tstl.createBinaryExpression(
+    tstl.cloneNode(luaArg),
     tstl.createNumericLiteral(0),
     tstl.SyntaxKind.LessThanOperator,
   );
@@ -50,7 +55,21 @@ function buildAbs(luaArg: tstl.Expression): tstl.Expression {
     tstl.SyntaxKind.NegationOperator,
   );
   const andExpr = tstl.createBinaryExpression(condition, negated, tstl.SyntaxKind.AndOperator);
-  return tstl.createBinaryExpression(andExpr, tstl.cloneNode(luaArg), tstl.SyntaxKind.OrOperator);
+  const nonZeroAbs = tstl.createBinaryExpression(
+    andExpr,
+    tstl.cloneNode(luaArg),
+    tstl.SyntaxKind.OrOperator,
+  );
+  const zeroBranch = tstl.createBinaryExpression(
+    zeroCheck,
+    tstl.createNumericLiteral(0),
+    tstl.SyntaxKind.AndOperator,
+  );
+  return tstl.createBinaryExpression(
+    zeroBranch,
+    tstl.createParenthesizedExpression(nonZeroAbs),
+    tstl.SyntaxKind.OrOperator,
+  );
 }
 
 /** Build `(a > b) and a or b` for max, `(a < b) and a or b` for min */
@@ -66,6 +85,10 @@ function buildMinMax(
     tstl.SyntaxKind.AndOperator,
   );
   return tstl.createBinaryExpression(andExpr, tstl.cloneNode(luaB), tstl.SyntaxKind.OrOperator);
+}
+
+function isSafeMinMaxRewriteArg(node: ts.Expression): boolean {
+  return ts.isNumericLiteral(node);
 }
 
 function handleCallExpression(
@@ -97,6 +120,9 @@ function handleCallExpression(
     case "min": {
       if (args.length !== 2) return undefined;
       if (hasSideEffects(args[0]) || hasSideEffects(args[1])) return undefined;
+      if (!isSafeMinMaxRewriteArg(args[0]) || !isSafeMinMaxRewriteArg(args[1])) {
+        return undefined;
+      }
       const op =
         method === "max" ? tstl.SyntaxKind.GreaterThanOperator : tstl.SyntaxKind.LessThanOperator;
       return buildMinMax(

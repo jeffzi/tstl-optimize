@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import { compile, normalizeLua } from "../helpers";
+
+function expectLuaSnippets(
+  lua: string,
+  { contains, excludes = [] }: { contains: readonly string[]; excludes?: readonly string[] },
+): void {
+  expect(contains.filter((snippet) => !lua.includes(snippet))).toStrictEqual([]);
+  expect(excludes.filter((snippet) => lua.includes(snippet))).toStrictEqual([]);
+}
 
 describe("math-intrinsics", () => {
   describe("Math.floor", () => {
@@ -11,6 +19,15 @@ describe("math-intrinsics", () => {
 
     it("keeps math.floor when argument has side effects", () => {
       const lua = compile("declare function foo(): number; const a = Math.floor(foo());");
+      expect(lua).toContain("math.floor");
+    });
+
+    it("keeps math.floor when argument is a property access that could invoke a getter", () => {
+      const lua = compile(`
+        declare const box: { readonly value: number };
+        const a = Math.floor(box.value);
+      `);
+
       expect(lua).toContain("math.floor");
     });
   });
@@ -49,14 +66,34 @@ describe("math-intrinsics", () => {
       const lua = compile("declare function foo(): number; const a = Math.abs(foo());");
       expect(lua).toContain("math.abs");
     });
+
+    it("keeps math.abs when argument is a property access that could invoke a getter", () => {
+      const lua = compile(`
+        declare const box: { readonly value: number };
+        const a = Math.abs(box.value);
+      `);
+
+      expect(lua).toContain("math.abs");
+    });
+
+    it("normalizes negative zero to zero", () => {
+      const lua = normalizeLua(
+        compile("const x = Math.abs(-0);", {
+          pluginOptions: { rules: { "constant-folding": false } },
+        }),
+      );
+
+      expect(lua).toContain("== 0");
+      expect(lua).not.toContain("math.abs");
+    });
   });
 
   describe("Math.max", () => {
-    it("replaces 2-arg call with conditional when args are pure", () => {
+    it("keeps math.max when arguments can be NaN", () => {
       const lua = compile(
         "declare const a: number; declare const b: number; const c = Math.max(a, b);",
       );
-      expect(lua).not.toContain("math.max");
+      expect(lua).toContain("math.max");
     });
 
     it("keeps math.max with 3+ arguments", () => {
@@ -75,11 +112,11 @@ describe("math-intrinsics", () => {
   });
 
   describe("Math.min", () => {
-    it("replaces 2-arg call with conditional when args are pure", () => {
+    it("keeps math.min when arguments can be NaN", () => {
       const lua = compile(
         "declare const a: number; declare const b: number; const c = Math.min(a, b);",
       );
-      expect(lua).not.toContain("math.min");
+      expect(lua).toContain("math.min");
     });
 
     it("keeps math.min with 3+ arguments", () => {
@@ -194,8 +231,7 @@ describe("math-intrinsics", () => {
       },
     ])("$name on LuaJIT", ({ source, contains, excludes }) => {
       const lua = compile(source, jit);
-      for (const s of contains) expect(lua).toContain(s);
-      for (const s of excludes ?? []) expect(lua).not.toContain(s);
+      expectLuaSnippets(lua, { contains, excludes });
     });
   });
 });
