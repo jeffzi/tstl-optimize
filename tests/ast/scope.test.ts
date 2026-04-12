@@ -321,7 +321,7 @@ describe("collectArrayElementAccesses", () => {
     expect(info.writes.has("t")).toBe(false);
   });
 
-  it("counts and marks LHS array element writes", () => {
+  it("marks LHS array element writes without counting them as reads", () => {
     // t[i] on LHS (assignment statement)
     const table = tstl.createIdentifier("t");
     const index = tstl.createIdentifier("i");
@@ -330,7 +330,7 @@ describe("collectArrayElementAccesses", () => {
 
     const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
 
-    expect(info.counts.get("t")).toBe(1);
+    expect(info.counts.has("t")).toBe(false);
     expect(info.loopVar.get("t")).toBe("i");
     expect(info.writes.has("t")).toBe(true);
   });

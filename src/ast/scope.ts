@@ -154,9 +154,6 @@ export function collectArrayElementAccesses(
           ) {
             trackLoopVar(lhs.table.text, lhs.index.text);
             writes.add(lhs.table.text);
-            if (hooks.guardDepth === 0) {
-              counts.set(lhs.table.text, (counts.get(lhs.table.text) ?? 0) + 1);
-            }
           }
         }
       }

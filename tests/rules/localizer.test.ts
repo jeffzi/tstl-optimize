@@ -367,7 +367,7 @@ describe("localizer", () => {
       expect(lua).toContain("arr[i]");
     });
 
-    it("localizes array element with write-only access (LHS writes counted)", () => {
+    it("does not localize array element with write-only access", () => {
       const lua = compile(
         [
           "declare const arr: number[];",
@@ -379,9 +379,8 @@ describe("localizer", () => {
         ].join("\n"),
         FUNC_SCOPE,
       );
-      // 2 LHS writes ≥ threshold 2 — should localize and write-back
-      expect(lua).toContain("local ____arr = arr[i]");
-      expect(lua).toContain("arr[i] = ____arr");
+      expect(lua).not.toContain("local ____arr = arr[i]");
+      expect(lua).not.toContain("arr[i] = ____arr");
     });
 
     it("does not localize non-loop-var index", () => {
@@ -1110,6 +1109,24 @@ describe("localizer early exit detection in array element localization", () => {
       FUNC_SCOPE,
     );
     expect(lua).toContain("local ____arr");
+  });
+
+  it("does not hoist write-only array element updates", () => {
+    const lua = compile(
+      [
+        "function test(arr: number[], n: number) {",
+        "  for (const i of $range(0, n - 1)) {",
+        "    arr[i] = 1;",
+        "    arr[i] = 2;",
+        "  }",
+        "}",
+      ].join("\n"),
+      FUNC_SCOPE,
+    );
+    expect(lua).not.toContain("local ____arr = arr[i]");
+    expect(lua).not.toContain("arr[i] = ____arr");
+    expect(lua).toContain("arr[i] = 1");
+    expect(lua).toContain("arr[i] = 2");
   });
 
   it("detects return in do statement preventing array write-back", () => {
