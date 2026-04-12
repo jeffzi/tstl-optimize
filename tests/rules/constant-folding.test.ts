@@ -232,6 +232,18 @@ describe("constant-folding", () => {
       expect(lua).toContain("ge = true");
     });
 
+    it("folds Unicode string comparisons using Lua byte ordering", () => {
+      const code = `
+        export const lt = ("😀" as any) < ("\\uFFFD" as any);
+        export const gt = ("😀" as any) > ("\\uFFFD" as any);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("lt = false");
+      expect(lua).toContain("gt = true");
+    });
+
     it("folds comparison and logical operators for booleans", () => {
       const code = `
         export const eq = (true as any) === (true as any);
@@ -269,6 +281,12 @@ describe("constant-folding", () => {
       expect(lua).toContain("len = 3");
       expect(lua).toContain("neg = -1");
     });
+
+    it("folds string length using Lua byte length", () => {
+      const lua = normalizeLua(compile('export const len = "😀".length;'));
+
+      expect(lua).toContain("len = 4");
+    });
   });
 
   describe("when folding BitwiseNot at Lua AST level", () => {
@@ -280,6 +298,14 @@ describe("constant-folding", () => {
         compile("const x = ~(1 as number);", { luaTarget: tstl.LuaTarget.Lua53 }),
       );
       expect(lua).toContain("x = -2");
+    });
+
+    it("folds large integers with Lua53 integer semantics", () => {
+      const lua = normalizeLua(
+        compile("const x = ~(1099511627776 as number);", { luaTarget: tstl.LuaTarget.Lua53 }),
+      );
+
+      expect(lua).toContain("x = -1099511627777");
     });
   });
 

@@ -5,6 +5,8 @@ import { isLuaExprPure } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import type { ConstantValue, RuleFactory } from "../config";
 
+const UTF8_ENCODER = new TextEncoder();
+
 function getLiteralValue(expr: tstl.Expression): ConstantValue | undefined {
   if (tstl.isNumericLiteral(expr)) return expr.value;
   if (tstl.isStringLiteral(expr)) return expr.value;
@@ -28,6 +30,21 @@ function createLiteral(value: ConstantValue): tstl.Expression {
 
 function finiteOrUndefined(n: number): number | undefined {
   return Number.isFinite(n) ? n : undefined;
+}
+
+function compareUtf8Strings(left: string, right: string): number {
+  const leftBytes = UTF8_ENCODER.encode(left);
+  const rightBytes = UTF8_ENCODER.encode(right);
+  const sharedLength = Math.min(leftBytes.length, rightBytes.length);
+
+  for (let i = 0; i < sharedLength; i++) {
+    if (leftBytes[i] !== rightBytes[i]) {
+      return leftBytes[i] < rightBytes[i] ? -1 : 1;
+    }
+  }
+
+  if (leftBytes.length === rightBytes.length) return 0;
+  return leftBytes.length < rightBytes.length ? -1 : 1;
 }
 
 function evaluateBinary(
@@ -66,6 +83,7 @@ function evaluateBinary(
     }
   }
   if (typeof left === "string" && typeof right === "string") {
+    const ordering = compareUtf8Strings(left, right);
     switch (op) {
       case tstl.SyntaxKind.ConcatOperator:
         return left + right;
@@ -74,13 +92,13 @@ function evaluateBinary(
       case tstl.SyntaxKind.InequalityOperator:
         return left !== right;
       case tstl.SyntaxKind.LessThanOperator:
-        return left < right;
+        return ordering < 0;
       case tstl.SyntaxKind.LessEqualOperator:
-        return left <= right;
+        return ordering <= 0;
       case tstl.SyntaxKind.GreaterThanOperator:
-        return left > right;
+        return ordering > 0;
       case tstl.SyntaxKind.GreaterEqualOperator:
-        return left >= right;
+        return ordering >= 0;
     }
   }
   if (typeof left === "boolean" && typeof right === "boolean") {
@@ -110,10 +128,12 @@ function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue
     case tstl.SyntaxKind.NotOperator:
       return typeof operand === "boolean" ? !operand : undefined;
     case tstl.SyntaxKind.BitwiseNotOperator:
-      if (typeof operand === "number") return ~operand;
+      if (typeof operand === "number" && Number.isSafeInteger(operand)) {
+        return Number(~BigInt(operand));
+      }
       break;
     case tstl.SyntaxKind.LengthOperator:
-      if (typeof operand === "string") return operand.length;
+      if (typeof operand === "string") return UTF8_ENCODER.encode(operand).length;
       break;
     case tstl.SyntaxKind.NegationOperator:
       if (typeof operand === "number") return -operand;
