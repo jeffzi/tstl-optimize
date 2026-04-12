@@ -83,20 +83,44 @@ const DEFAULT_RULES: RulesConfig = {
   "debug-strip": false,
 };
 
-export function resolveDebugStripConfig(
-  value: boolean | DebugStripConfig | undefined,
-): DebugStripConfig | false {
+function resolveStructuredRuleConfig<T extends { enabled: boolean }>(
+  value: boolean | Partial<T> | undefined,
+  defaults: T,
+): T | false {
   if (value === false) return false;
-  if (value === undefined || value === true) return { ...DEFAULT_DEBUG_STRIP };
-  return { ...DEFAULT_DEBUG_STRIP, ...value };
+  if (value === undefined || value === true) return { ...defaults };
+  return Object.assign(
+    { ...defaults },
+    Object.fromEntries(Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined)),
+  );
+}
+
+function coerceStringArray(value: unknown, defaults: readonly string[]): string[] {
+  if (!Array.isArray(value)) {
+    return [...defaults];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+export function resolveDebugStripConfig(
+  value: boolean | Partial<DebugStripConfig> | undefined,
+): DebugStripConfig | false {
+  return resolveStructuredRuleConfig(value, DEFAULT_DEBUG_STRIP);
 }
 
 export function resolveLocalizerConfig(
-  value: boolean | LocalizerConfig | undefined,
+  value: boolean | Partial<LocalizerConfig> | undefined,
 ): LocalizerConfig | false {
-  if (value === false) return false;
-  if (value === undefined || value === true) return { ...DEFAULT_LOCALIZER };
-  return { ...DEFAULT_LOCALIZER, ...value };
+  const resolved = resolveStructuredRuleConfig(value, DEFAULT_LOCALIZER);
+  if (resolved === false) {
+    return false;
+  }
+
+  return {
+    ...resolved,
+    include: coerceStringArray(resolved.include, DEFAULT_LOCALIZER.include),
+    exclude: coerceStringArray(resolved.exclude, DEFAULT_LOCALIZER.exclude),
+  };
 }
 
 function coerceEnvValue(envVal: string, defaultVal: ConstantValue): ConstantValue {

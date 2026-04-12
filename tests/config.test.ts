@@ -82,6 +82,12 @@ const EXPECTED_RULE_KEYS: ReadonlyArray<keyof RulesConfig> = [
   "remove-empty-branch",
 ];
 
+function collectRuleEnabledStates(
+  rules: ReturnType<typeof parseConfig>["rules"],
+): ReadonlyArray<readonly [keyof RulesConfig, boolean]> {
+  return EXPECTED_RULE_KEYS.map((key) => [key, isRuleEnabled(rules, key)] as const);
+}
+
 describe("property-based", () => {
   it("parseConfig never throws for arbitrary input", () => {
     fc.assert(
@@ -109,10 +115,9 @@ describe("property-based", () => {
     fc.assert(
       fc.property(arbRuleBooleans, (ruleBooleans) => {
         const config = parseConfig({ rules: ruleBooleans });
-
-        for (const key of EXPECTED_RULE_KEYS) {
-          expect(isRuleEnabled(config.rules, key)).toBe(ruleBooleans[key]);
-        }
+        expect(collectRuleEnabledStates(config.rules)).toStrictEqual(
+          EXPECTED_RULE_KEYS.map((key) => [key, ruleBooleans[key]] as const),
+        );
       }),
     );
   });
@@ -145,6 +150,25 @@ describe("resolveDebugStripConfig", () => {
 describe("resolveLocalizerConfig", () => {
   it("returns disabled config when given false", () => {
     expect(resolveLocalizerConfig(false)).toBe(false);
+  });
+
+  it("falls back to defaults when partial config contains undefined fields", () => {
+    const input: Partial<LocalizerConfig> = {};
+    Object.assign(input, {
+      enabled: undefined,
+      threshold: undefined,
+      scope: undefined,
+      include: undefined,
+      exclude: undefined,
+    });
+
+    expect(resolveLocalizerConfig(input)).toStrictEqual({
+      enabled: true,
+      threshold: 2,
+      scope: "all",
+      include: [],
+      exclude: [],
+    });
   });
 });
 

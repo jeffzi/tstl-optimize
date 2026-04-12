@@ -1,9 +1,9 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { LocalizerConfig } from "../src/config";
 import { isRuleEnabled, parseConfig, resolveLocalizerConfig } from "../src/config";
-import pluginFactory, { OptimizePlugin } from "../src/index";
+import pluginFactory from "../src/index";
 import { compile, normalizeLua } from "./helpers";
 
 function assertLocalizerConfig(config: LocalizerConfig | false): asserts config is LocalizerConfig {
@@ -42,12 +42,12 @@ describe("parseConfig", () => {
       expect(parseConfig({ target }).target).toBe(target);
     });
 
-    it.each([
+    it.each<{ label: string; target: unknown }>([
       { label: "string 'v8'", target: "v8" as const },
       { label: "number 42", target: 42 },
       { label: "boolean true", target: true },
     ])("ignores invalid target value: $label", ({ target }) => {
-      expect(parseConfig({ target } as Record<string, unknown>).target).toBeUndefined();
+      expect(parseConfig({ target }).target).toBeUndefined();
     });
   });
 
@@ -101,7 +101,12 @@ describe("parseConfig", () => {
   });
 
   describe("when passing include/exclude through localizer config", () => {
-    it.each([
+    it.each<{
+      label: string;
+      input: boolean | Partial<LocalizerConfig>;
+      expectedInclude: string[];
+      expectedExclude: string[];
+    }>([
       {
         label: "include array",
         input: { include: ["go", "msg"] },
@@ -122,9 +127,7 @@ describe("parseConfig", () => {
       },
     ])("passes $label through localizer config", ({ input, expectedInclude, expectedExclude }) => {
       const rawConfig = parseConfig({ rules: { localizer: input } });
-      const resolved = resolveLocalizerConfig(
-        rawConfig.rules.localizer as boolean | LocalizerConfig,
-      );
+      const resolved = resolveLocalizerConfig(rawConfig.rules.localizer);
       assertLocalizerConfig(resolved);
       expect(resolved.include).toStrictEqual(expectedInclude);
       expect(resolved.exclude).toStrictEqual(expectedExclude);
@@ -167,7 +170,7 @@ describe("resolveLocalizerConfig", () => {
       include,
       exclude,
     }) => {
-      const config = resolveLocalizerConfig(input as boolean | LocalizerConfig | undefined);
+      const config = resolveLocalizerConfig(input);
       assertLocalizerConfig(config);
       expect(config.include).toStrictEqual(include);
       expect(config.exclude).toStrictEqual(exclude);
@@ -200,47 +203,39 @@ describe("target auto-detection", () => {
   });
 });
 
-describe("OptimizePlugin", () => {
-  it("beforeTransform handles LuaJIT target", () => {
-    const plugin = new OptimizePlugin();
-    // biome-ignore lint/suspicious/noExplicitAny: mock for testing
-    const mockProgram: any = { getTypeChecker: vi.fn() };
-    const mockOptions: tstl.CompilerOptions = {
-      luaTarget: tstl.LuaTarget.LuaJIT,
-    };
+describe("plugin integration", () => {
+  it("preserves inline pragma comments when inline is disabled", () => {
+    const lua = compile(
+      `
+        /** @inline */
+        function sum(...values: number[]) {
+          return values.length;
+        }
 
-    plugin.beforeTransform(mockProgram, mockOptions);
+        sum(1, 2, 3);
+      `,
+      { pluginOptions: { rules: { inline: false } } },
+    );
 
-    expect(Object.keys(plugin.visitors).length).toBeGreaterThan(0);
+    expect(lua).toContain("@inline");
+    expect(lua).toContain("sum");
   });
 
-  it("beforeEmit when inline is disabled preserves @inline comments", () => {
-    const plugin = new OptimizePlugin({
-      rules: { inline: false },
-    });
-    const mockFile: tstl.EmitFile = {
-      outputPath: "main.lua",
-      code: "-- @inline\nprint(1)",
-    };
+  it("strips inline pragma comments when inline is enabled", () => {
+    const lua = compile(
+      `
+        /** @inline */
+        function sum(...values: number[]) {
+          return values.length;
+        }
 
-    // biome-ignore lint/suspicious/noExplicitAny: mock arguments for beforeEmit signature
-    plugin.beforeEmit({} as any, {} as any, {} as any, [mockFile]);
-    expect(mockFile.code).toContain("@inline");
-  });
+        sum(1, 2, 3);
+      `,
+      { pluginOptions: { rules: { inline: true } } },
+    );
 
-  it("beforeEmit strips various @inline comment styles", () => {
-    const plugin = new OptimizePlugin({
-      rules: { inline: true },
-    });
-    const mockFile: tstl.EmitFile = {
-      outputPath: "main.lua",
-      code: "--- @inline\n-- @inline\nprint(1)",
-    };
-
-    // biome-ignore lint/suspicious/noExplicitAny: mock arguments for beforeEmit signature
-    plugin.beforeEmit({} as any, {} as any, {} as any, [mockFile]);
-    expect(mockFile.code).not.toContain("@inline");
-    expect(mockFile.code).toContain("print(1)");
+    expect(lua).not.toContain("@inline");
+    expect(lua).toContain("sum");
   });
 
   it("SourceFile visitor with existing visitors (merge logic)", () => {

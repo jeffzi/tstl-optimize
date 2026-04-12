@@ -130,6 +130,10 @@ function hoistScope(
   return new Set(toHoist.keys());
 }
 
+function getElseStatements(elseBlock: tstl.Block | tstl.IfStatement): tstl.Statement[] {
+  return tstl.isIfStatement(elseBlock) ? [elseBlock] : elseBlock.statements;
+}
+
 /** Check for return/goto inside nested loops — these exit the function, not just the loop. */
 function hasNestedFunctionExit(statements: tstl.Statement[]): boolean {
   for (const stmt of statements) {
@@ -137,10 +141,7 @@ function hasNestedFunctionExit(statements: tstl.Statement[]): boolean {
     if (tstl.isIfStatement(stmt)) {
       if (hasNestedFunctionExit(stmt.ifBlock.statements)) return true;
       if (stmt.elseBlock) {
-        const elseStmts = tstl.isIfStatement(stmt.elseBlock)
-          ? [stmt.elseBlock]
-          : stmt.elseBlock.statements;
-        if (hasNestedFunctionExit(elseStmts)) return true;
+        if (hasNestedFunctionExit(getElseStatements(stmt.elseBlock))) return true;
       }
     }
     if (tstl.isDoStatement(stmt)) {
@@ -167,10 +168,7 @@ function hasEarlyExit(statements: tstl.Statement[]): boolean {
     if (tstl.isIfStatement(stmt)) {
       if (hasEarlyExit(stmt.ifBlock.statements)) return true;
       if (stmt.elseBlock) {
-        const elseStmts = tstl.isIfStatement(stmt.elseBlock)
-          ? [stmt.elseBlock]
-          : stmt.elseBlock.statements;
-        if (hasEarlyExit(elseStmts)) return true;
+        if (hasEarlyExit(getElseStatements(stmt.elseBlock))) return true;
       }
     }
     if (tstl.isDoStatement(stmt)) {
@@ -386,10 +384,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
     } else if (tstl.isIfStatement(stmt)) {
       processFunctionBodies(stmt.ifBlock.statements, ctx);
       if (stmt.elseBlock) {
-        const elseStmts = tstl.isIfStatement(stmt.elseBlock)
-          ? [stmt.elseBlock]
-          : stmt.elseBlock.statements;
-        processFunctionBodies(elseStmts, ctx);
+        processFunctionBodies(getElseStatements(stmt.elseBlock), ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)

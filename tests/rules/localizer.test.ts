@@ -1494,6 +1494,32 @@ describe("localizer root filter configuration", () => {
     expect(lua).toContain("local ____math_ceil = math.ceil");
   });
 
+  it("ignores malformed include and exclude values instead of crashing", () => {
+    const lua = compile(
+      [
+        "declare const x: number;",
+        "declare const config: { graphics: { width: number } };",
+        "const a = Math.ceil(x); const b = Math.ceil(x);",
+        "const c = config.graphics.width; const d = config.graphics.width;",
+      ].join("\n"),
+      {
+        pluginOptions: {
+          rules: {
+            localizer: {
+              scope: "module",
+              include: true,
+              exclude: { root: "math" },
+            },
+          },
+        },
+        luaTarget: tstl.LuaTarget.LuaJIT,
+      },
+    );
+
+    expect(lua).toContain("local ____math_ceil = math.ceil");
+    expect(lua).not.toContain("local ____config_graphics_width");
+  });
+
   it("wildcard includes stdlib roots automatically", () => {
     const lua = compile(
       [

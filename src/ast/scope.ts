@@ -45,6 +45,11 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
       _replace: (n: tstl.Expression) => void,
       control: TraversalControl,
     ) => {
+      if (!shallow && tstl.isFunctionExpression(expr)) {
+        for (const param of expr.params ?? []) {
+          if (tstl.isIdentifier(param)) scopeDefs.add(param.text);
+        }
+      }
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {

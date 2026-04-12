@@ -41,4 +41,29 @@ describe("localizer: parameter shadowing", () => {
     // The nested function should still exist in output
     expect(lua).toContain("local function inner");
   });
+
+  it("does not hoist a module-scope chain out of an IIFE when the function expression parameter shadows the root", () => {
+    const lua = compile(
+      `
+      declare const config: { timeout: number };
+      const value = (function (config: { timeout: number }) {
+        return config.timeout + config.timeout;
+      })(config);
+      `,
+      {
+        pluginOptions: {
+          rules: {
+            localizer: {
+              scope: "module",
+              include: ["config"],
+            },
+          },
+        },
+        luaTarget: tstl.LuaTarget.LuaJIT,
+      },
+    );
+
+    expect(lua).not.toContain("local ____config_timeout = config.timeout");
+    expect(lua).toContain("return config.timeout + config.timeout");
+  });
 });
