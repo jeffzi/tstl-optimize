@@ -56,15 +56,17 @@ const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;
   private config: PluginConfig;
+  private readonly explicitTarget: PluginConfig["target"];
   visitors: tstl.Visitors = {};
 
   constructor(options?: Record<string, unknown>) {
     this.config = parseConfig(options);
+    this.explicitTarget = this.config.target;
   }
 
   beforeTransform(program: ts.Program, options: tstl.CompilerOptions): void {
     this.checker = program.getTypeChecker();
-    if (!this.config.target) {
+    if (!this.explicitTarget) {
       this.config.target = options.luaTarget === tstl.LuaTarget.LuaJIT ? "luajit" : "puc";
     }
     this.buildVisitors();
@@ -72,7 +74,16 @@ class OptimizePlugin implements tstl.Plugin {
 
   private buildVisitors(): void {
     type AnyVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
-    const merged: Record<number, AnyVisitor> = {};
+    type ObjectVisitor = { priority?: number; transform: AnyVisitor };
+    type MergedVisitor = AnyVisitor | ObjectVisitor;
+    const merged: Record<number, MergedVisitor> = {};
+
+    const unwrapVisitor = (visitor: MergedVisitor | undefined): ObjectVisitor | undefined => {
+      if (visitor === undefined) {
+        return undefined;
+      }
+      return typeof visitor === "function" ? { transform: visitor } : visitor;
+    };
 
     for (const [ruleName, factory] of RULE_ENTRIES) {
       if (!isRuleEnabled(this.config.rules, ruleName)) continue;
@@ -80,40 +91,50 @@ class OptimizePlugin implements tstl.Plugin {
       const ruleVisitors = factory(this.checker, this.config);
       for (const [kindStr, rawVisitor] of Object.entries(ruleVisitors)) {
         const kind = Number(kindStr);
-        const visitor = rawVisitor as AnyVisitor | { transform: AnyVisitor };
-        const fn: AnyVisitor = typeof visitor === "function" ? visitor : visitor.transform;
+        const visitor = unwrapVisitor(rawVisitor as MergedVisitor);
+        if (visitor === undefined) {
+          continue;
+        }
 
-        const existing = merged[kind];
+        const existing = unwrapVisitor(merged[kind]);
         const isExpr = EXPRESSION_KINDS.has(kind);
         const isStmtFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
+        const mergedPriority =
+          existing?.priority !== undefined && visitor.priority !== undefined
+            ? Math.max(existing.priority, visitor.priority)
+            : (existing?.priority ?? visitor.priority);
 
-        merged[kind] = (node, context) => {
+        const composed: AnyVisitor = (node, context) => {
           if (kind === ts.SyntaxKind.SourceFile) {
             const mockedContext = Object.create(context);
             mockedContext.superTransformNode = (n: ts.Node) => {
               if (existing) {
-                const existingRes = existing(n, context);
+                const existingRes = existing.transform(n, context);
                 return Array.isArray(existingRes) ? existingRes : [existingRes];
               }
               return context.superTransformNode(n);
             };
             mockedContext.superTransformStatements = (n: ts.Statement) => {
-              if (existing) {
-                const existingRes = existing(n, context);
-                return Array.isArray(existingRes) ? existingRes : [existingRes];
-              }
               return context.superTransformStatements(n);
             };
-            return fn(node, mockedContext);
+            return visitor.transform(node, mockedContext);
           }
 
-          const res = fn(node, context) ?? existing?.(node, context);
+          const res = visitor.transform(node, context) ?? existing?.transform(node, context);
           if (res !== undefined) return res;
 
           if (isExpr) return context.superTransformExpression(node as ts.Expression);
           if (isStmtFallback) return context.superTransformStatements(node as ts.Statement);
           return undefined;
         };
+
+        merged[kind] =
+          mergedPriority === undefined
+            ? composed
+            : {
+                priority: mergedPriority,
+                transform: composed,
+              };
       }
     }
 

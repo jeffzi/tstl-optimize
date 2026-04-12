@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { ConditionalCompilationConfig, RulesConfig } from "../src/config";
+import type { ConditionalCompilationConfig, LocalizerConfig, RulesConfig } from "../src/config";
 import {
   isRecord,
   isRuleEnabled,
@@ -17,6 +17,22 @@ describe("resolveConditionalCompilationConfig", () => {
   it("returns empty map when constants is empty", () => {
     const config: ConditionalCompilationConfig = { enabled: true, constants: {} };
     expect(resolveConditionalCompilationConfig(config)).toStrictEqual(new Map());
+  });
+
+  it("ignores malformed constant definitions", () => {
+    const result = Reflect.apply(resolveConditionalCompilationConfig, undefined, [
+      {
+        enabled: true,
+        constants: {
+          GOOD: { env: "TEST_CC_VALID", default: false },
+          BAD_ENV: { env: 42, default: true },
+          BAD_DEFAULT: { env: "TEST_CC_INVALID_DEFAULT", default: { nested: true } },
+          MISSING_ENV: { default: true },
+        },
+      },
+    ]);
+
+    expect(result).toStrictEqual(new Map([["GOOD", false]]));
   });
 });
 
@@ -145,6 +161,24 @@ describe("resolveDebugStripConfig", () => {
   it("returns false when given false", () => {
     expect(resolveDebugStripConfig(false)).toBe(false);
   });
+
+  it("filters invalid structured fields before applying defaults", () => {
+    const parsed = parseConfig({
+      rules: {
+        "debug-strip": {
+          enabled: false,
+          functions: ["print", 123],
+          namespaces: [{ nested: true }, "debug"],
+        },
+      },
+    });
+
+    expect(resolveDebugStripConfig(parsed.rules["debug-strip"])).toStrictEqual({
+      enabled: false,
+      functions: ["print"],
+      namespaces: ["debug"],
+    });
+  });
 });
 
 describe("resolveLocalizerConfig", () => {
@@ -170,27 +204,56 @@ describe("resolveLocalizerConfig", () => {
       exclude: [],
     });
   });
+
+  it("filters invalid structured fields before applying defaults", () => {
+    const parsed = parseConfig({
+      rules: {
+        localizer: {
+          enabled: "yes",
+          threshold: "high",
+          scope: "global",
+          include: ["math", 1],
+          exclude: [{ nested: true }, "debug"],
+        },
+      },
+    });
+
+    expect(resolveLocalizerConfig(parsed.rules.localizer)).toStrictEqual({
+      enabled: true,
+      threshold: 2,
+      scope: "all",
+      include: ["math"],
+      exclude: ["debug"],
+    });
+  });
 });
 
 describe("resolveConditionalCompilationStrict", () => {
-  it("returns false for non-object inputs", () => {
-    expect(resolveConditionalCompilationStrict(undefined)).toBeUndefined();
-    expect(resolveConditionalCompilationStrict(true)).toBeUndefined();
+  it.each([undefined, true])("returns undefined for non-object input %p", (input) => {
+    expect(resolveConditionalCompilationStrict(input)).toBeUndefined();
   });
 });
 
 describe("resolveEffectiveStrict", () => {
-  it("rule-level override takes precedence", () => {
-    expect(resolveEffectiveStrict(true, false)).toBe(false);
-    expect(resolveEffectiveStrict(true, undefined)).toBe(true);
-    expect(resolveEffectiveStrict(false, true)).toBe(true);
+  it.each([
+    { topLevelStrict: true, ruleStrict: false, expected: false },
+    { topLevelStrict: true, ruleStrict: undefined, expected: true },
+    { topLevelStrict: false, ruleStrict: true, expected: true },
+  ])("returns $expected when top-level strict is $topLevelStrict and rule strict is $ruleStrict", ({
+    topLevelStrict,
+    ruleStrict,
+    expected,
+  }) => {
+    expect(resolveEffectiveStrict(topLevelStrict, ruleStrict)).toBe(expected);
   });
 });
 
 describe("isRecord", () => {
-  it("returns false for array and null, true for plain object", () => {
-    expect(isRecord([])).toBe(false);
-    expect(isRecord(null)).toBe(false);
-    expect(isRecord({})).toBe(true);
+  it.each([
+    { input: [], expected: false },
+    { input: null, expected: false },
+    { input: {}, expected: true },
+  ])("returns $expected for %p", ({ input, expected }) => {
+    expect(isRecord(input)).toBe(expected);
   });
 });

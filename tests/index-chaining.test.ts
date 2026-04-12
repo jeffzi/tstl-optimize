@@ -49,16 +49,36 @@ describe("index chaining — SourceFile visitor fallback", () => {
     expect(lua).toContain("doubled");
   });
 
-  it("chains statement visitors when multiple rules handle same statement kind", () => {
-    const code = `
-      declare const n: number;
+  it.each([
+    {
+      name: "chains statement visitors when multiple rules handle same statement kind",
+      code: `
+        declare const n: number;
 
-      /** @inline */
-      function getValue() { return 1; }
+        /** @inline */
+        function getValue() { return 1; }
 
-      const x = getValue();
-      const y = Math.floor(n);
-    `;
+        const x = getValue();
+        const y = Math.floor(n);
+      `,
+      expectedInline: "x = 1",
+    },
+    {
+      name: "applies chained visitors through SourceFile statement fallback with inline",
+      code: `
+        declare const n: number;
+
+        /** @inline */
+        function getValue(): number {
+          return 42;
+        }
+
+        const x = Math.floor(n);
+        const y = getValue();
+      `,
+      expectedInline: "= 42",
+    },
+  ])("$name", ({ code, expectedInline }) => {
     const options = {
       pluginOptions: {
         rules: {
@@ -71,34 +91,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
     const lua = normalizeLua(compile(code, options));
 
     expect(lua).toContain("n - n % 1");
-    expect(lua).toContain("x = 1");
-  });
-
-  it("applies chained visitors through SourceFile statement fallback with inline", () => {
-    const code = `
-      declare const n: number;
-
-      /** @inline */
-      function getValue(): number {
-        return 42;
-      }
-
-      const x = Math.floor(n);
-      const y = getValue();
-    `;
-    const options = {
-      pluginOptions: {
-        rules: {
-          "math-intrinsics": true,
-          inline: true,
-        },
-      },
-    };
-
-    const lua = normalizeLua(compile(code, options));
-
-    expect(lua).toContain("= 42");
-    expect(lua).toContain("n - n % 1");
+    expect(lua).toContain(expectedInline);
   });
 
   it("chains statement transformation with all major rules together", () => {
@@ -182,6 +175,7 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
       pluginOptions: {
         rules: {
           "constant-folding": true,
+          "math-intrinsics": true,
           "merge-locals": true,
         },
       },
@@ -193,12 +187,25 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
     expect(lua).not.toContain("Math.floor"); // math-intrinsics and constant-folding were applied
   });
 
-  it("chains SourceFile visitors through superTransformStatements with dead-local", () => {
-    const code = `
-      const unused = 42;
-      const x = Math.floor(3.7);
-      const y = x;
-    `;
+  it.each([
+    {
+      name: "chains SourceFile visitors through superTransformStatements with dead-local",
+      code: `
+        const unused = 42;
+        const x = Math.floor(3.7);
+        const y = x;
+      `,
+    },
+    {
+      name: "cleans up visitor entries when multiple SourceFile visitors exist",
+      code: `
+        const unused = Math.floor(5.5);
+        const x = Math.floor(3.2);
+        const y = x;
+        const z = x + y;
+      `,
+    },
+  ])("$name", ({ code }) => {
     const options = {
       pluginOptions: {
         rules: {
@@ -210,7 +217,7 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("x = 3"); // Math.floor(3.7) constant-folded to 3
+    expect(lua).toContain("x = 3");
   });
 
   it("applies SourceFile visitor chaining with localizer", () => {
@@ -314,28 +321,6 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     expect(lua).toContain("a = 1");
     expect(lua).toContain("b = 2");
-  });
-
-  it("cleans up visitor entries when multiple SourceFile visitors exist", () => {
-    const code = `
-      const unused = Math.floor(5.5);
-      const x = Math.floor(3.2);
-      const y = x;
-      const z = x + y;
-    `;
-    const options = {
-      pluginOptions: {
-        rules: {
-          "constant-folding": true,
-          "dead-local": true,
-          "merge-locals": true,
-        },
-      },
-    };
-
-    const lua = normalizeLua(compile(code, options));
-
-    expect(lua).toContain("x = 3"); // Math.floor(3.2) constant-folded
   });
 
   it("maintains visitor integrity with all SourceFile-registered rules", () => {

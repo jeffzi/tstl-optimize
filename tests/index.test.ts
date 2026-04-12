@@ -1,9 +1,11 @@
+import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it } from "vitest";
-import type { LocalizerConfig } from "../src/config";
+import { LuaLibImportKind, LuaTarget, transpileVirtualProject } from "typescript-to-lua";
+import { describe, expect, it, vi } from "vitest";
+import type { DebugStripConfig, LocalizerConfig } from "../src/config";
 import { isRuleEnabled, parseConfig, resolveLocalizerConfig } from "../src/config";
-import pluginFactory from "../src/index";
+import pluginFactory, { OptimizePlugin } from "../src/index";
 import { compile, normalizeLua } from "./helpers";
 
 function assertLocalizerConfig(config: LocalizerConfig | false): asserts config is LocalizerConfig {
@@ -19,9 +21,11 @@ describe("default export", () => {
 });
 
 describe("plugin infrastructure", () => {
-  it("produces Lua output with default or empty config", () => {
-    expect(compile("const x = 1;")).toContain("x = 1");
-    expect(compile("const x = 1;", {})).toContain("x = 1");
+  it.each<{ label: string; options: Parameters<typeof compile>[1] }>([
+    { label: "default config", options: undefined },
+    { label: "empty config", options: {} },
+  ])("produces Lua output with $label", ({ options }) => {
+    expect(compile("const x = 1;", options)).toContain("x = 1");
   });
 
   it("accepts rules config with disabled rule", () => {
@@ -34,16 +38,19 @@ describe("plugin infrastructure", () => {
 
 describe("parseConfig", () => {
   describe("when setting target", () => {
-    it.each([undefined, {}] as const)("defaults target to undefined for input %o", (input) => {
+    it.each<{ label: string; input: Record<string, never> | undefined }>([
+      { label: "no config", input: undefined },
+      { label: "empty config", input: {} },
+    ])("defaults target to undefined for $label", ({ input }) => {
       expect(parseConfig(input).target).toBeUndefined();
     });
 
-    it.each(["puc", "luajit"] as const)("accepts '%s' as target", (target) => {
+    it.each<"puc" | "luajit">(["puc", "luajit"])("accepts '%s' as target", (target) => {
       expect(parseConfig({ target }).target).toBe(target);
     });
 
     it.each<{ label: string; target: unknown }>([
-      { label: "string 'v8'", target: "v8" as const },
+      { label: "string 'v8'", target: "v8" },
       { label: "number 42", target: 42 },
       { label: "boolean true", target: true },
     ])("ignores invalid target value: $label", ({ target }) => {
@@ -52,11 +59,14 @@ describe("parseConfig", () => {
   });
 
   describe("when rule values are invalid", () => {
-    it.each([
-      { rule: "localizer" as const, expected: true },
-      { rule: "debug-strip" as const, expected: false },
-      { rule: "math-intrinsics" as const, expected: true },
-      { rule: "conditional-compilation" as const, expected: false },
+    it.each<{
+      rule: "localizer" | "debug-strip" | "math-intrinsics" | "conditional-compilation";
+      expected: boolean;
+    }>([
+      { rule: "localizer", expected: true },
+      { rule: "debug-strip", expected: false },
+      { rule: "math-intrinsics", expected: true },
+      { rule: "conditional-compilation", expected: false },
     ])("ignores invalid string value for $rule, falls back to default $expected", ({
       rule,
       expected,
@@ -71,11 +81,14 @@ describe("parseConfig", () => {
       expect(config.rules.localizer).toBe(true);
     });
 
-    it.each([
-      { label: "localizer with threshold", rule: "localizer" as const, value: { threshold: 5 } },
+    it.each<
+      | { label: string; rule: "localizer"; value: Partial<LocalizerConfig> }
+      | { label: string; rule: "debug-strip"; value: Partial<DebugStripConfig> }
+    >([
+      { label: "localizer with threshold", rule: "localizer", value: { threshold: 5 } },
       {
         label: "debug-strip with functions",
-        rule: "debug-strip" as const,
+        rule: "debug-strip",
         value: { functions: ["myFn"] },
       },
     ])("accepts object config for $label", ({ rule, value }) => {
@@ -121,7 +134,7 @@ describe("parseConfig", () => {
       },
       {
         label: "localizer: true defaults",
-        input: true as const,
+        input: true,
         expectedInclude: [],
         expectedExclude: [],
       },
@@ -137,8 +150,8 @@ describe("parseConfig", () => {
 
 describe("isRuleEnabled", () => {
   it.each([
-    { label: "boolean true", config: { "math-intrinsics": true as const }, expected: true },
-    { label: "boolean false", config: { "math-intrinsics": false as const }, expected: false },
+    { label: "boolean true", config: { "math-intrinsics": true }, expected: true },
+    { label: "boolean false", config: { "math-intrinsics": false }, expected: false },
   ])("returns $expected directly when config is $label", ({ config, expected }) => {
     expect(isRuleEnabled(parseConfig({ rules: config }).rules, "math-intrinsics")).toBe(expected);
   });
@@ -182,13 +195,13 @@ describe("target auto-detection", () => {
   const SRC = "declare const x: number; const a = Math.floor(x);";
 
   it("auto-detects puc for Lua51 target and applies math-intrinsics", () => {
-    const lua = compile(SRC, { luaTarget: tstl.LuaTarget.Lua51 });
+    const lua = compile(SRC, { luaTarget: LuaTarget.Lua51 });
     expect(lua).toContain("% 1");
-    expect(lua).not.toContain("math.floor");
+    expect(lua).toContain("math.floor");
   });
 
   it("auto-detects luajit and skips floor transform", () => {
-    const lua = compile(SRC, { luaTarget: tstl.LuaTarget.LuaJIT });
+    const lua = compile(SRC, { luaTarget: LuaTarget.LuaJIT });
     expect(lua).toContain("math.floor");
   });
 
@@ -196,10 +209,179 @@ describe("target auto-detection", () => {
     // LuaJIT target but explicit puc override → should inline
     const lua = compile(SRC, {
       pluginOptions: { target: "puc" },
-      luaTarget: tstl.LuaTarget.LuaJIT,
+      luaTarget: LuaTarget.LuaJIT,
     });
     expect(lua).toContain("% 1");
-    expect(lua).not.toContain("math.floor");
+    expect(lua).toContain("math.floor");
+  });
+
+  it("recomputes the inferred target when the same plugin instance is reused", () => {
+    const plugin = new OptimizePlugin();
+    const transpileWith = (luaTarget: LuaTarget): string => {
+      const result = transpileVirtualProject(
+        { "main.ts": SRC },
+        {
+          noHeader: true,
+          luaPlugins: [{ plugin }],
+          noImplicitSelf: true,
+          luaTarget,
+          luaLibImport: LuaLibImportKind.None,
+          target: ts.ScriptTarget.ESNext,
+          lib: ["lib.esnext.d.ts"],
+          types: ["@typescript-to-lua/language-extensions"],
+        },
+      );
+      const file = result.transpiledFiles.find((entry) => entry.outPath.endsWith("main.lua"));
+      if (file?.lua === undefined) {
+        throw new Error("No Lua output.");
+      }
+      return file.lua;
+    };
+
+    expect(transpileWith(LuaTarget.LuaJIT)).toContain("math.floor");
+    expect(transpileWith(LuaTarget.Lua51)).toContain("% 1");
+  });
+});
+
+describe("SourceFile visitor fallback", () => {
+  it("does not route statement fallback back through the previous SourceFile visitor", async () => {
+    vi.resetModules();
+
+    vi.doMock("../src/rules/conditional-compilation", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.SourceFile]: (
+          node: ts.Node,
+          context: { superTransformNode(node: ts.Node): unknown },
+        ) => {
+          if (!ts.isSourceFile(node)) {
+            throw new Error(`expected SourceFile, got ${ts.SyntaxKind[node.kind]}`);
+          }
+          const result = context.superTransformNode(node);
+          return Array.isArray(result) ? result[0] : result;
+        },
+      }),
+    }));
+
+    vi.doMock("../src/rules/constant-folding", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.SourceFile]: (
+          node: ts.SourceFile,
+          context: {
+            superTransformStatements(node: ts.Statement): tstl.Statement[];
+            usedLuaLibFeatures: Set<tstl.LuaLibFeature>;
+          },
+        ) => {
+          const statements: tstl.Statement[] = [];
+          for (const statement of node.statements) {
+            statements.push(...context.superTransformStatements(statement));
+          }
+          return tstl.createFile(statements, context.usedLuaLibFeatures, "", node);
+        },
+      }),
+    }));
+
+    try {
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index");
+      const plugin = new MockedOptimizePlugin({
+        rules: {
+          "conditional-compilation": true,
+          "constant-folding": true,
+          "remove-empty-branch": false,
+          "math-intrinsics": false,
+          "loop-rebase": false,
+          inline: false,
+          "dead-local": false,
+          "merge-locals": false,
+          localizer: false,
+          "debug-strip": false,
+        },
+      });
+
+      Reflect.set(plugin, "checker", {});
+      const buildVisitors = Reflect.get(plugin, "buildVisitors");
+      if (typeof buildVisitors !== "function") {
+        throw new Error("missing buildVisitors");
+      }
+      Reflect.apply(buildVisitors, plugin, []);
+
+      const sourceVisitor = plugin.visitors[ts.SyntaxKind.SourceFile];
+      if (typeof sourceVisitor !== "function") {
+        throw new Error("missing SourceFile visitor");
+      }
+
+      const sourceFile = ts.createSourceFile("main.ts", "const x = 1;", ts.ScriptTarget.ESNext);
+      const transformedStatements: tstl.Statement[] = [];
+      const context = {
+        superTransformNode: () => tstl.createFile([], new Set(), "", sourceFile),
+        superTransformStatements: (statement: ts.Statement) => {
+          transformedStatements.push(tstl.createDoStatement([], statement));
+          return transformedStatements;
+        },
+      };
+
+      const result = Reflect.apply(sourceVisitor, undefined, [sourceFile, context]);
+
+      expect(result).toMatchObject({ kind: tstl.SyntaxKind.File });
+      expect(transformedStatements).toHaveLength(1);
+    } finally {
+      vi.doUnmock("../src/rules/conditional-compilation");
+      vi.doUnmock("../src/rules/constant-folding");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("visitor metadata", () => {
+  it("preserves object-form visitor metadata when building plugin visitors", async () => {
+    vi.resetModules();
+
+    vi.doMock("../src/rules/conditional-compilation", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.CallExpression]: {
+          priority: 9,
+          transform: () => undefined,
+        },
+      }),
+    }));
+
+    vi.doMock("../src/rules/constant-folding", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.CallExpression]: () => undefined,
+      }),
+    }));
+
+    try {
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index");
+      const plugin = new MockedOptimizePlugin({
+        rules: {
+          "conditional-compilation": true,
+          "constant-folding": true,
+          "remove-empty-branch": false,
+          "math-intrinsics": false,
+          "loop-rebase": false,
+          inline: false,
+          "dead-local": false,
+          "merge-locals": false,
+          localizer: false,
+          "debug-strip": false,
+        },
+      });
+
+      Reflect.set(plugin, "checker", {});
+      const buildVisitors = Reflect.get(plugin, "buildVisitors");
+      if (typeof buildVisitors !== "function") {
+        throw new Error("missing buildVisitors");
+      }
+      Reflect.apply(buildVisitors, plugin, []);
+
+      expect(plugin.visitors[ts.SyntaxKind.CallExpression]).toMatchObject({
+        priority: 9,
+      });
+    } finally {
+      vi.doUnmock("../src/rules/conditional-compilation");
+      vi.doUnmock("../src/rules/constant-folding");
+      vi.resetModules();
+    }
   });
 });
 

@@ -35,8 +35,12 @@ export interface InlineConfig {
   strict?: boolean;
 }
 
+export type ConditionalCompilationRuleConfig = boolean | Partial<ConditionalCompilationConfig>;
+export type LocalizerRuleConfig = boolean | Partial<LocalizerConfig>;
+export type DebugStripRuleConfig = boolean | Partial<DebugStripConfig>;
+
 export interface RulesConfig {
-  "conditional-compilation": boolean | ConditionalCompilationConfig;
+  "conditional-compilation": ConditionalCompilationRuleConfig;
   "constant-folding": boolean;
   "remove-empty-branch": boolean;
   "math-intrinsics": boolean;
@@ -44,8 +48,8 @@ export interface RulesConfig {
   inline: boolean | InlineConfig;
   "dead-local": boolean;
   "merge-locals": boolean;
-  localizer: boolean | LocalizerConfig;
-  "debug-strip": boolean | DebugStripConfig;
+  localizer: LocalizerRuleConfig;
+  "debug-strip": DebugStripRuleConfig;
 }
 
 export type InterpreterTarget = "puc" | "luajit";
@@ -103,13 +107,23 @@ function coerceStringArray(value: unknown, defaults: readonly string[]): string[
 }
 
 export function resolveDebugStripConfig(
-  value: boolean | Partial<DebugStripConfig> | undefined,
+  value: DebugStripRuleConfig | undefined,
 ): DebugStripConfig | false {
-  return resolveStructuredRuleConfig(value, DEFAULT_DEBUG_STRIP);
+  const resolved = resolveStructuredRuleConfig(value, DEFAULT_DEBUG_STRIP);
+  if (resolved === false) {
+    return false;
+  }
+
+  return {
+    ...resolved,
+    enabled: resolved.enabled !== false,
+    functions: coerceStringArray(resolved.functions, DEFAULT_DEBUG_STRIP.functions),
+    namespaces: coerceStringArray(resolved.namespaces, DEFAULT_DEBUG_STRIP.namespaces),
+  };
 }
 
 export function resolveLocalizerConfig(
-  value: boolean | Partial<LocalizerConfig> | undefined,
+  value: LocalizerRuleConfig | undefined,
 ): LocalizerConfig | false {
   const resolved = resolveStructuredRuleConfig(value, DEFAULT_LOCALIZER);
   if (resolved === false) {
@@ -118,6 +132,12 @@ export function resolveLocalizerConfig(
 
   return {
     ...resolved,
+    enabled: resolved.enabled !== false,
+    threshold:
+      typeof resolved.threshold === "number" && Number.isFinite(resolved.threshold)
+        ? resolved.threshold
+        : DEFAULT_LOCALIZER.threshold,
+    scope: isLocalizerScope(resolved.scope) ? resolved.scope : DEFAULT_LOCALIZER.scope,
     include: coerceStringArray(resolved.include, DEFAULT_LOCALIZER.include),
     exclude: coerceStringArray(resolved.exclude, DEFAULT_LOCALIZER.exclude),
   };
@@ -129,19 +149,19 @@ function coerceEnvValue(envVal: string, defaultVal: ConstantValue): ConstantValu
   }
   if (typeof defaultVal === "number") {
     const num = Number.parseFloat(envVal);
-    return Number.isNaN(num) ? defaultVal : num;
+    return Number.isFinite(num) ? num : defaultVal;
   }
   return envVal;
 }
 
 export function resolveConditionalCompilationConfig(
-  value: boolean | ConditionalCompilationConfig | undefined,
+  value: ConditionalCompilationRuleConfig | undefined,
 ): ReadonlyMap<string, ConstantValue> | false {
   if (value === false || value === undefined) return false;
 
-  const constants = value === true ? {} : (value.constants ?? {});
   if (value !== true && value.enabled === false) return false;
 
+  const constants = value === true ? {} : coerceConstantDefs(value.constants);
   const resolved = new Map<string, ConstantValue>();
   for (const [name, def] of Object.entries(constants)) {
     const envVal = process.env[def.env];
@@ -167,10 +187,10 @@ export function resolveInlineConfig(value: boolean | InlineConfig | undefined): 
  * Returns undefined when value is not an object (boolean or absent), meaning "not set".
  */
 export function resolveConditionalCompilationStrict(
-  value: boolean | ConditionalCompilationConfig | undefined,
+  value: ConditionalCompilationRuleConfig | undefined,
 ): boolean | undefined {
   if (value === undefined || value === true || value === false) return undefined;
-  return value.strict;
+  return typeof value.strict === "boolean" ? value.strict : undefined;
 }
 
 /**
@@ -197,12 +217,120 @@ export function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val != null && !Array.isArray(val);
 }
 
-const STRUCTURED_RULES: ReadonlySet<string> = new Set([
-  "conditional-compilation",
-  "inline",
-  "localizer",
-  "debug-strip",
-]);
+function isLocalizerScope(val: unknown): val is LocalizerScope {
+  return val === "module" || val === "function" || val === "all";
+}
+
+function isConstantValue(val: unknown): val is ConstantValue {
+  return typeof val === "boolean" || typeof val === "number" || typeof val === "string";
+}
+
+function isConstantDef(val: unknown): val is ConstantDef {
+  return isRecord(val) && typeof val.env === "string" && isConstantValue(val.default);
+}
+
+function coerceConstantDefs(value: unknown): Record<string, ConstantDef> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const constants: Record<string, ConstantDef> = {};
+  for (const [name, def] of Object.entries(value)) {
+    if (isConstantDef(def)) {
+      constants[name] = def;
+    }
+  }
+  return constants;
+}
+
+function parseConditionalCompilationRuleConfig(
+  value: unknown,
+): ConditionalCompilationRuleConfig | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const parsed: Partial<ConditionalCompilationConfig> = {};
+  if (typeof value.enabled === "boolean") {
+    parsed.enabled = value.enabled;
+  }
+  if (typeof value.strict === "boolean") {
+    parsed.strict = value.strict;
+  }
+  if (value.constants === undefined || isRecord(value.constants)) {
+    parsed.constants = coerceConstantDefs(value.constants);
+  }
+  return parsed;
+}
+
+function parseInlineRuleConfig(value: unknown): boolean | InlineConfig | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const parsed: InlineConfig = {};
+  if (typeof value.enabled === "boolean") {
+    parsed.enabled = value.enabled;
+  }
+  if (typeof value.strict === "boolean") {
+    parsed.strict = value.strict;
+  }
+  return parsed;
+}
+
+function parseLocalizerRuleConfig(value: unknown): LocalizerRuleConfig | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const parsed: Partial<LocalizerConfig> = {};
+  if (typeof value.enabled === "boolean") {
+    parsed.enabled = value.enabled;
+  }
+  if (typeof value.threshold === "number" && Number.isFinite(value.threshold)) {
+    parsed.threshold = value.threshold;
+  }
+  if (isLocalizerScope(value.scope)) {
+    parsed.scope = value.scope;
+  }
+  if (Array.isArray(value.include)) {
+    parsed.include = coerceStringArray(value.include, []);
+  }
+  if (Array.isArray(value.exclude)) {
+    parsed.exclude = coerceStringArray(value.exclude, []);
+  }
+  return parsed;
+}
+
+function parseDebugStripRuleConfig(value: unknown): DebugStripRuleConfig | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const parsed: Partial<DebugStripConfig> = {};
+  if (typeof value.enabled === "boolean") {
+    parsed.enabled = value.enabled;
+  }
+  if (Array.isArray(value.functions)) {
+    parsed.functions = coerceStringArray(value.functions, []);
+  }
+  if (Array.isArray(value.namespaces)) {
+    parsed.namespaces = coerceStringArray(value.namespaces, []);
+  }
+  return parsed;
+}
 
 export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   const rawRules = isRecord(options?.rules) ? options.rules : {};
@@ -212,14 +340,39 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
     const val = rawRules[key];
     if (val === undefined) continue;
 
-    if (STRUCTURED_RULES.has(key)) {
-      if (typeof val === "boolean" || isRecord(val)) {
-        // RulesConfig has no index signature, so dynamic write requires the double
-        // widen through unknown — val is already guarded to the correct union member.
-        (rules as unknown as Record<string, unknown>)[key] = val;
+    switch (key) {
+      case "conditional-compilation": {
+        const parsed = parseConditionalCompilationRuleConfig(val);
+        if (parsed !== undefined) {
+          rules["conditional-compilation"] = parsed;
+        }
+        break;
       }
-    } else if (typeof val === "boolean") {
-      rules[key] = val;
+      case "inline": {
+        const parsed = parseInlineRuleConfig(val);
+        if (parsed !== undefined) {
+          rules.inline = parsed;
+        }
+        break;
+      }
+      case "localizer": {
+        const parsed = parseLocalizerRuleConfig(val);
+        if (parsed !== undefined) {
+          rules.localizer = parsed;
+        }
+        break;
+      }
+      case "debug-strip": {
+        const parsed = parseDebugStripRuleConfig(val);
+        if (parsed !== undefined) {
+          rules["debug-strip"] = parsed;
+        }
+        break;
+      }
+      default:
+        if (typeof val === "boolean") {
+          rules[key] = val;
+        }
     }
   }
 
