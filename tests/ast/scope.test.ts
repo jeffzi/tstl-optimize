@@ -22,7 +22,6 @@ function countPropertyAccess(statements: tstl.Statement[], chain: string): numbe
   return count;
 }
 
-// Helper: build `table.field` as a Lua TableIndexExpression
 function makeAccess(table: string, ...fields: string[]): tstl.TableIndexExpression {
   let expr: tstl.Expression = tstl.createIdentifier(table);
   for (const field of fields) {
@@ -158,7 +157,10 @@ describe("collectScopeInfo", () => {
     expect(chainCounts.has("math")).toBe(false);
   });
 
-  it("counts chains inside function bodies when shallow=false", () => {
+  it.each([
+    { shallow: false, expectedCount: 1, description: "includes function bodies" },
+    { shallow: true, expectedCount: 0, description: "skips function bodies" },
+  ])("chain counting $description", ({ shallow, expectedCount }) => {
     const funcBody = tstl.createBlock([
       tstl.createVariableDeclarationStatement(
         tstl.createIdentifier("x"),
@@ -170,24 +172,8 @@ describe("collectScopeInfo", () => {
       tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
     ];
 
-    const { chainCounts } = collectScopeInfo(statements, false);
-    expect(chainCounts.get("math.cos")).toBe(1);
-  });
-
-  it("skips function bodies when shallow=true", () => {
-    const funcBody = tstl.createBlock([
-      tstl.createVariableDeclarationStatement(
-        tstl.createIdentifier("x"),
-        makeAccess("math", "cos"),
-      ),
-    ]);
-    const funcExpr = tstl.createFunctionExpression(funcBody, []);
-    const statements: tstl.Statement[] = [
-      tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
-    ];
-
-    const { chainCounts } = collectScopeInfo(statements, true);
-    expect(chainCounts.has("math.cos")).toBe(false);
+    const { chainCounts } = collectScopeInfo(statements, shallow);
+    expect(chainCounts.get("math.cos") ?? 0).toBe(expectedCount);
   });
 
   it("collects variable declaration LHS identifiers as scopeDefs", () => {
@@ -407,9 +393,10 @@ describe("collectArrayElementAccesses", () => {
     expect(info.writes.has("s")).toBe(false);
   });
 
-  it("respects guardDepth to skip counting inside guarded expressions", () => {
-    // This is tested implicitly by testing expressions vs statement contexts
-    // but we can verify that shallow=false includes function bodies
+  it.each([
+    { shallow: false, expectedCount: 1, description: "includes function bodies" },
+    { shallow: true, expectedCount: 0, description: "skips function bodies" },
+  ])("array access collection $description", ({ shallow, expectedCount }) => {
     const funcBody = tstl.createBlock([
       tstl.createExpressionStatement(
         tstl.createTableIndexExpression(tstl.createIdentifier("t"), tstl.createIdentifier("i")),
@@ -418,25 +405,7 @@ describe("collectArrayElementAccesses", () => {
     const funcExpr = tstl.createFunctionExpression(funcBody, []);
     const stmt = tstl.createVariableDeclarationStatement(tstl.createIdentifier("f"), funcExpr);
 
-    const info = collectArrayElementAccesses([stmt], new Set(["i"]), false);
-
-    // With shallow=false, function bodies are traversed, so t[i] should be counted
-    expect(info.counts.has("t")).toBe(true);
-  });
-
-  it("skips counting when shallow=true and access is inside function", () => {
-    // With shallow=true, function bodies are not traversed
-    const funcBody = tstl.createBlock([
-      tstl.createExpressionStatement(
-        tstl.createTableIndexExpression(tstl.createIdentifier("t"), tstl.createIdentifier("i")),
-      ),
-    ]);
-    const funcExpr = tstl.createFunctionExpression(funcBody, []);
-    const stmt = tstl.createVariableDeclarationStatement(tstl.createIdentifier("f"), funcExpr);
-
-    const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
-
-    // With shallow=true, function bodies are skipped
-    expect(info.counts.size).toBe(0);
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), shallow);
+    expect(info.counts.get("t") ?? 0).toBe(expectedCount);
   });
 });

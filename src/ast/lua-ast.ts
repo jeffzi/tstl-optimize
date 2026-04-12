@@ -28,14 +28,17 @@ export function isLuaRhsPure(expr: tstl.Expression): boolean {
 /**
  * Extended purity predicate that covers compound expressions.
  *
- * Extends isLuaRhsPure to classify UnaryExpression, BinaryExpression, and
- * ParenthesizedExpression as pure when their sub-expressions are pure. Lua has
- * no operator overloading, so these operators are always side-effect-free.
+ * Extends isLuaRhsPure to cover syntactic wrappers and TSTL conditional expressions.
+ * Lua unary and binary operators may dispatch metamethods, so they are not treated
+ * as pure here.
  */
 export function isLuaExprPure(expr: tstl.Expression): boolean {
   if (isLuaRhsPure(expr)) return true;
-  if (tstl.isUnaryExpression(expr)) return isLuaExprPure(expr.operand);
-  if (tstl.isBinaryExpression(expr)) return isLuaExprPure(expr.left) && isLuaExprPure(expr.right);
   if (tstl.isParenthesizedExpression(expr)) return isLuaExprPure(expr.expression);
+  if (tstl.isConditionalExpression(expr)) {
+    return (
+      isLuaExprPure(expr.condition) && isLuaExprPure(expr.whenTrue) && isLuaExprPure(expr.whenFalse)
+    );
+  }
   return false;
 }

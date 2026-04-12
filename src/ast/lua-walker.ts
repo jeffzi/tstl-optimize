@@ -92,14 +92,15 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
     } else if (tstl.isTableExpression(expr)) {
       for (const field of expr.fields) {
         if (stopped) return;
-        visitExpr(field.value, (n) => {
-          field.value = n;
-        });
-        if (field.key && !stopped) {
+        if (field.key) {
           visitExpr(field.key, (n) => {
             field.key = n;
           });
         }
+        if (stopped) return;
+        visitExpr(field.value, (n) => {
+          field.value = n;
+        });
       }
     } else if (tstl.isFunctionExpression(expr)) {
       if (!shallow) {

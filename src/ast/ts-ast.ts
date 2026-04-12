@@ -12,7 +12,7 @@ export const SideEffectOptions = {
  * Bitwise flag set for side effect assumptions.
  * Combine flags using bitwise OR: `SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure`
  */
-export type SideEffectOptions = number;
+export type SideEffectOptions = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 function queueTemplateSpans(templateNode: ts.TemplateExpression, queue: ts.Expression[]): void {
   for (const span of templateNode.templateSpans) queue.push(span.expression);
@@ -84,10 +84,7 @@ export function hasSideEffects(
       }
 
       case ts.SyntaxKind.ElementAccessExpression: {
-        const ea = current as ts.ElementAccessExpression;
-        queue.push(ea.argumentExpression);
-        current = ea.expression;
-        continue;
+        return true;
       }
 
       case ts.SyntaxKind.ConditionalExpression: {

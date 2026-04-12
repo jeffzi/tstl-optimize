@@ -63,7 +63,14 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
     stmt: (stmt: tstl.Statement) => {
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
         for (const lhs of stmt.left) {
-          if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
+          if (tstl.isIdentifier(lhs)) {
+            scopeDefs.add(lhs.text);
+          } else if (tstl.isTableIndexExpression(lhs)) {
+            const chain = luaPropertyChain(lhs);
+            if (chain !== undefined) {
+              scopeDefs.add(chain);
+            }
+          }
         }
         // Only collect function parameters at module scope (shallow=false).
         // At function scope (shallow=true), nested function parameters should NOT
@@ -143,7 +150,16 @@ export function collectArrayElementAccesses(
         control.skip();
       }
     },
-    stmt: (stmt: tstl.Statement) => {
+    stmt: (stmt: tstl.Statement, control: TraversalControl) => {
+      if (
+        (tstl.isForStatement(stmt) && loopVarNames.has(stmt.controlVariable.text)) ||
+        (tstl.isForInStatement(stmt) &&
+          stmt.names.some((name) => tstl.isIdentifier(name) && loopVarNames.has(name.text)))
+      ) {
+        control.skip();
+        return;
+      }
+
       if (tstl.isAssignmentStatement(stmt)) {
         for (const lhs of stmt.left) {
           if (
