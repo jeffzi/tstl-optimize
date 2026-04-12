@@ -177,6 +177,14 @@ function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<str
     return expressionReferencesAnyOf(expr.expression, names);
   }
 
+  if (tstl.isConditionalExpression(expr)) {
+    return (
+      expressionReferencesAnyOf(expr.condition, names) ||
+      expressionReferencesAnyOf(expr.whenTrue, names) ||
+      expressionReferencesAnyOf(expr.whenFalse, names)
+    );
+  }
+
   if (tstl.isFunctionExpression(expr)) {
     let activeNames = names;
     if (expr.params) {

@@ -164,6 +164,22 @@ describe("merge-locals", () => {
       expect(lua).toContain("local a = 1");
       expect(lua).not.toContain("local a, t");
     });
+
+    it("does NOT merge when a later RHS references a prior LHS inside a conditional expression", () => {
+      const code = `
+        function f(cond: boolean): number {
+          const a = 1;
+          const b = cond ? a : 2;
+          return b;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("local a = 1");
+      expect(lua).toContain("local b");
+      expect(lua).not.toContain("local a, b");
+    });
   });
 
   describe("edge cases", () => {
@@ -449,7 +465,7 @@ describe("merge-locals coverage", () => {
     expect(lua).not.toContain("local b, fn2");
     expect(lua).not.toContain("local c, fn3");
     expect(lua).not.toContain("local d, fn4");
-    expect(lua).toMatch(/local .*e, fn5/);
+    expect(lua).toContain("local fn4, e, fn5 =");
   });
 
   it("allows merge when while/repeat does not reference tracked variable", () => {
@@ -465,8 +481,7 @@ describe("merge-locals coverage", () => {
       }
     `;
     const lua = normalizeLua(compile(code));
-    expect(lua).toMatch(/local .*a, fn1/);
-    expect(lua).toMatch(/local .*b, fn2/);
+    expect(lua).toContain("local a, fn1, b, fn2 =");
   });
 
   it("detects captured variable in for loop init, condition, step, and body", () => {
@@ -490,8 +505,7 @@ describe("merge-locals coverage", () => {
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local b, fn2");
     expect(lua).not.toContain("local c, fn3");
-    expect(lua).toMatch(/local .*d, fn4/);
-    expect(lua).toMatch(/local .*e, fn5/);
+    expect(lua).toContain("local fn3, d, fn4, e, fn5 =");
   });
 
   it("detects captured variable in for-in loop", () => {
@@ -507,7 +521,7 @@ describe("merge-locals coverage", () => {
     `;
     const lua = normalizeLua(compile(code));
     expect(lua).not.toContain("local a, fn1");
-    expect(lua).toMatch(/local .*b, fn2/);
+    expect(lua).toContain("local fn1, b, fn2 =");
   });
 
   it("detects captured variable inside do block", () => {
@@ -543,7 +557,7 @@ describe("merge-locals coverage", () => {
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local b, fn2");
     expect(lua).not.toContain("local c, fn3");
-    expect(lua).toMatch(/local .*d, fn4/);
+    expect(lua).toContain("local fn3, d, fn4 =");
   });
 
   it("detects captured variable in table keys and values", () => {
@@ -605,11 +619,10 @@ describe("merge-locals coverage", () => {
       }
     `;
     const lua = normalizeLua(compile(code));
-    expect(lua).toMatch(/local .*a, fn1/);
-    expect(lua).toMatch(/local .*b, fn2/);
+    expect(lua).toContain("local a, fn1, b, fn2 =");
   });
 
-  it("isMergeable branches: Multiple LHS and Multiple RHS", () => {
+  it("keeps destructuring separate while still merging the next compatible declarations", () => {
     const code = `
       function test() {
         const [a, b] = [1, 2]; // Multiple LHS - not mergeable
@@ -623,7 +636,7 @@ describe("merge-locals coverage", () => {
     expect(lua).toContain("local c, d = 3, 4");
   });
 
-  it("Empty file / no statements", () => {
+  it("emits empty Lua for an empty source file", () => {
     const code = "";
     const lua = normalizeLua(compile(code));
     expect(lua).toBe("");
@@ -674,7 +687,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local .*a, fn/);
+      expect(lua).toContain("local a, fn");
     });
   });
 
@@ -717,7 +730,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local .*a, fn/);
+      expect(lua).toContain("local a, fn");
     });
   });
 
@@ -758,7 +771,7 @@ describe("merge-locals uncovered branches", () => {
       expect(lua).not.toContain("local x, y");
     });
 
-    it("allows merge when parenthesized expression does not reference tracked name", () => {
+    it("still merges earlier pure locals when a later parenthesized expression references one of them", () => {
       // `a` is pure, enters the run. `c` is pure, enters the run. `b`'s RHS is `(c)` —
       // a parenthesized expression wrapping `c`, which IS in declaredNames={a, c}.
       // expressionReferencesAnyOf unwraps (line 177) and checks `c` against {a, c},
@@ -776,9 +789,9 @@ describe("merge-locals uncovered branches", () => {
       const lua = normalizeLua(compile(code));
 
       // `a` and `c` should merge (both pure, don't reference each other)
-      expect(lua).toMatch(/local a, c/);
+      expect(lua).toContain("local a, c");
       // `b` is separate because its RHS references `c` (via parentheses)
-      expect(lua).toMatch(/local b/);
+      expect(lua).toContain("local b");
     });
   });
 
@@ -825,7 +838,7 @@ describe("merge-locals uncovered branches", () => {
       const lua = normalizeLua(compile(code));
 
       // `a`, `b`, `obj` should all merge together (all pure, no dependencies)
-      expect(lua).toMatch(/local a, b, obj/);
+      expect(lua).toContain("local a, b, obj");
       // `fn` may be separate due to being a FunctionExpression, but importantly
       // the MethodCallExpression param checking (line 154-156) was exercised
       expect(lua).toContain("local function fn");
@@ -871,7 +884,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local .*a, b, fn/);
+      expect(lua).toContain("local a, b, fn");
     });
   });
 
@@ -1026,7 +1039,7 @@ describe("merge-locals uncovered branches", () => {
       const lua = normalizeLua(compile(code));
 
       // All three variables merge together
-      expect(lua).toMatch(/local x, y, obj/);
+      expect(lua).toContain("local x, y, obj");
     });
   });
 
@@ -1075,7 +1088,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local a, fn/);
+      expect(lua).toContain("local a, fn");
     });
 
     it("allows merge when function body re-declares all tracked names as locals", () => {
@@ -1100,7 +1113,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local a, b, fn/);
+      expect(lua).toContain("local a, b, fn");
     });
 
     it("blocks merge when function body re-declares one tracked name but uses the other", () => {
@@ -1172,7 +1185,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local i, fn/);
+      expect(lua).toContain("local i, fn");
     });
   });
 
@@ -1228,7 +1241,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local a, fn/);
+      expect(lua).toContain("local a, fn");
     });
   });
 
@@ -1296,7 +1309,7 @@ describe("merge-locals uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      expect(lua).toMatch(/local a, fn/);
+      expect(lua).toContain("local a, fn");
     });
   });
 });

@@ -8,6 +8,9 @@ import type { ConstantValue, RuleFactory } from "../config";
 const UTF8_ENCODER = new TextEncoder();
 
 function getLiteralValue(expr: tstl.Expression): ConstantValue | undefined {
+  if (tstl.isParenthesizedExpression(expr)) {
+    return getLiteralValue(expr.expression);
+  }
   if (tstl.isNumericLiteral(expr)) return expr.value;
   if (tstl.isStringLiteral(expr)) return expr.value;
   if (tstl.isBooleanLiteral(expr)) return expr.kind === tstl.SyntaxKind.TrueKeyword;
@@ -22,8 +25,22 @@ function getLiteralValue(expr: tstl.Expression): ConstantValue | undefined {
   return undefined;
 }
 
-function createLiteral(value: ConstantValue): tstl.Expression {
-  if (typeof value === "number") return tstl.createNumericLiteral(value);
+function createNegativeLiteral(value: number): tstl.Expression {
+  return tstl.createParenthesizedExpression(
+    tstl.createUnaryExpression(
+      tstl.createNumericLiteral(Math.abs(value)),
+      tstl.SyntaxKind.NegationOperator,
+    ),
+  );
+}
+
+function createLiteral(value: ConstantValue, wrapNegativeNumber = false): tstl.Expression {
+  if (typeof value === "number") {
+    if (wrapNegativeNumber && value < 0) {
+      return createNegativeLiteral(value);
+    }
+    return tstl.createNumericLiteral(value);
+  }
   if (typeof value === "string") return tstl.createStringLiteral(value);
   return tstl.createBooleanLiteral(value);
 }
@@ -249,7 +266,7 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
               if (leftVal !== undefined && rightVal !== undefined) {
                 const folded = evaluateBinary(expr.operator, leftVal, rightVal);
                 if (folded !== undefined) {
-                  const lit = createLiteral(folded);
+                  const lit = createLiteral(folded, true);
                   lit.line = expr.line;
                   lit.column = expr.column;
                   replace(lit);

@@ -251,19 +251,14 @@ describe("loop-rebase", () => {
   });
 
   describe("when loop pattern matching and step validation are evaluated", () => {
-    it("detects 1 + var pattern (left 1, right var) in array indices during rebase", () => {
-      // Lines 22, 24: tests the (lIsOne && rIsVar) branch in analyzeBody
-      // When analyzing the loop body, the code checks if left is 1 and right is var.
-      // This test ensures both branches of the condition are tested:
-      // (lIsVar && rIsOne) is covered by existing tests with i + 1
-      // (lIsOne && rIsVar) is what we test here with 1 + i
+    it("rebases loops while preserving a leading offset in array indices", () => {
       const lua = compile(
         "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[1 + i]; }",
       );
-      // Rebase should still apply with this pattern
-      expect(lua).toContain("for i = 1, n do");
-      // The expression 1 + i should exist in the output (pattern detection works)
-      expect(lua).toContain("arr[");
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "arr[i + 1]"],
+        notContains: ["for i = 0, n - 1 do", "arr[i + 2]"],
+      });
     });
 
     it.each([

@@ -11,6 +11,18 @@ const opts = {
   },
 };
 
+function expectCompiledLua(source: string, expected: string, options = opts): void {
+  const lines = expected.split("\n");
+  const contentLines = lines.filter((line) => line.trim().length > 0);
+  const minIndent = contentLines.reduce<number>((smallestIndent, line) => {
+    const indent = line.length - line.trimStart().length;
+    return Math.min(smallestIndent, indent);
+  }, Number.POSITIVE_INFINITY);
+  const normalizedExpected = contentLines.map((line) => line.slice(minIndent)).join("\n");
+
+  expect(normalizeLua(compile(source, options))).toBe(normalizedExpected);
+}
+
 describe("remove-empty-branch rule", () => {
   describe("basic rule behavior", () => {
     it("does not remove empty if statements when rule is disabled", () => {
@@ -36,20 +48,48 @@ describe("remove-empty-branch rule", () => {
   });
 
   describe("remove entirely-empty if-chains", () => {
-    it("removes entirely empty if statements with pure conditions", () => {
-      const source = `
-        const x = true;
-        const y = false;
-        if (x) {}
-        if (true) {}
-        if (x) {} else if (y) {} else {}
-        if (!x) {}
-        if (x && y) {}
-      `;
-      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
-        "x = true
-        y = false"
-      `);
+    it.each([
+      {
+        name: "removes an empty if statement with an identifier condition",
+        source: `
+          const x = true;
+          if (x) {}
+        `,
+        expected: `
+          x = true
+        `,
+      },
+      {
+        name: "removes an empty if statement with a literal condition",
+        source: `
+          if (true) {}
+        `,
+        expected: "",
+      },
+      {
+        name: "removes an entirely empty if-elseif-else chain",
+        source: `
+          const x = true;
+          const y = false;
+          if (x) {} else if (y) {} else {}
+        `,
+        expected: `
+          x = true
+          y = false
+        `,
+      },
+      {
+        name: "removes an empty if statement with a negated pure condition",
+        source: `
+          const x = true;
+          if (!x) {}
+        `,
+        expected: `
+          x = true
+        `,
+      },
+    ])("$name", ({ source, expected }) => {
+      expectCompiledLua(source, expected);
     });
 
     it("preserves if statements with impure conditions or non-empty branches", () => {
@@ -72,6 +112,21 @@ describe("remove-empty-branch rule", () => {
         end
         if x then
         local y = 1
+        end"
+      `);
+    });
+
+    it("preserves empty if statements with compound conditions", () => {
+      const source = `
+        const x = true;
+        const y = false;
+        if (x && y) {}
+      `;
+
+      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
+        "x = true
+        y = false
+        if x and y then
         end"
       `);
     });
@@ -103,25 +158,48 @@ describe("remove-empty-branch rule", () => {
   });
 
   describe("prune trailing empty elseif/else branches", () => {
-    it("removes trailing empty elseif and else blocks with pure conditions", () => {
-      const source = `
-        const x = true;
-        if (x) { const z = 1; } else if (false) {}
-        if (x) { const z = 1; } else if (false) {} else {}
-        if (x) { const z = 1; } else {}
-      `;
-      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
-        "x = true
-        if x then
-        local z = 1
-        end
-        if x then
-        local z = 1
-        end
-        if x then
-        local z = 1
-        end"
-      `);
+    it.each([
+      {
+        name: "removes a trailing empty elseif block with a pure condition",
+        source: `
+          const x = true;
+          if (x) { const z = 1; } else if (false) {}
+        `,
+        expected: `
+          x = true
+          if x then
+          local z = 1
+          end
+        `,
+      },
+      {
+        name: "removes trailing empty elseif and else blocks with pure conditions",
+        source: `
+          const x = true;
+          if (x) { const z = 1; } else if (false) {} else {}
+        `,
+        expected: `
+          x = true
+          if x then
+          local z = 1
+          end
+        `,
+      },
+      {
+        name: "removes a trailing empty else block",
+        source: `
+          const x = true;
+          if (x) { const z = 1; } else {}
+        `,
+        expected: `
+          x = true
+          if x then
+          local z = 1
+          end
+        `,
+      },
+    ])("$name", ({ source, expected }) => {
+      expectCompiledLua(source, expected);
     });
 
     it("preserves trailing elseif with impure conditions", () => {
@@ -238,29 +316,43 @@ describe("remove-empty-branch rule", () => {
   });
 
   describe("remove empty branches inside loop bodies", () => {
-    it("removes empty if statements inside while and for loop bodies", () => {
-      const source = `
-        const x = true;
-        while (x) {
-          if (x) {}
-          const z = 1;
-        }
-        let i = 0;
-        while (i < 3) {
-          if (x) {}
-          i++;
-        }
-      `;
-      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
-        "x = true
-        while x do
-        local z = 1
-        end
-        i = 0
-        while i < 3 do
-        i = i + 1
-        end"
-      `);
+    it.each([
+      {
+        name: "removes an empty if statement inside a while loop",
+        source: `
+          const x = true;
+          while (x) {
+            if (x) {}
+            const z = 1;
+          }
+        `,
+        expected: `
+          x = true
+          while x do
+          local z = 1
+          end
+        `,
+      },
+      {
+        name: "removes an empty if statement inside a counted while loop",
+        source: `
+          const x = true;
+          let i = 0;
+          while (i < 3) {
+            if (x) {}
+            i++;
+          }
+        `,
+        expected: `
+          x = true
+          i = 0
+          while i < 3 do
+          i = i + 1
+          end
+        `,
+      },
+    ])("$name", ({ source, expected }) => {
+      expectCompiledLua(source, expected);
     });
   });
 
@@ -274,7 +366,7 @@ describe("remove-empty-branch rule", () => {
         withEmptyBranches();
         const result = 1;
       `;
-      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`"result = 1"`);
+      expectCompiledLua(source, "result = 1");
     });
 
     it("preserves non-empty do blocks from inlined functions", () => {
@@ -286,12 +378,15 @@ describe("remove-empty-branch rule", () => {
         withBody();
         const x = 1;
       `;
-      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
-        "do
-        local a = 1
-        end
-        x = 1"
-      `);
+      expectCompiledLua(
+        source,
+        `
+          do
+          local a = 1
+          end
+          x = 1
+        `,
+      );
     });
 
     it("removes multiple and nested empty do blocks", () => {
@@ -307,7 +402,7 @@ describe("remove-empty-branch rule", () => {
         }
         const z = 3;
       `;
-      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`"z = 3"`);
+      expectCompiledLua(source, "z = 3");
     });
   });
 });

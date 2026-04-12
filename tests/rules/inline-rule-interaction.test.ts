@@ -3,7 +3,7 @@ import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { compile, normalizeLua } from "../helpers";
 
-describe("rule interaction", () => {
+describe("optimize rule interactions", () => {
   describe("when localizer works with block-scoped code", () => {
     it("hoists repeated chains from inside do...end to module scope", () => {
       const lua = compile(
@@ -34,7 +34,10 @@ describe("rule interaction", () => {
           luaTarget: tstl.LuaTarget.LuaJIT,
         },
       );
-      expect(lua).toContain("____math_ceil");
+      const normalizedLua = normalizeLua(lua);
+      expect(normalizedLua).toContain("local ____math_ceil = math.ceil");
+      expect(normalizedLua).toContain("local a = ____math_ceil(x)");
+      expect(normalizedLua).toContain("local b = ____math_ceil(x + 1)");
     });
 
     it("does not hoist chains rooted at block-local variables", () => {
@@ -66,7 +69,10 @@ describe("rule interaction", () => {
         declare const v: number;
         const r = fastFloor(v);
       `);
-      expect(normalizeLua(lua)).toBe("r = (v - v % 1)");
+      const normalizedLua = normalizeLua(lua);
+      expect(normalizedLua).toContain("r =");
+      expect(normalizedLua).toContain("math.floor(v)");
+      expect(normalizedLua).toContain("v - v % 1");
     });
 
     it("replaces Math functions inside inlined do...end block", () => {
@@ -79,9 +85,11 @@ describe("rule interaction", () => {
         declare const v: number;
         doFloor(v);
       `);
-      expect(lua).toMatch(/v - v % 1|____inline_arg_0 - ____inline_arg_0 % 1/);
-      expect(lua).not.toContain("math.floor");
-      expect(lua).not.toContain("doFloor(v)");
+      const normalizedLua = normalizeLua(lua);
+      expect(normalizedLua).toContain(
+        "local y = (____inline_arg_0 == math.huge or ____inline_arg_0 == -(math.huge)) and math.floor(____inline_arg_0) or ____inline_arg_0 - ____inline_arg_0 % 1",
+      );
+      expect(normalizedLua).not.toContain("doFloor(v)");
     });
   });
 
@@ -115,8 +123,12 @@ describe("rule interaction", () => {
         pluginOptions: { rules: { localizer: { scope: "module" } } },
         luaTarget: tstl.LuaTarget.LuaJIT,
       });
-      expect(lua).toContain("____math_floor");
-      expect(lua).not.toContain("doWork(v)");
+      const normalizedLua = normalizeLua(lua);
+      expect(normalizedLua).toContain("local ____math_floor = math.floor");
+      expect(normalizedLua).toContain("local a = ____math_floor(____inline_arg_0)");
+      expect(normalizedLua).toContain("local b = ____math_floor(____inline_arg_0 + 1)");
+      expect(normalizedLua).toContain("local c = ____math_floor(____inline_arg_0 + 2)");
+      expect(normalizedLua).not.toContain("doWork(v)");
     });
   });
 });

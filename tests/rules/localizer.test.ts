@@ -308,6 +308,27 @@ describe("localizer", () => {
       );
       expect(lua).toContain("local ____math_ceil = math.ceil");
     });
+
+    it("scope: module does not hoist included non-stdlib chains based only on function-body usage", () => {
+      const lua = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "function process() {",
+          "  const a = config.graphics.width;",
+          "  const b = config.graphics.width;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
+      );
+
+      expect(lua).not.toContain("local ____config_graphics_width = config.graphics.width");
+      expect(lua).toContain("config.graphics.width");
+    });
   });
 
   describe("when localizing array elements", () => {
@@ -541,6 +562,55 @@ describe("localizer", () => {
       // as upvalues/globals — skip all bases when any call exists
       expect(lua).not.toContain("local ____a");
       expect(lua).not.toContain("local ____b");
+    });
+
+    it("does not hoist property chains across intervening calls that may mutate the root", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare function touch(value: { x: number }): void;",
+          "function f() {",
+          "  const a = obj.x;",
+          "  touch(obj);",
+          "  const b = obj.x;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "function" as const, include: ["obj"] } } },
+        },
+      );
+
+      expect(lua).not.toContain("local ____obj_x");
+      expect(lua).toContain("touch(obj)");
+      expect(lua).toContain("local a = obj.x");
+      expect(lua).toContain("local b = obj.x");
+    });
+
+    it("scope: all does not hoist included non-stdlib chains to module scope across an intervening call", () => {
+      const lua = compile(
+        [
+          "declare const obj: { a: { b: number }; mutate(): void };",
+          "function use() {",
+          "  const x = obj.a.b;",
+          "  obj.mutate();",
+          "  const y = obj.a.b;",
+          "  const z = obj.a.b;",
+          "  return x + y + z;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { threshold: 2, scope: "all" as const, include: ["obj"] } },
+          },
+        },
+      );
+
+      expect(lua).not.toContain("local ____obj_a_b = obj.a.b");
+      expect(lua).toContain("obj:mutate()");
+      expect(lua).toContain("local x = obj.a.b");
+      expect(lua).toContain("local y = obj.a.b");
+      expect(lua).toContain("local z = obj.a.b");
     });
 
     it("works alongside static chain hoisting", () => {
@@ -1045,8 +1115,9 @@ describe("localizer", () => {
         "declare const x: number; const a = Math.floor(x); const b = Math.floor(x);",
         MODULE_SCOPE,
       );
-      // PUC target: math-intrinsics replaces Math.floor with x - x % 1
-      expect(lua).not.toContain("math.floor");
+      // PUC target: math-intrinsics emits the guarded floor fast path, so localizer
+      // still has no standalone math.floor chain to hoist.
+      expect(lua).toContain("math.floor");
       expect(lua).not.toContain("local ____math_floor = math.floor");
       expect(lua).toContain("x % 1");
     });
@@ -1064,35 +1135,174 @@ describe("localizer", () => {
 });
 
 describe("localizer early exit detection in array element localization", () => {
-  it("detects return in for loop body preventing array write-back", () => {
-    const lua = compile(
+  const compileArrayLoop = (bodyLines: string[]): string =>
+    compile(
       [
         "function test(arr: number[], n: number) {",
         "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    if (i === 5) return;",
+        ...bodyLines.map((line) => `    ${line}`),
         "  }",
         "}",
       ].join("\n"),
       FUNC_SCOPE,
     );
-    expect(lua).not.toContain("local ____arr");
-  });
 
-  it("detects break in for loop body preventing array write-back", () => {
-    const lua = compile(
+  const compileNumericForLoop = (bodyLines: string[]): string =>
+    compile(
       [
         "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    if (i === 5) break;",
+        "  for (let i = 0; i < n; i++) {",
+        ...bodyLines.map((line) => `    ${line}`),
         "  }",
         "}",
       ].join("\n"),
       FUNC_SCOPE,
     );
+
+  it.each([
+    {
+      name: "return in the loop body",
+      bodyLines: ["arr[i] = arr[i] + 1;", "arr[i] = arr[i] + 2;", "if (i === 5) return;"],
+    },
+    {
+      name: "break in the loop body",
+      bodyLines: ["arr[i] = arr[i] + 1;", "arr[i] = arr[i] + 2;", "if (i === 5) break;"],
+    },
+    {
+      name: "an else-if branch returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "if (i > 5) {",
+        "  arr[i] = arr[i] + 2;",
+        "} else if (i < 2) {",
+        "  return;",
+        "}",
+      ],
+    },
+    {
+      name: "a nested do block returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "if (true) {",
+        "  do {",
+        "    return;",
+        "  } while (false);",
+        "}",
+        "arr[i] = arr[i] + 2;",
+      ],
+    },
+    {
+      name: "a nested while loop returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "if (true) {",
+        "  while (true) {",
+        "    return;",
+        "  }",
+        "}",
+        "arr[i] = arr[i] + 2;",
+      ],
+    },
+    {
+      name: "a nested repeat loop returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "if (true) {",
+        "  do {",
+        "    if (true) while (true) { return; }",
+        "  } while (false);",
+        "}",
+        "arr[i] = arr[i] + 2;",
+      ],
+    },
+    {
+      name: "the else block returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "if (i > 5) {",
+        "  arr[i] = arr[i] * 2;",
+        "} else {",
+        "  return;",
+        "}",
+      ],
+    },
+    {
+      name: "the final else in an else-if chain returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "if (i > 10) {",
+        "  arr[i] = arr[i] * 2;",
+        "} else if (i > 5) {",
+        "  arr[i] = arr[i] * 3;",
+        "} else {",
+        "  return;",
+        "}",
+      ],
+    },
+    {
+      name: "a top-level do block returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "do {",
+        "  return;",
+        "} while (false);",
+      ],
+    },
+    {
+      name: "a do block breaks in a nested conditional",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "do {",
+        "  if (i === 3) {",
+        "    break;",
+        "  }",
+        "} while (false);",
+      ],
+    },
+    {
+      name: "a do-while contains a while loop that returns",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "do {",
+        "  while (true) {",
+        "    return;",
+        "  }",
+        "} while (false);",
+      ],
+    },
+    {
+      name: "all branches in an if chain return",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "if (i < 5) {",
+        "  return;",
+        "} else if (i < 10) {",
+        "  return;",
+        "} else {",
+        "  return;",
+        "}",
+      ],
+    },
+    {
+      name: "the if branch returns even though the else branch continues",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "arr[i] = arr[i] + 2;",
+        "if (i < 5) {",
+        "  return;",
+        "} else {",
+        "  arr[i] = arr[i] * 2;",
+        "}",
+      ],
+    },
+  ])("does not hoist array localization when $name", ({ bodyLines }) => {
+    const lua = compileArrayLoop(bodyLines);
     expect(lua).not.toContain("local ____arr");
   });
 
@@ -1112,118 +1322,22 @@ describe("localizer early exit detection in array element localization", () => {
   });
 
   it("does not hoist write-only array element updates", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = 1;",
-        "    arr[i] = 2;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
+    const lua = compileArrayLoop(["arr[i] = 1;", "arr[i] = 2;"]);
     expect(lua).not.toContain("local ____arr = arr[i]");
     expect(lua).not.toContain("arr[i] = ____arr");
     expect(lua).toContain("arr[i] = 1");
     expect(lua).toContain("arr[i] = 2");
   });
 
-  it("detects return in do statement preventing array write-back", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    if (true) {",
-        "      do {",
-        "        return;",
-        "      } while (false);",
-        "    }",
-        "    arr[i] = arr[i] + 2;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
   it("hoists when do block has no early exit", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    do {",
-        "      const x = 1;",
-        "    } while (false);",
-        "    arr[i] = arr[i] + 2;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
+    const lua = compileArrayLoop([
+      "arr[i] = arr[i] + 1;",
+      "do {",
+      "  const x = 1;",
+      "} while (false);",
+      "arr[i] = arr[i] + 2;",
+    ]);
     expect(lua).toContain("local ____arr");
-  });
-
-  it("prevents hoisting when else-if branch has return", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    if (i > 5) {",
-        "      arr[i] = arr[i] + 2;",
-        "    } else if (i < 2) {",
-        "      return;",
-        "    }",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("detects return in while loop within early exit check", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    if (true) {",
-        "      while (true) {",
-        "        return;",
-        "      }",
-        "    }",
-        "    arr[i] = arr[i] + 2;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("detects return in repeat loop within early exit check", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    if (true) {",
-        "      do {",
-        "        if (true) while (true) { return; }",
-        "      } while (false);",
-        "    }",
-        "    arr[i] = arr[i] + 2;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
   });
 
   it("detects return in forin loop preventing hoisting", () => {
@@ -1256,180 +1370,69 @@ describe("localizer early exit detection in array element localization", () => {
     expect(lua).toContain("local ____obj");
   });
 
-  it("prevents hoisting when else block has return", () => {
+  it.each([
+    {
+      name: "an explicit break",
+      bodyLines: ["arr[i] = arr[i] + 1;", "arr[i] = arr[i] + 2;", "break;"],
+    },
+    {
+      name: "a nested conditional breaks",
+      bodyLines: [
+        "arr[i] = arr[i] + 1;",
+        "if (i === 5) {",
+        "  break;",
+        "}",
+        "arr[i] = arr[i] + 2;",
+      ],
+    },
+  ])("does not hoist numeric-for array localization when $name", ({ bodyLines }) => {
+    const lua = compileNumericForLoop(bodyLines);
+    expect(lua).not.toContain("local ____arr");
+  });
+});
+
+describe("localizer safety around writes and shadowing", () => {
+  it("does not hoist property chains across writes to the same chain", () => {
     const lua = compile(
       [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    if (i > 5) {",
-        "      arr[i] = arr[i] * 2;",
-        "    } else {",
-        "      return;",
+        "declare const config: { physics: { gravity: number } };",
+        "function step() {",
+        "  const a = config.physics.gravity + 1;",
+        "  config.physics.gravity = 2;",
+        "  const b = config.physics.gravity + 3;",
+        "  return a + b;",
+        "}",
+      ].join("\n"),
+      {
+        pluginOptions: {
+          rules: { localizer: { scope: "function" as const, include: ["config"] } },
+        },
+      },
+    );
+
+    expect(lua).not.toContain("local ____config_physics_gravity");
+    expect(lua).toContain("config.physics.gravity = 2");
+  });
+
+  it("does not hoist array element localization through nested loops that shadow the index name", () => {
+    const lua = compile(
+      [
+        "function step(arr: number[], outer: number, inner: number) {",
+        "  for (const i of $range(0, outer - 1)) {",
+        "    const a = arr[i] + arr[i];",
+        "    for (const i of $range(0, inner - 1)) {",
+        "      arr[i] = arr[i] + 1;",
         "    }",
+        "    const b = arr[i] + arr[i];",
         "  }",
         "}",
       ].join("\n"),
       FUNC_SCOPE,
     );
-    expect(lua).not.toContain("local ____arr");
-  });
 
-  it("prevents hoisting when else-if chain has return in final else", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    if (i > 10) {",
-        "      arr[i] = arr[i] * 2;",
-        "    } else if (i > 5) {",
-        "      arr[i] = arr[i] * 3;",
-        "    } else {",
-        "      return;",
-        "    }",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when for loop has explicit break", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (let i = 0; i < n; i++) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    break;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when for loop body has break in nested conditional", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (let i = 0; i < n; i++) {",
-        "    arr[i] = arr[i] + 1;",
-        "    if (i === 5) {",
-        "      break;",
-        "    }",
-        "    arr[i] = arr[i] + 2;",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when do block has return at top level", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    do {",
-        "      return;",
-        "    } while (false);",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when do block has break in nested conditional", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    do {",
-        "      if (i === 3) {",
-        "        break;",
-        "      }",
-        "    } while (false);",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when do-while contains while with return", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    do {",
-        "      while (true) {",
-        "        return;",
-        "      }",
-        "    } while (false);",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when multiple if branches all have returns", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    if (i < 5) {",
-        "      return;",
-        "    } else if (i < 10) {",
-        "      return;",
-        "    } else {",
-        "      return;",
-        "    }",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
-  });
-
-  it("prevents hoisting when if block has return even if else does not", () => {
-    const lua = compile(
-      [
-        "function test(arr: number[], n: number) {",
-        "  for (const i of $range(0, n - 1)) {",
-        "    arr[i] = arr[i] + 1;",
-        "    arr[i] = arr[i] + 2;",
-        "    if (i < 5) {",
-        "      return;",
-        "    } else {",
-        "      arr[i] = arr[i] * 2;",
-        "    }",
-        "  }",
-        "}",
-      ].join("\n"),
-      FUNC_SCOPE,
-    );
-    expect(lua).not.toContain("local ____arr");
+    expect(lua).toContain("local ____arr = arr[i]");
+    expect(lua).toContain("for i = 1, inner do");
+    expect(lua).toContain("arr[i] = arr[i] + 1");
   });
 });
 

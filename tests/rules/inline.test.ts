@@ -69,7 +69,8 @@ describe("inline", () => {
         declare function foo(): number;
         const r = double(foo());
       `);
-      expect(lua).toContain("foo() * 2");
+      expect(lua).toContain("____inline_arg_0 = foo()");
+      expect(lua).toContain("return ____inline_arg_0 * 2");
     });
   });
 
@@ -380,6 +381,23 @@ describe("inline", () => {
       // (in Lua, "a, b = singleVar" sets b to nil).
       const brokenPattern = /\w+, \w+ = ____inline_result_\d+$/m;
       expect(lua).not.toMatch(brokenPattern);
+    });
+
+    it("preserves return-site context when directly returning an inlined multi-return call", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
+          return $multi(b, a);
+        }
+
+        function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
+          return swap(x, y);
+        }
+      `);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("swap(");
+      expect(lua).toMatch(/return (y|____inline_arg_1), (x|____inline_arg_0)/);
     });
   });
 
@@ -845,10 +863,8 @@ describe("inline uncovered branches", () => {
       ).toBe(true);
     });
 
-    it("detects unmatched argument count via type checking", () => {
-      // When argument counts don't match, TypeScript will catch it,
-      // and the plugin won't attempt inlining. This test validates
-      // that the plugin handles strict type checking correctly.
+    it("inlines when argument count matches parameter count", () => {
+      // Matching arity lets the inline rule evaluate the call site normally.
       const code = `
         declare const x: number;
         declare const y: number;
@@ -867,32 +883,12 @@ describe("inline uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      // With correct argument count, should be inlined
+      // Matching argument count should allow inlining.
       expect(lua).toContain("x + y");
     });
   });
 
   describe("canInline parameter validation", () => {
-    it("rejects when parameter symbol resolution fails", () => {
-      const code = `
-        declare const obj: { methodA(): number };
-
-        /** @inline */
-        function invoke(fn: () => number): number {
-          return fn();
-        }
-
-        function test() {
-          invoke(obj.methodA);
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      // If parameter symbol cannot be resolved, this may emit a diagnostic
-      expect(diagnostics.length).toBeGreaterThanOrEqual(0);
-    });
-
     it("does not inline when parameter is written inside function body", () => {
       const code = `
         declare const x: number;
@@ -1423,6 +1419,48 @@ describe("inline uncovered branches", () => {
 
       // Zero-argument function should inline
       expect(lua).toContain("global.value");
+    });
+
+    it("preserves left-to-right evaluation when expression-body parameters are used out of order", () => {
+      const lua = normalizeLua(
+        compile(`
+          declare function s1(): number;
+          declare function s2(): number;
+
+          /** @inline */
+          function sub(a: number, b: number): number {
+            return b - a;
+          }
+
+          const x = sub(s1(), s2());
+        `),
+      );
+
+      expect(lua).toContain("____inline_arg_0 = s1()");
+      expect(lua).toContain("____inline_arg_1 = s2()");
+      expect(lua).toContain("return ____inline_arg_1 - ____inline_arg_0");
+    });
+
+    it("preserves eager evaluation for arguments that would otherwise sit behind a conditional", () => {
+      const lua = normalizeLua(
+        compile(`
+          declare function choose(): boolean;
+          declare function s1(): number;
+          declare function s2(): number;
+
+          /** @inline */
+          function pick(flag: boolean, a: number, b: number): number {
+            return flag ? a : b;
+          }
+
+          const x = pick(choose(), s1(), s2());
+        `),
+      );
+
+      expect(lua).toContain("____inline_arg_0 = choose()");
+      expect(lua).toContain("____inline_arg_1 = s1()");
+      expect(lua).toContain("____inline_arg_2 = s2()");
+      expect(lua).toContain("return ____inline_arg_0 and ____inline_arg_1 or ____inline_arg_2");
     });
   });
 

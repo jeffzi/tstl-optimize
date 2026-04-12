@@ -44,7 +44,7 @@ describe("constant-folding", () => {
     { source: "const x = (-7) % 3;", expected: "x = 2", label: "negative dividend" },
     // Lua: 7 % (-3) == -2
     // JS:  7 % (-3) == 1
-    { source: "const x = 7 % (-3);", expected: "x = -2", label: "negative divisor" },
+    { source: "const x = 7 % (-3);", expected: "x = (-2)", label: "negative divisor" },
   ])("folds modulo using Lua floored semantics ($label)", ({ source, expected }) => {
     const lua = compile(source);
 
@@ -78,6 +78,14 @@ describe("constant-folding", () => {
       const lua = compile(source);
       expect(lua).toContain(expected);
     });
+  });
+
+  it("parenthesizes folded negative literals when they stay inside exponentiation", () => {
+    const lua = normalizeLua(
+      compile("declare function exp(): number; export const value = (1 - 3) ** exp();"),
+    );
+
+    expect(lua).toContain("value = (-2) ^ exp()");
   });
 
   describe("optimizeControlFlow preserves side-effectful conditions in empty if-blocks", () => {
@@ -198,10 +206,10 @@ describe("constant-folding", () => {
   describe("binary and unary operator type coverage", () => {
     it("folds comparison operators for numbers", () => {
       const code = `
-        export const eq = (1 as any) === (1 as any);
-        export const neq = (1 as any) !== (2 as any);
-        export const le = (1 as any) <= (2 as any);
-        export const ge = (2 as any) >= (1 as any);
+        export const eq = 1 === 1;
+        export const neq = (1 as number) !== (2 as number);
+        export const le = (1 as number) <= (2 as number);
+        export const ge = (2 as number) >= (1 as number);
       `;
 
       const lua = normalizeLua(compile(code));
@@ -214,12 +222,12 @@ describe("constant-folding", () => {
 
     it("folds comparison operators for strings", () => {
       const code = `
-        export const eq = ("a" as any) === ("a" as any);
-        export const neq = ("a" as any) !== ("b" as any);
-        export const lt = ("a" as any) < ("b" as any);
-        export const le = ("a" as any) <= ("b" as any);
-        export const gt = ("b" as any) > ("a" as any);
-        export const ge = ("b" as any) >= ("a" as any);
+        export const eq = "a" === "a";
+        export const neq = ("a" as string) !== ("b" as string);
+        export const lt = ("a" as string) < ("b" as string);
+        export const le = ("a" as string) <= ("b" as string);
+        export const gt = ("b" as string) > ("a" as string);
+        export const ge = ("b" as string) >= ("a" as string);
       `;
 
       const lua = normalizeLua(compile(code));
@@ -234,8 +242,8 @@ describe("constant-folding", () => {
 
     it("folds Unicode string comparisons using Lua byte ordering", () => {
       const code = `
-        export const lt = ("😀" as any) < ("\\uFFFD" as any);
-        export const gt = ("😀" as any) > ("\\uFFFD" as any);
+        export const lt = ("😀" as string) < ("\\uFFFD" as string);
+        export const gt = ("😀" as string) > ("\\uFFFD" as string);
       `;
 
       const lua = normalizeLua(compile(code));
@@ -246,9 +254,9 @@ describe("constant-folding", () => {
 
     it("folds comparison and logical operators for booleans", () => {
       const code = `
-        export const eq = (true as any) === (true as any);
-        export const neq = (true as any) !== (false as any);
-        export const or_val = (true as any) || (false as any);
+        export const eq = true === true;
+        export const neq = (true as boolean) !== (false as boolean);
+        export const or_val = (true as boolean) || (false as boolean);
       `;
 
       const lua = normalizeLua(compile(code));
@@ -260,8 +268,8 @@ describe("constant-folding", () => {
 
     it("folds cross-type equality comparisons", () => {
       const code = `
-        export const eq = (1 as any) === ("1" as any);
-        export const neq = (1 as any) !== ("1" as any);
+        export const eq = (1 as unknown) === ("1" as unknown);
+        export const neq = (1 as unknown) !== ("1" as unknown);
       `;
 
       const lua = normalizeLua(compile(code));
@@ -322,6 +330,7 @@ describe("constant-folding", () => {
 
     const lua = normalizeLua(compile(code));
 
-    expect(lua.trim().length).toBeGreaterThan(0);
+    expect(lua).toContain("elseif get() then");
+    expect(lua).toContain("print(2)");
   });
 });

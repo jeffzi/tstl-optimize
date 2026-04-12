@@ -26,48 +26,37 @@ describe("debug-strip", () => {
   });
 
   describe("when namespace method calls match the strip list", () => {
-    it("strips debug.traceback()", () => {
-      const lua = compile(
-        "declare namespace debug { function traceback(): string; } debug.traceback(); const x = 1;",
-        enabled,
-      );
-      expect(normalizeLua(lua)).toBe("x = 1");
-    });
-
-    it("strips namespace call with arguments", () => {
-      const lua = compile(
-        [
+    it.each([
+      {
+        name: "debug.traceback()",
+        code: "declare namespace debug { function traceback(): string; } debug.traceback(); const x = 1;",
+      },
+      {
+        name: "namespace call with arguments",
+        code: [
           "declare namespace debug { function sethook(fn: () => void, mask: string, count: number): void; }",
           'debug.sethook(() => {}, "c", 0);',
           "const x = 1;",
         ].join("\n"),
-        enabled,
-      );
-      expect(normalizeLua(lua)).toBe("x = 1");
-    });
-
-    it("strips two-level nested namespace call (debug.profiler.start())", () => {
-      const lua = compile(
-        [
+      },
+      {
+        name: "two-level nested namespace call (debug.profiler.start())",
+        code: [
           "declare namespace debug { namespace profiler { function start(): void; } }",
           "debug.profiler.start();",
           "const x = 1;",
         ].join("\n"),
-        enabled,
-      );
-      expect(normalizeLua(lua)).toBe("x = 1");
-    });
-
-    it("strips three-level nested namespace call (debug.profiler.hooks.begin())", () => {
-      const lua = compile(
-        [
+      },
+      {
+        name: "three-level nested namespace call (debug.profiler.hooks.begin())",
+        code: [
           "declare namespace debug { namespace profiler { namespace hooks { function begin(): void; } } }",
           "debug.profiler.hooks.begin();",
           "const x = 1;",
         ].join("\n"),
-        enabled,
-      );
-      expect(normalizeLua(lua)).toBe("x = 1");
+      },
+    ])("strips $name", ({ code }) => {
+      expect(normalizeLua(compile(code, enabled))).toBe("x = 1");
     });
   });
 
@@ -93,7 +82,7 @@ describe("debug-strip", () => {
           "declare function foo(s: string): void;",
           'foo(print("x"));',
         ].join("\n"),
-        expected: 'foo(print("x")',
+        expected: 'foo(print("x"))',
       },
     ])("keeps call used as $name", ({ code, expected }) => {
       expect(normalizeLua(compile(code, enabled))).toContain(expected);
@@ -231,7 +220,10 @@ describe("debug-strip", () => {
         ].join("\n"),
         enabled,
       );
-      expect(normalizeLua(lua)).toBe("a = x - x % 1");
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("a =");
+      expect(normalized).toContain("% 1");
+      expect(normalized).toContain("math.floor");
     });
   });
 
@@ -292,6 +284,79 @@ describe("debug-strip", () => {
           },
         },
       );
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+
+    it("preserves a top-level local function alias even when the configured global function is stripped", () => {
+      const lua = compile(["const debug = () => 1;", "debug();", "const x = 1;"].join("\n"), {
+        pluginOptions: { rules: { "debug-strip": { functions: ["debug"] } } },
+      });
+
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("____debug()");
+      expect(normalized).toContain("x = 1");
+    });
+
+    it("preserves a top-level local namespace object even when the configured global namespace is stripped", () => {
+      const lua = compile(
+        [
+          "const Logger = {",
+          "  log(_msg: string) {",
+          "    return 1;",
+          "  },",
+          "};",
+          'Logger.log("local");',
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["Logger"] } } } },
+      );
+
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('Logger:log("local")');
+      expect(normalized).toContain("x = 1");
+    });
+
+    it("preserves calls on shadowing locals even when the global namespace is stripped", () => {
+      const lua = compile(
+        [
+          "declare namespace debug { function traceback(): string; }",
+          "function run(debug: { traceback(): string }) {",
+          "  debug.traceback();",
+          "}",
+          "debug.traceback();",
+          "const x = 1;",
+        ].join("\n"),
+        enabled,
+      );
+
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("function run(");
+      expect(normalized).toContain(":traceback()");
+      expect(normalized).toContain("x = 1");
+    });
+
+    it("strips the configured global namespace without stripping a shadowing parameter", () => {
+      const lua = compile(
+        [
+          "declare namespace Logger { function log(msg: string): void; }",
+          "function run(Logger: { log(msg: string): void }) {",
+          '  Logger.log("local");',
+          "}",
+          'Logger.log("global");',
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["Logger"] } } } },
+      );
+
+      expect(normalizeLua(lua)).toBe('function run(Logger)\nLogger:log("local")\nend\nx = 1');
+    });
+
+    it("strips method-call syntax when the configured namespace matches the receiver root", () => {
+      const lua = compile(
+        ["declare const logger: { debug(): void };", "logger.debug();", "const x = 1;"].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["logger"] } } } },
+      );
+
       expect(normalizeLua(lua)).toBe("x = 1");
     });
   });

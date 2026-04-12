@@ -35,6 +35,36 @@ interface ReturnValueInlineTarget {
 
 type InlineTarget = ExpressionInlineTarget | StatementInlineTarget | ReturnValueInlineTarget;
 
+function hasLuaMultiReturnTypeNode(typeNode: ts.TypeNode | undefined): boolean {
+  return (
+    typeNode !== undefined &&
+    ts.isTypeReferenceNode(typeNode) &&
+    ts.isIdentifier(typeNode.typeName) &&
+    typeNode.typeName.text === "LuaMultiReturn"
+  );
+}
+
+function declarationHasLuaMultiReturnReturnType(declaration: ts.Node): boolean {
+  if (
+    ts.isFunctionDeclaration(declaration) ||
+    ts.isFunctionExpression(declaration) ||
+    ts.isArrowFunction(declaration)
+  ) {
+    return hasLuaMultiReturnTypeNode(declaration.type);
+  }
+
+  if (
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer &&
+    (ts.isArrowFunction(declaration.initializer) ||
+      ts.isFunctionExpression(declaration.initializer))
+  ) {
+    return hasLuaMultiReturnTypeNode(declaration.initializer.type);
+  }
+
+  return false;
+}
+
 function hasInlineTag(node: ts.Node): boolean {
   return ts.getJSDocTags(node).some((tag) => tag.tagName.text === "inline");
 }
@@ -103,6 +133,18 @@ function makeTargetResult(
         kind: "statementsWithReturn",
         bodyStmts: classified.stmts,
         returnExpr: classified.returnExpr,
+        params,
+        declaration,
+        resolvedSymbol,
+      },
+    };
+  }
+  if (declarationHasLuaMultiReturnReturnType(declaration)) {
+    return {
+      target: {
+        kind: "statementsWithReturn",
+        bodyStmts: [],
+        returnExpr: classified.expr,
         params,
         declaration,
         resolvedSymbol,
@@ -697,6 +739,28 @@ interface ParamMapResult {
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }
 
+function needsEagerArgumentTemps(
+  target: ExpressionInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): boolean {
+  for (let i = 0; i < target.params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    if (!paramSymbol) {
+      return false;
+    }
+
+    if (
+      countReferences(target.bodyExpr, paramSymbol, checker) === 1 &&
+      hasSideEffects(callNode.arguments[i], SideEffectOptions.None)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /** Build temp-var declarations and a symbolId→expression map for each call argument.
  *  Returns undefined if any param symbol or Lua symbolId cannot be resolved. */
 function buildParamMap(
@@ -785,6 +849,19 @@ function inlineExpressionBody(
 
   if (rejectIfCrossModuleFreeVar(callNode, target, [target.bodyExpr], checker, context, strict)) {
     return undefined;
+  }
+
+  if (needsEagerArgumentTemps(target, callNode, checker)) {
+    const mapped = buildParamMap(target.params, callNode.arguments, checker, context);
+    if (!mapped) return undefined;
+
+    const substituted = substituteParams(luaBody, mapped.paramMap);
+    return tstl.createCallExpression(
+      tstl.createFunctionExpression(
+        tstl.createBlock([...mapped.tempDecls, tstl.createReturnStatement([substituted])]),
+      ),
+      [],
+    );
   }
 
   const substituted = substituteParams(luaBody, paramMap);
@@ -954,6 +1031,23 @@ interface DestructureShared {
   resultDecl: tstl.VariableDeclarationStatement;
   tempDecls: tstl.VariableDeclarationStatement[];
   doEnd: tstl.DoStatement;
+}
+
+function returnsLuaMultiReturn(
+  declaration: ts.Node,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): boolean {
+  if (declarationHasLuaMultiReturnReturnType(declaration)) {
+    return true;
+  }
+
+  const signature = checker.getResolvedSignature(callNode);
+  const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
+  return (
+    returnType?.symbol?.name === "LuaMultiReturn" ||
+    returnType?.aliasSymbol?.name === "LuaMultiReturn"
+  );
 }
 
 /**
@@ -1222,18 +1316,38 @@ function buildReturnSiteInline(
   context: tstl.TransformationContext,
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
+  const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
+  let luaReturnStmts: tstl.Statement[] | undefined;
 
   // Transform body and return expression first so ALL param symbols are registered
   // in context.symbolIdMaps before buildParamMap looks them up. A param that only
   // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  if (isMultiReturn) {
+    const returnStmt = target.returnExpr.parent as ts.ReturnStatement;
+    context.pushScope(FUNCTION_SCOPE, declaration);
+    luaReturnStmts = context.transformStatements(returnStmt);
+    context.popScope();
+  }
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
+  if (isMultiReturn) {
+    const luaReturn = luaReturnStmts?.find(
+      (stmt): stmt is tstl.ReturnStatement => stmt.kind === tstl.SyntaxKind.ReturnStatement,
+    );
+    if (!luaReturn) return undefined;
+
+    const substitutedReturns = luaReturn.expressions.map((expr) =>
+      substituteParams(expr, paramMap),
+    );
+    return [...tempDecls, ...substitutedBody, tstl.createReturnStatement(substitutedReturns)];
+  }
+
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
   const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   // Flat emission: arg temps + body statements + return (no do...end wrapper needed).

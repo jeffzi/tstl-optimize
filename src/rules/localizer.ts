@@ -89,6 +89,97 @@ function replaceChains(statements: tstl.Statement[], hoisted: Map<string, tstl.I
   });
 }
 
+function mergeNameSets(...sets: Array<ReadonlySet<string> | undefined>): Set<string> {
+  const merged = new Set<string>();
+  for (const names of sets) {
+    if (names === undefined) continue;
+    for (const name of names) {
+      merged.add(name);
+    }
+  }
+  return merged;
+}
+
+function allocateHoistName(baseName: string, unavailableNames: ReadonlySet<string>): string {
+  if (!unavailableNames.has(baseName)) {
+    return baseName;
+  }
+
+  let suffix = 1;
+  let candidate = `${baseName}_${suffix}`;
+  while (unavailableNames.has(candidate)) {
+    suffix += 1;
+    candidate = `${baseName}_${suffix}`;
+  }
+  return candidate;
+}
+
+function statementTouchesChain(
+  statement: tstl.Statement,
+  chain: string,
+  shallow: boolean,
+): boolean {
+  let found = false;
+  walkStatements([statement], {
+    shallow,
+    expr: (expr, _replace, control) => {
+      if (!tstl.isTableIndexExpression(expr)) {
+        return;
+      }
+
+      if (luaPropertyChain(expr) === chain) {
+        found = true;
+        control.stop();
+      }
+    },
+  });
+  return found;
+}
+
+function hasInterveningCallForChain(
+  statements: tstl.Statement[],
+  chain: string,
+  shallow: boolean,
+): boolean {
+  const root = chain.split(".")[0];
+  if (STDLIB_ROOTS.has(root)) {
+    return false;
+  }
+
+  let firstAccessIndex: number | undefined;
+  let lastAccessIndex: number | undefined;
+  for (const [index, statement] of statements.entries()) {
+    if (!statementTouchesChain(statement, chain, shallow)) {
+      continue;
+    }
+
+    if (firstAccessIndex === undefined) {
+      firstAccessIndex = index;
+    }
+    lastAccessIndex = index;
+  }
+
+  if (
+    firstAccessIndex === undefined ||
+    lastAccessIndex === undefined ||
+    firstAccessIndex >= lastAccessIndex
+  ) {
+    return false;
+  }
+
+  for (let index = firstAccessIndex + 1; index < lastAccessIndex; index += 1) {
+    if (hasCallExpression([statements[index]])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasTopLevelChainAccess(statements: tstl.Statement[], chain: string): boolean {
+  return statements.some((statement) => statementTouchesChain(statement, chain, true));
+}
+
 /**
  * Collect chains meeting threshold, create hoisted declarations, replace in-place,
  * and prepend declarations. Returns the set of newly hoisted chain strings.
@@ -103,6 +194,7 @@ function hoistScope(
   isRootAllowed?: (root: string) => boolean,
 ): Set<string> {
   const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
+  const unavailableNames = mergeNameSets(scopeDefs, reservedNames);
   const toHoist = new Map<string, tstl.Identifier>();
   const decls: tstl.VariableDeclarationStatement[] = [];
 
@@ -112,13 +204,24 @@ function hoistScope(
   for (const [chain, count] of sorted) {
     if (count < threshold || alreadyHoisted.has(chain)) continue;
     const parts = chain.split(".");
-    if (isRootAllowed && !isRootAllowed(parts[0])) continue;
-    const hoistName = `____${parts.join("_")}`;
-    if (scopeDefs.has(parts[0]) || scopeDefs.has(hoistName) || reservedNames?.has(hoistName))
+    const root = parts[0];
+    if (isRootAllowed && !isRootAllowed(root)) continue;
+    // Module-scope hoists must come from actual module-scope uses for non-stdlib roots.
+    // Otherwise an included mutable root like obj/config would be snapshotted once at load time
+    // and reused across later function calls.
+    if (!shallow && !STDLIB_ROOTS.has(root) && !hasTopLevelChainAccess(statements, chain)) {
       continue;
+    }
+    if (hasInterveningCallForChain(statements, chain, shallow)) continue;
+    const hoistBaseName = `____${parts.join("_")}`;
+    if (scopeDefs.has(parts[0]) || scopeDefs.has(chain)) {
+      continue;
+    }
+    const hoistName = allocateHoistName(hoistBaseName, unavailableNames);
     const ident = tstl.createIdentifier(hoistName, undefined, context.nextSymbolId());
     toHoist.set(chain, ident);
     scopeDefs.add(hoistName);
+    unavailableNames.add(hoistName);
     decls.push(tstl.createVariableDeclarationStatement(ident, buildChainExpression(chain)));
   }
 
@@ -222,7 +325,16 @@ function replaceArrayElements(
         }
       }
     },
-    stmt: (stmt) => {
+    stmt: (stmt, control) => {
+      if (
+        (tstl.isForStatement(stmt) && loopVarNames.has(stmt.controlVariable.text)) ||
+        (tstl.isForInStatement(stmt) &&
+          stmt.names.some((name) => tstl.isIdentifier(name) && loopVarNames.has(name.text)))
+      ) {
+        control.skip();
+        return;
+      }
+
       if (tstl.isAssignmentStatement(stmt)) {
         for (let i = 0; i < stmt.left.length; i++) {
           const lhs = stmt.left[i];
@@ -253,8 +365,10 @@ function hoistArrayElements(
   loopVarNames: ReadonlySet<string>,
   threshold: number,
   context: tstl.TransformationContext,
+  reservedNames?: ReadonlySet<string>,
 ): void {
   const { scopeDefs } = collectScopeInfo(statements, true);
+  const unavailableNames = mergeNameSets(scopeDefs, loopVarNames, reservedNames);
   const { counts, writes, loopVar } = collectArrayElementAccesses(statements, loopVarNames, true);
 
   const earlyExit = hasEarlyExit(statements);
@@ -272,20 +386,20 @@ function hoistArrayElements(
   for (const [baseName, count] of sorted) {
     if (count < threshold) continue;
 
-    const hoistName = `____${baseName}`;
+    const hoistBaseName = `____${baseName}`;
     const indexName = loopVar.get(baseName);
     if (indexName === undefined) continue;
 
     // Safety: base locally defined — hoisting would read before definition
     if (scopeDefs.has(baseName)) continue;
-    // Safety: temp name collides with existing definitions or loop vars
-    if (scopeDefs.has(hoistName) || loopVarNames.has(hoistName)) continue;
     // Safety: written base + early exit → write-back wouldn't always execute
     if (writes.has(baseName) && earlyExit) continue;
 
+    const hoistName = allocateHoistName(hoistBaseName, unavailableNames);
     const ident = tstl.createIdentifier(hoistName, undefined, context.nextSymbolId());
     toHoist.set(baseName, ident);
     scopeDefs.add(hoistName);
+    unavailableNames.add(hoistName);
 
     // local ____base = base[loopVar]
     const tableAccess = tstl.createTableIndexExpression(
@@ -316,6 +430,7 @@ interface ProcessingContext {
   alreadyHoisted: ReadonlySet<string>;
   context: tstl.TransformationContext;
   isRootAllowed: (root: string) => boolean;
+  reservedNames: ReadonlySet<string>;
 }
 
 function processFile(
@@ -334,6 +449,7 @@ function processFile(
       alreadyHoisted: new Set(),
       context,
       isRootAllowed,
+      reservedNames: new Set(),
     });
   } else {
     // "all": module pass first, then function pass for remaining chains
@@ -351,28 +467,37 @@ function processFile(
       alreadyHoisted,
       context,
       isRootAllowed,
+      reservedNames: new Set(),
     });
   }
 }
 
 function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingContext): void {
-  const { threshold, alreadyHoisted, context, isRootAllowed } = ctx;
+  const { threshold, alreadyHoisted, context, isRootAllowed, reservedNames } = ctx;
+  const scopeReservedNames = mergeNameSets(
+    reservedNames,
+    collectScopeInfo(statements, true).scopeDefs,
+  );
 
   walkStatements(statements, {
     shallow: true,
     expr: (expr, _replace, control) => {
       if (tstl.isFunctionExpression(expr)) {
         const paramNames = new Set(expr.params?.filter(tstl.isIdentifier).map((p) => p.text));
+        const functionReservedNames = mergeNameSets(scopeReservedNames, paramNames);
         hoistScope(
           expr.body.statements,
           threshold,
           true,
           alreadyHoisted,
           context,
-          paramNames,
+          functionReservedNames,
           isRootAllowed,
         );
-        processFunctionBodies(expr.body.statements, ctx);
+        processFunctionBodies(expr.body.statements, {
+          ...ctx,
+          reservedNames: functionReservedNames,
+        });
         control.skip();
       }
     },
@@ -390,19 +515,20 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       const loopNames = tstl.isForInStatement(stmt)
         ? new Set(stmt.names.filter(tstl.isIdentifier).map((n) => n.text))
         : new Set([stmt.controlVariable.text]);
+      const loopReservedNames = mergeNameSets(scopeReservedNames, loopNames);
       hoistScope(
         stmt.body.statements,
         threshold,
         true,
         alreadyHoisted,
         context,
-        loopNames,
+        loopReservedNames,
         isRootAllowed,
       );
-      hoistArrayElements(stmt.body.statements, loopNames, threshold, context);
-      processFunctionBodies(stmt.body.statements, ctx);
+      hoistArrayElements(stmt.body.statements, loopNames, threshold, context, loopReservedNames);
+      processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: loopReservedNames });
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
-      processFunctionBodies(stmt.body.statements, ctx);
+      processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: scopeReservedNames });
     }
   }
 }

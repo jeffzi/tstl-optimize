@@ -5,7 +5,15 @@ import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects, SideEffectOptions } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
 
-function isMathMethodCall(node: ts.CallExpression, checker: ts.TypeChecker): string | undefined {
+interface MathMethodCallInfo {
+  method: string;
+  isBuiltinMath: boolean;
+}
+
+function getMathMethodCallInfo(
+  node: ts.CallExpression,
+  checker: ts.TypeChecker,
+): MathMethodCallInfo | undefined {
   const expr = node.expression;
   if (!ts.isPropertyAccessExpression(expr)) return undefined;
 
@@ -16,7 +24,10 @@ function isMathMethodCall(node: ts.CallExpression, checker: ts.TypeChecker): str
   const typeName = checker.typeToString(type);
   if (typeName !== "Math") return undefined;
 
-  return expr.name.text;
+  return {
+    method: expr.name.text,
+    isBuiltinMath: ts.isIdentifier(expr.expression) && expr.expression.text === "Math",
+  };
 }
 
 /** Build `arg ^ 0.5` */
@@ -30,12 +41,47 @@ function buildSqrt(luaArg: tstl.Expression): tstl.Expression {
 
 /** Build `arg - arg % 1` */
 function buildFloor(luaArg: tstl.Expression): tstl.Expression {
+  const positiveInfinity = tstl.createTableIndexExpression(
+    tstl.createIdentifier("math"),
+    tstl.createStringLiteral("huge"),
+  );
+  const negativeInfinity = tstl.createUnaryExpression(
+    tstl.createParenthesizedExpression(deepCloneExpression(positiveInfinity)),
+    tstl.SyntaxKind.NegationOperator,
+  );
+  const isPositiveInfinity = tstl.createBinaryExpression(
+    deepCloneExpression(luaArg),
+    positiveInfinity,
+    tstl.SyntaxKind.EqualityOperator,
+  );
+  const isNegativeInfinity = tstl.createBinaryExpression(
+    deepCloneExpression(luaArg),
+    negativeInfinity,
+    tstl.SyntaxKind.EqualityOperator,
+  );
+  const isInfinite = tstl.createBinaryExpression(
+    isPositiveInfinity,
+    isNegativeInfinity,
+    tstl.SyntaxKind.OrOperator,
+  );
+  const guardedCall = tstl.createCallExpression(
+    tstl.createTableIndexExpression(
+      tstl.createIdentifier("math"),
+      tstl.createStringLiteral("floor"),
+    ),
+    [deepCloneExpression(luaArg)],
+  );
   const right = tstl.createBinaryExpression(
-    tstl.cloneNode(luaArg),
+    deepCloneExpression(luaArg),
     tstl.createNumericLiteral(1),
     tstl.SyntaxKind.ModuloOperator,
   );
-  return tstl.createBinaryExpression(luaArg, right, tstl.SyntaxKind.SubtractionOperator);
+  const fastPath = tstl.createBinaryExpression(luaArg, right, tstl.SyntaxKind.SubtractionOperator);
+  return tstl.createBinaryExpression(
+    tstl.createBinaryExpression(isInfinite, guardedCall, tstl.SyntaxKind.AndOperator),
+    fastPath,
+    tstl.SyntaxKind.OrOperator,
+  );
 }
 
 /** Build `(arg == 0) and 0 or ((arg < 0) and -arg or arg)` */
@@ -46,18 +92,18 @@ function buildAbs(luaArg: tstl.Expression): tstl.Expression {
     tstl.SyntaxKind.EqualityOperator,
   );
   const condition = tstl.createBinaryExpression(
-    tstl.cloneNode(luaArg),
+    deepCloneExpression(luaArg),
     tstl.createNumericLiteral(0),
     tstl.SyntaxKind.LessThanOperator,
   );
   const negated = tstl.createUnaryExpression(
-    tstl.createParenthesizedExpression(tstl.cloneNode(luaArg)),
+    tstl.createParenthesizedExpression(deepCloneExpression(luaArg)),
     tstl.SyntaxKind.NegationOperator,
   );
   const andExpr = tstl.createBinaryExpression(condition, negated, tstl.SyntaxKind.AndOperator);
   const nonZeroAbs = tstl.createBinaryExpression(
     andExpr,
-    tstl.cloneNode(luaArg),
+    deepCloneExpression(luaArg),
     tstl.SyntaxKind.OrOperator,
   );
   const zeroBranch = tstl.createBinaryExpression(
@@ -96,8 +142,20 @@ function handleCallExpression(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
 ): tstl.Expression | undefined {
-  const method = isMathMethodCall(node, checker);
-  if (!method) return undefined;
+  const mathCall = getMathMethodCallInfo(node, checker);
+  if (!mathCall) return undefined;
+  const expr = node.expression;
+  if (!ts.isPropertyAccessExpression(expr)) return undefined;
+
+  if (!mathCall.isBuiltinMath) {
+    return tstl.createMethodCallExpression(
+      context.transformExpression(expr.expression),
+      tstl.createIdentifier(expr.name.text),
+      node.arguments.map((arg) => context.transformExpression(arg)),
+    );
+  }
+
+  const method = mathCall.method;
 
   const args = node.arguments;
 
@@ -108,6 +166,12 @@ function handleCallExpression(
     }
     case "floor": {
       if (args.length !== 1) return undefined;
+      if (ts.isNumericLiteral(args[0])) {
+        const foldedValue = Number(args[0].text);
+        if (Number.isFinite(foldedValue)) {
+          return tstl.createNumericLiteral(Math.floor(foldedValue));
+        }
+      }
       if (hasSideEffects(args[0])) return undefined;
       return buildFloor(context.transformExpression(args[0]));
     }

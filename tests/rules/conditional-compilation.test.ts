@@ -55,9 +55,47 @@ describe("resolveConditionalCompilationConfig", () => {
       ]),
     );
   });
+
+  it("falls back to the default when a numeric env constant is non-finite", () => {
+    vi.stubEnv("TEST_CC_POS_INF", "Infinity");
+    vi.stubEnv("TEST_CC_NEG_INF", "-Infinity");
+    vi.stubEnv("TEST_CC_NAN_LITERAL", "NaN");
+
+    const result = resolveConditionalCompilationConfig({
+      enabled: true,
+      constants: {
+        POS_INF: { env: "TEST_CC_POS_INF", default: 10 },
+        NEG_INF: { env: "TEST_CC_NEG_INF", default: -10 },
+        NAN_LITERAL: { env: "TEST_CC_NAN_LITERAL", default: 99 },
+      },
+    });
+
+    expect(result).toStrictEqual(
+      new Map<string, boolean | number | string>([
+        ["POS_INF", 10],
+        ["NEG_INF", -10],
+        ["NAN_LITERAL", 99],
+      ]),
+    );
+  });
 });
 
 describe("conditional-compilation", () => {
+  describe("when constant identifiers are replaced", () => {
+    it("falls back to the configured default instead of emitting bare non-finite Lua identifiers", () => {
+      vi.stubEnv("TEST_CC_LIMIT", "Infinity");
+
+      const src = "declare const LIMIT: number; const x = LIMIT;";
+      const lua = normalizeLua(
+        compile(src, ccOpts({ LIMIT: { env: "TEST_CC_LIMIT", default: 7 } })),
+      );
+
+      expect(lua).toContain("x = 7");
+      expect(lua).not.toContain("x = Infinity");
+      expect(lua).not.toContain("x = NaN");
+    });
+  });
+
   describe("when if-statement folding", () => {
     it.each([
       { name: "truthy", value: true, expected: "print(1)" },
@@ -84,6 +122,23 @@ describe("conditional-compilation", () => {
       const lua = normalizeLua(compile(src, ccOpts({ PLATFORM: { env: "X", default: "native" } })));
 
       expect(lua).toBe("print(2)");
+    });
+
+    it("preserves block scope when folding to a kept block branch", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const DEBUG: boolean;
+        if (DEBUG) {
+          const x = 1;
+          print(x);
+        }
+        const x = 2;
+        print(x);
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: true } })));
+
+      expect(lua).toBe("do\nlocal x = 1\nprint(x)\nend\nx = 2\nprint(x)");
     });
   });
 
@@ -300,6 +355,30 @@ describe("conditional-compilation", () => {
       expect(lua).toBe("print(1)");
     });
 
+    it("halts fallthrough on continue inside a loop", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const MODE: string;
+        function run() {
+          while (true) {
+            switch (MODE) {
+              case "a":
+                print(1);
+                continue;
+              case "b":
+                print(2);
+                break;
+            }
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: "a" } })));
+
+      expect(lua).toContain("print(1)");
+      expect(lua).not.toContain("print(2)");
+    });
+
     it("preserves switch when stripping would expose a conditional bare break", () => {
       const src = `
         ${PRINT_DECL}
@@ -318,8 +397,7 @@ describe("conditional-compilation", () => {
 
       const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: "a" } })));
 
-      expect(lua).toContain('____switch2 == "a"');
-      expect(lua).toContain('____switch2 == "b"');
+      expect(lua).toContain("repeat");
       expect(lua).toContain("until true");
       expect(lua).not.toBe("print(1)");
     });
@@ -366,6 +444,26 @@ describe("conditional-compilation", () => {
       // The loop's break should be preserved
       expect(lua).toContain('print("after loop")');
       expect(lua).toContain("break");
+    });
+
+    it("preserves nested block scope when folding to a kept case block", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const MODE: number;
+        switch (MODE) {
+          case 1: {
+            const x = 1;
+            print(x);
+            break;
+          }
+        }
+        const x = 2;
+        print(x);
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: 1 } })));
+
+      expect(lua).toBe("do\nlocal x = 1\nprint(x)\nend\nx = 2\nprint(x)");
     });
   });
 
@@ -540,6 +638,47 @@ describe("conditional-compilation", () => {
 
       expect(lua).toContain("or 2");
     });
+
+    it("does not fold a configured constant name when it is shadowed by a parameter", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare const TRUE_CONST: boolean;
+        function run(TRUE_CONST: boolean) {
+          if (TRUE_CONST) {
+            print(1);
+          } else {
+            print(2);
+          }
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("function run(");
+      expect(lua).toContain("if");
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+    });
+
+    it("does not fold a configured constant name when it is shadowed by a top-level const", () => {
+      const code = `
+        ${PRINT_DECL}
+        declare function readDebug(): boolean;
+        const DEBUG = readDebug();
+        if (DEBUG) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code, ccOpts({ DEBUG: { env: "DEBUG", default: true } })));
+
+      expect(lua).toContain("DEBUG = readDebug()");
+      expect(lua).toContain("if DEBUG then");
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
+    });
   });
 
   describe("when partial folding output", () => {
@@ -549,7 +688,7 @@ describe("conditional-compilation", () => {
       VAL_1: { env: "VAL_1", default: 1 },
     });
 
-    it("warns when ternary condition is only partially foldable", () => {
+    it("preserves partially foldable ternary condition in emitted Lua", () => {
       const code = `
         declare const TRUE_CONST: boolean;
         declare function foo(): boolean;
@@ -561,7 +700,7 @@ describe("conditional-compilation", () => {
       expect(lua).toContain("true and foo()");
     });
 
-    it("warns when switch discriminant is only partially foldable", () => {
+    it("preserves partially foldable switch discriminant in emitted Lua", () => {
       const code = `
         ${PRINT_DECL}
         declare const VAL_1: number;
@@ -936,7 +1075,7 @@ describe("conditional-compilation", () => {
   });
 });
 
-describe("when property-based", () => {
+describe("conditional-compilation when property-based inputs vary", () => {
   const NUM_RUNS = 50;
   const TIMEOUT = 15_000;
 

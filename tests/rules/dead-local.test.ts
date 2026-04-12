@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import { compile, normalizeLua } from "../helpers";
 
 describe("dead-local", () => {
   it("removes unused inline arg temp", () => {
@@ -129,6 +129,55 @@ describe("dead-local", () => {
   });
 
   describe("when handling write-only locals (assignment without read)", () => {
+    it("preserves initializer when the first later assignment reads the local", () => {
+      const lua = compile(`
+        function f() {
+          let i = 0;
+          i += 1;
+          return i;
+        }
+      `);
+
+      expect(lua).toContain("local i = 0");
+      expect(lua).toContain("i = i + 1");
+    });
+
+    it("preserves initializer when a closure reads the local before a later write", () => {
+      const lua = normalizeLua(
+        compile(`
+          function f() {
+            let x = 1;
+            const g = () => x;
+            const y = g();
+            x = 2;
+            return y;
+          }
+        `),
+      );
+
+      expect(lua).toContain("local x = 1");
+      expect(lua).toContain("local y = g()");
+      expect(lua).toContain("x = 2");
+      expect(lua).toContain("return y");
+    });
+
+    it("ignores deferred nested-function writes when deciding whether to drop an initializer", () => {
+      const lua = compile(`
+        function f() {
+          let s = "A";
+          const touch = (x: string) => {
+            s = x;
+          };
+          s += "B";
+          touch("C");
+          return s;
+        }
+      `);
+
+      expect(lua).toContain('local s = "A"');
+      expect(lua).toContain('s = s .. "B"');
+    });
+
     it("preserves declaration when local is assigned after initialization", () => {
       const lua = compile(`
         function f() {
@@ -136,9 +185,10 @@ describe("dead-local", () => {
           x = 5;
         }
       `);
-      // The declaration must be kept because x is assigned to
+      // The local must survive, but the dead pure initializer should be removed.
       expect(lua).toContain("local x");
-      expect(lua).toMatch(/local x\s*=\s*1/);
+      expect(lua).not.toMatch(/local x\s*=\s*1/);
+      expect(lua).toContain("x = 5");
     });
 
     it("preserves declaration when local with impure RHS is assigned", () => {
@@ -176,135 +226,133 @@ describe("dead-local", () => {
           return x;
         }
       `);
-      // x is assigned and read — declaration must be kept
+      // x is assigned and read — declaration must be kept, but the dead pure initializer should go.
       expect(lua).toContain("local x");
+      expect(lua).not.toMatch(/local x\s*=\s*1/);
       expect(lua).toContain("x = 2");
     });
   });
 
   describe("when removing unused locals in branching statements", () => {
-    it("removes unused local from a function body", () => {
-      const lua = compile(`
-        function f() {
-          const x = 1;
-          const y = 2;
-          return y;
-        }
-      `);
-      expect(lua).not.toContain("x = 1");
-      expect(lua).toContain("y = 2");
-    });
-
-    it("removes unused locals inside if/else branches", () => {
-      const lua = compile(`
-        function f() {
-          if (true) {
-            const unused = 42;
-            const result = 1;
-            return result;
-          } else {
-            const deadCode = 99;
-            const value = 2;
-            return value;
+    it.each([
+      {
+        name: "if/else branches",
+        source: `
+          function f() {
+            if (true) {
+              const unused = 42;
+              const result = 1;
+              return result;
+            } else {
+              const deadCode = 99;
+              const value = 2;
+              return value;
+            }
           }
-        }
-      `);
-      expect(lua).toContain("if true then");
-      expect(lua).toContain("result");
-      expect(lua).toContain("value");
-      expect(lua).toContain("else");
-    });
-
-    it("removes unused locals inside elseif branches", () => {
-      const lua = compile(`
-        function f() {
-          if (false) {
-            return 2;
-          } else if (true) {
-            const unused3 = 3;
-            const result = 4;
-            return result;
+        `,
+        expectedPresent: ["if true then", "result", "value", "else"],
+        expectedMissing: ["unused", "deadCode"],
+      },
+      {
+        name: "elseif branches",
+        source: `
+          function f() {
+            if (false) {
+              return 2;
+            } else if (true) {
+              const unused3 = 3;
+              const result = 4;
+              return result;
+            }
           }
-        }
-      `);
-      expect(lua).toContain("elseif true then");
-      expect(lua).toContain("result");
-    });
-
-    it("removes unused locals inside while-loop bodies", () => {
-      const lua = compile(`
-        function f() {
-          let x = 0;
-          while (x < 10) {
-            const unused = 42;
-            const value = x + 1;
-            x = value;
+        `,
+        expectedPresent: ["elseif true then", "result"],
+        expectedMissing: ["unused3"],
+      },
+      {
+        name: "while-loop bodies",
+        source: `
+          function f() {
+            let x = 0;
+            while (x < 10) {
+              const unused = 42;
+              const value = x + 1;
+              x = value;
+            }
           }
-        }
-      `);
-      expect(lua).toContain("while x < 10 do");
-      expect(lua).toContain("value");
-    });
-
-    it("removes unused locals inside repeat-loop bodies", () => {
-      const lua = compile(`
-        function f() {
-          let x = 10;
-          do {
-            const unused = 42;
-            const value = x - 1;
-            x = value;
-          } while (x > 0);
-        }
-      `);
-      expect(lua).toContain("repeat");
-      expect(lua).toContain("until");
-      expect(lua).toContain("value");
-    });
-
-    it("removes unused locals inside for-loop bodies", () => {
-      const lua = compile(`
-        declare const items: number[];
-        function f() {
-          for (let i = 0; i < items.length; i++) {
-            const unused = 42;
-            const value = items[i] * 2;
-            if (value > 10) return value;
+        `,
+        expectedPresent: ["while x < 10 do", "value"],
+        expectedMissing: ["unused"],
+      },
+      {
+        name: "repeat-loop bodies",
+        source: `
+          function f() {
+            let x = 10;
+            do {
+              const unused = 42;
+              const value = x - 1;
+              x = value;
+            } while (x > 0);
           }
-        }
-      `);
-      expect(lua).toContain("items");
-      expect(lua).toContain("value");
-    });
-
-    it("removes unused locals inside for-in loop bodies", () => {
-      const lua = compile(`
-        declare const obj: Record<string, number>;
-        function f() {
-          for (const key in obj) {
-            const unused = 42;
-            const val = obj[key];
-            if (val > 0) return val;
+        `,
+        expectedPresent: ["repeat", "until", "value"],
+        expectedMissing: ["unused"],
+      },
+      {
+        name: "for-loop bodies",
+        source: `
+          declare const items: number[];
+          function f() {
+            for (let i = 0; i < items.length; i++) {
+              const unused = 42;
+              const value = items[i] * 2;
+              if (value > 10) return value;
+            }
           }
-        }
-      `);
-      expect(lua).toContain("for");
-      expect(lua).toContain("obj");
-      expect(lua).toContain("val");
-    });
+        `,
+        expectedPresent: ["items", "value"],
+        expectedMissing: ["unused"],
+      },
+      {
+        name: "for-in loop bodies",
+        source: `
+          declare const obj: Record<string, number>;
+          function f() {
+            for (const key in obj) {
+              const unused = 42;
+              const val = obj[key];
+              if (val > 0) return val;
+            }
+          }
+        `,
+        expectedPresent: ["for", "obj", "val"],
+        expectedMissing: ["unused"],
+      },
+      {
+        name: "do-block bodies",
+        source: `
+          function f() {
+            do {
+              const unused = 42;
+              const value = 1;
+              return value;
+            } while (false);
+          }
+        `,
+        expectedPresent: ["do", "value"],
+        expectedMissing: ["unused"],
+      },
+    ])("removes unused locals inside $name", ({ expectedMissing, expectedPresent, source }) => {
+      const lua = compile(source);
 
-    it("removes unused locals inside do-block bodies", () => {
-      const lua = compile(`
-        function f() {
-          do {
-            const unused = 42;
-            const value = 1;
-            return value;
-          } while (false);
-        }
-      `);
-      expect(lua).toContain("do");
-      expect(lua).toContain("value");
+      for (const snippet of expectedPresent) {
+        expect(lua).toContain(snippet);
+      }
+
+      for (const snippet of expectedMissing) {
+        expect(lua).not.toContain(snippet);
+      }
     });
   });
 });
