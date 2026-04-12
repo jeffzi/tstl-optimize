@@ -6,7 +6,12 @@ import { deepCloneExpression, deepCloneStatement } from "../../src/ast/deep-clon
 import { arbExpression } from "../arbitraries";
 
 function id(text: string, symbolId?: number, originalName?: string): tstl.Identifier {
-  return tstl.createIdentifier(text, undefined, symbolId as tstl.SymbolId, originalName);
+  return tstl.createIdentifier(
+    text,
+    undefined,
+    symbolId as tstl.SymbolId | undefined,
+    originalName,
+  );
 }
 
 function assertNode<T extends tstl.Node>(
@@ -63,6 +68,21 @@ describe("deepCloneExpression", () => {
     expect(cloned).toStrictEqual(call);
   });
 
+  it("preserves CallExpression semantic flags and source position", () => {
+    const call = tstl.createCallExpression(id("fn"), [id("value")]);
+    call.flags |= tstl.NodeFlags.TableUnpackCall;
+    call.line = 12;
+    call.column = 4;
+
+    const cloned = deepCloneExpression(call);
+    assertNode(cloned, tstl.isCallExpression);
+
+    expect(cloned).not.toBe(call);
+    expect(cloned.flags & tstl.NodeFlags.TableUnpackCall).toBe(tstl.NodeFlags.TableUnpackCall);
+    expect(cloned.line).toBe(12);
+    expect(cloned.column).toBe(4);
+  });
+
   it("clones TableExpression fields independently", () => {
     const field = tstl.createTableFieldExpression(id("v"), id("k"));
     const tbl = tstl.createTableExpression([field]);
@@ -75,12 +95,14 @@ describe("deepCloneExpression", () => {
     expect(cloned).toStrictEqual(tbl);
   });
 
-  it("clones literals (leaf nodes)", () => {
-    const str = tstl.createStringLiteral("hello");
-    const num = tstl.createNumericLiteral(42);
+  it.each([
+    { expr: tstl.createStringLiteral("hello"), name: "StringLiteral" },
+    { expr: tstl.createNumericLiteral(42), name: "NumericLiteral" },
+  ])("clones leaf node: $name", ({ expr }) => {
+    const cloned = deepCloneExpression(expr);
 
-    expect(deepCloneExpression(str)).toStrictEqual(str);
-    expect(deepCloneExpression(num)).toStrictEqual(num);
+    expect(cloned).not.toBe(expr);
+    expect(cloned).toStrictEqual(expr);
   });
 
   it("clones FunctionExpression with deep body clone", () => {
@@ -97,15 +119,11 @@ describe("deepCloneExpression", () => {
     expect(cloned).toStrictEqual(funcExpr);
   });
 
-  it("handles undefined FunctionExpression body without crashing", () => {
+  it("throws when FunctionExpression body is missing", () => {
     const funcExpr = tstl.createFunctionExpression(tstl.createBlock([]));
     Object.assign(funcExpr, { body: undefined });
 
-    const cloned = deepCloneExpression(funcExpr);
-    assertNode(cloned, tstl.isFunctionExpression);
-
-    expect(cloned.body).toBeDefined();
-    expect(cloned.body.statements).toHaveLength(0);
+    expect(() => deepCloneExpression(funcExpr)).toThrow(/FunctionExpression body/);
   });
 
   it.each([
@@ -144,6 +162,10 @@ describe("deepCloneExpression", () => {
     const expr = tstl.createTableExpression([field1, field2]);
     const cloned = deepCloneExpression(expr);
     expect(cloned).not.toBe(expr);
+    assertNode(cloned, tstl.isTableExpression);
+    expect(cloned.fields[0]).not.toBe(field1);
+    expect(cloned.fields[0].key).not.toBe(field1.key);
+    expect(cloned.fields[1]).not.toBe(field2);
     expect(cloned).toStrictEqual(expr);
   });
 
@@ -153,6 +175,8 @@ describe("deepCloneExpression", () => {
     const expr = tstl.createFunctionExpression(body, [], dots);
     const cloned = deepCloneExpression(expr);
     expect(cloned).not.toBe(expr);
+    assertNode(cloned, tstl.isFunctionExpression);
+    expect(cloned.body).not.toBe(body);
     expect(cloned).toStrictEqual(expr);
   });
 });
@@ -217,6 +241,21 @@ describe("deepCloneStatement", () => {
     expect(cloned).toStrictEqual(forIn);
   });
 
+  it("preserves statement semantic flags and source position", () => {
+    const stmt = tstl.createReturnStatement([id("value")]);
+    stmt.flags |= tstl.NodeFlags.Inline;
+    stmt.line = 12;
+    stmt.column = 4;
+
+    const cloned = deepCloneStatement(stmt);
+    assertNode(cloned, tstl.isReturnStatement);
+
+    expect(cloned).not.toBe(stmt);
+    expect(cloned.flags & tstl.NodeFlags.Inline).toBe(tstl.NodeFlags.Inline);
+    expect(cloned.line).toBe(12);
+    expect(cloned.column).toBe(4);
+  });
+
   it.each([
     { name: "ReturnStatement", stmt: tstl.createReturnStatement([id("x")]) },
     { name: "ExpressionStatement", stmt: tstl.createExpressionStatement(id("x")) },
@@ -260,7 +299,10 @@ describe("deepCloneStatement", () => {
       stmt: tstl.createIfStatement(id("c1"), tstl.createBlock([]), tstl.createBlock([])),
     },
   ])("clones IfStatement $name", ({ stmt }) => {
-    expect(deepCloneStatement(stmt)).toStrictEqual(stmt);
+    const cloned = deepCloneStatement(stmt);
+
+    expect(cloned).not.toBe(stmt);
+    expect(cloned).toStrictEqual(stmt);
   });
 
   it.each([
@@ -273,7 +315,10 @@ describe("deepCloneStatement", () => {
       stmt: tstl.createForStatement(tstl.createBlock([]), id("i"), id("a"), id("b")),
     },
   ])("clones ForStatement $name", ({ stmt }) => {
-    expect(deepCloneStatement(stmt)).toStrictEqual(stmt);
+    const cloned = deepCloneStatement(stmt);
+
+    expect(cloned).not.toBe(stmt);
+    expect(cloned).toStrictEqual(stmt);
   });
 });
 
@@ -337,6 +382,7 @@ describe("when cloning arbitrary expressions (property-based)", () => {
       fc.property(arbExpression, (expr) => {
         const cloned = deepCloneExpression(expr);
 
+        expect(cloned).not.toBe(expr);
         expect(structurallyEqual(expr, cloned)).toBe(true);
       }),
     );
@@ -361,6 +407,7 @@ describe("when cloning arbitrary expressions (property-based)", () => {
         const once = deepCloneExpression(expr);
         const twice = deepCloneExpression(once);
 
+        expect(twice).not.toBe(once);
         expect(structurallyEqual(once, twice)).toBe(true);
       }),
     );
