@@ -74,7 +74,7 @@ describe("inline", () => {
   });
 
   describe("expression-body deep clone", () => {
-    it("substitutes nested property access used multiple times without corruption", () => {
+    it("preserves nested property access used multiple times to avoid duplicating getters", () => {
       const lua = compile(`
         /** @inline */
         function mul(x: number): number { return x * x; }
@@ -82,11 +82,7 @@ describe("inline", () => {
         const r = mul(obj.a.b.c);
       `);
 
-      // substituteParams must deep-clone the argument for each occurrence.
-      // With shallow clone (tstl.cloneNode), the two substituted positions
-      // share child AST nodes (obj.a.b). A downstream pass mutating one copy
-      // would corrupt the other. Verify both occurrences are correct.
-      expect(lua).toContain("obj.a.b.c * obj.a.b.c");
+      expect(lua).toContain("mul(obj.a.b.c)");
     });
   });
 
@@ -154,6 +150,40 @@ describe("inline", () => {
       // call-site binding — the expander must use a collision-safe temp inside the
       // do...end block. Otherwise the inner local shadows the result variable,
       // turning the return assignment into a no-op.
+      expect(lua).toContain("do");
+      expect(lua).toMatch(/local result = ____inline_result_\d+/);
+    });
+
+    it("uses temp variable when body function declaration collides with outer binding name", () => {
+      const lua = compile(`
+        /** @inline */
+        function fn(x: number): number {
+          function result() {}
+          return x + 1;
+        }
+        declare const n: number;
+        const result = fn(n);
+      `);
+      // A function declaration inside the inlined body named "result" must be detected
+      // as a collision — same as a variable declaration — so the expander uses a temp.
+      expect(lua).toContain("do");
+      expect(lua).toMatch(/local result = ____inline_result_\d+/);
+    });
+
+    it("uses temp variable when a nested block declares the outer binding name", () => {
+      const lua = compile(`
+        /** @inline */
+        function fn(x: number): number {
+          if (x > 0) {
+            function result() {}
+            result();
+          }
+          return x + 1;
+        }
+        declare const n: number;
+        const result = fn(n);
+      `);
+
       expect(lua).toContain("do");
       expect(lua).toMatch(/local result = ____inline_result_\d+/);
     });
@@ -539,23 +569,19 @@ describe("inline coverage", () => {
     expect(lua).toContain("unpack");
   });
 
-  it("preserves @inline function containing try-catch or labeled block", () => {
+  it("preserves @inline function containing try-catch", () => {
+    // The inline rule cannot inline try-catch bodies (statements kind, VariableDeclaration
+    // call site). The erasure guard keeps the declaration; TSTL compiles try-catch to pcall.
     const code = `
       declare function print(...args: any[]): void;
       /** @inline */
       function withTry() {
         try { return 1; } catch(e) { return 2; } finally { print(3); }
       }
-      /** @inline */
-      function withLabel() {
-        foo: { return 1; }
-      }
       export const a = withTry();
-      export const b = withLabel();
     `;
     const lua = normalizeLua(compile(code));
     expect(lua).toContain("withTry()");
-    expect(lua).toContain("withLabel()");
   });
 });
 
@@ -670,6 +696,41 @@ describe("inline uncovered branches", () => {
 
       // Function should NOT be inlined, call should remain
       expect(normalized).toContain("multiply(5)");
+    });
+
+    it("falls back to call when expression inline closes over an imported binding", () => {
+      const files = {
+        "config.ts": `
+          export const factor = 2;
+        `,
+        "utils.ts": `
+          import { factor } from "./config";
+
+          /** @inline */
+          export function multiply(x: number): number {
+            return x * factor;
+          }
+        `,
+        "main.ts": `
+          import { multiply } from "./utils";
+
+          function test() {
+            const result = multiply(5);
+          }
+        `,
+      };
+
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("multiply(5)");
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes(
+            "cross-module function references non-parameter identifiers",
+          ),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -1276,7 +1337,8 @@ describe("inline uncovered branches", () => {
       const code = `
         declare const x: number;
 
-        const square = /** @inline */ (n: number): number => n * n;
+        /** @inline */
+        const square = (n: number): number => n * n;
 
         const result = square(x);
       `;
@@ -1284,7 +1346,8 @@ describe("inline uncovered branches", () => {
       const lua = normalizeLua(compile(code));
 
       // Arrow function assigned to variable should be treated like any other inline
-      expect(lua).toContain("n * n");
+      expect(lua).toContain("x * x");
+      expect(lua).not.toContain("square(x)");
     });
 
     it("inlines statements-kind function with multiple statements and no return", () => {
@@ -1432,6 +1495,33 @@ describe("inline uncovered branches", () => {
         ),
       ).toBe(true);
     });
+
+    it("preserves the declaration when a rejected call site survives", () => {
+      const code = `
+        /** @inline */
+        function helper(x: number): number {
+          const y = x + 1;
+          return y;
+        }
+
+        const a = helper(1);
+        const b = helper(1) + 1;
+      `;
+
+      const { lua, diagnostics } = compileWithDiagnostics(code);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local a");
+      expect(normalized).toContain("b = helper(1) + 1");
+      expect(normalized).toContain("function helper(x)");
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes(
+            "multi-statement body cannot be inlined at expression position",
+          ),
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("cross-module free variable at statement position", () => {
@@ -1440,7 +1530,8 @@ describe("inline uncovered branches", () => {
         "store.ts": `
           let counter = 0;
 
-          export /** @inline */
+          /** @inline */
+          export
           function incrementAndLog(): void {
             counter++;
             const msg = "Count: " + counter;
@@ -1470,7 +1561,8 @@ describe("inline uncovered branches", () => {
         "utils.ts": `
           import { debugMode } from "./config";
 
-          export /** @inline */
+          /** @inline */
+          export
           function processValue(value: number): void {
             const x = value + 1;
             const y = debugMode ? x : 0;

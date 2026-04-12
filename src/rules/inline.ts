@@ -156,6 +156,133 @@ function isModuleScopeDeclaration(node: ts.Node): boolean {
   return false;
 }
 
+function resolveSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
+  return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+}
+
+function isDeclarationNameReference(
+  node: ts.Identifier,
+  declaration: ts.FunctionDeclaration | ts.VariableDeclaration,
+): boolean {
+  if (ts.isFunctionDeclaration(declaration)) {
+    return declaration.name === node;
+  }
+  return declaration.name === node;
+}
+
+function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {
+  if (ts.isIdentifier(name)) return true;
+
+  if (ts.isObjectBindingPattern(name)) {
+    return name.elements.every(
+      (element) =>
+        !element.dotDotDotToken &&
+        ts.isIdentifier(element.name) &&
+        element.initializer === undefined,
+    );
+  }
+
+  return name.elements.every(
+    (element) =>
+      !ts.isOmittedExpression(element) &&
+      !element.dotDotDotToken &&
+      ts.isIdentifier(element.name) &&
+      element.initializer === undefined,
+  );
+}
+
+function isCallSiteFullyInlined(callNode: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  const result = getInlineTarget(callNode, checker);
+  if (!result || "reason" in result) return false;
+
+  const { target } = result;
+  const hasBlockingFreeVariable = (
+    nodes: readonly ts.Node[],
+    declaration: ts.Node,
+    params: readonly ts.ParameterDeclaration[],
+  ): boolean =>
+    callNode.getSourceFile().fileName !== declaration.getSourceFile().fileName &&
+    hasCrossModuleFreeVariable(nodes, params, declaration, checker);
+
+  if (target.kind === "expression") {
+    return (
+      canInline(target, callNode, checker) === true &&
+      !hasBlockingFreeVariable([target.bodyExpr], target.declaration, target.params)
+    );
+  }
+
+  if (target.kind === "statements") {
+    return (
+      ts.isExpressionStatement(callNode.parent) &&
+      canInlineStatements(target, callNode, checker) === true &&
+      !hasBlockingFreeVariable(target.bodyStmts, target.declaration, target.params)
+    );
+  }
+
+  if (ts.isReturnStatement(callNode.parent)) {
+    return (
+      canInlineStatements(target, callNode, checker) === true &&
+      !hasBlockingFreeVariable(
+        [...target.bodyStmts, target.returnExpr],
+        target.declaration,
+        target.params,
+      )
+    );
+  }
+
+  if (!ts.isVariableDeclaration(callNode.parent)) {
+    return false;
+  }
+
+  const variableStatement = callNode.parent.parent?.parent;
+  return (
+    !!variableStatement &&
+    ts.isVariableStatement(variableStatement) &&
+    variableStatement.declarationList.declarations.length === 1 &&
+    isSupportedInlineBindingPattern(callNode.parent.name) &&
+    canInlineStatements(target, callNode, checker) === true &&
+    !hasBlockingFreeVariable(
+      [...target.bodyStmts, target.returnExpr],
+      target.declaration,
+      target.params,
+    )
+  );
+}
+
+function canEraseInlineDeclaration(
+  declaration: ts.FunctionDeclaration | ts.VariableDeclaration,
+  checker: ts.TypeChecker,
+): boolean {
+  const name = declaration.name;
+  if (!name || !ts.isIdentifier(name)) return false;
+
+  const symbol = checker.getSymbolAtLocation(name);
+  if (!symbol) return false;
+  const resolvedSymbol = resolveSymbol(symbol, checker);
+
+  let canErase = true;
+  function visit(node: ts.Node): void {
+    if (!canErase || ts.isTypeNode(node)) return;
+
+    if (ts.isIdentifier(node)) {
+      const refSymbol = checker.getSymbolAtLocation(node);
+      if (refSymbol && resolveSymbol(refSymbol, checker) === resolvedSymbol) {
+        if (isDeclarationNameReference(node, declaration)) return;
+        if (ts.isCallExpression(node.parent) && node.parent.expression === node) {
+          if (isCallSiteFullyInlined(node.parent, checker)) return;
+        }
+        canErase = false;
+        return;
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(declaration.getSourceFile());
+  return canErase;
+}
+
 function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeChecker): number {
   let count = 0;
   function visit(n: ts.Node): void {
@@ -518,8 +645,7 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false):
         if (finallyResult !== true) return finallyResult;
       }
     } else if (ts.isLabeledStatement(stmt)) {
-      const labelResult = hasLinearControlFlow([stmt.statement], loopBody);
-      if (labelResult !== true) return labelResult;
+      return "labeled statement in body";
     }
   }
   return true;
@@ -709,13 +835,60 @@ function handleCallExpression(
   return inlineExpressionBody(target, node, checker, context, strict);
 }
 
-/** Check whether any VariableStatement in the body declares a binding with the given name. */
+/** Check whether any VariableStatement or FunctionDeclaration in the body declares a binding with the given name. */
 function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: string): boolean {
   for (const stmt of bodyStmts) {
     if (ts.isVariableStatement(stmt)) {
       for (const decl of stmt.declarationList.declarations) {
         if (ts.isIdentifier(decl.name) && decl.name.text === name) return true;
       }
+    }
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) return true;
+    if (ts.isBlock(stmt) && bodyDeclaresLocal(stmt.statements, name)) return true;
+    if (ts.isIfStatement(stmt)) {
+      const thenStatements = ts.isBlock(stmt.thenStatement)
+        ? stmt.thenStatement.statements
+        : [stmt.thenStatement];
+      if (bodyDeclaresLocal(thenStatements, name)) return true;
+      if (stmt.elseStatement) {
+        const elseStatements = ts.isBlock(stmt.elseStatement)
+          ? stmt.elseStatement.statements
+          : [stmt.elseStatement];
+        if (bodyDeclaresLocal(elseStatements, name)) return true;
+      }
+    }
+    if (
+      (ts.isWhileStatement(stmt) ||
+        ts.isDoStatement(stmt) ||
+        ts.isForStatement(stmt) ||
+        ts.isForInStatement(stmt) ||
+        ts.isForOfStatement(stmt)) &&
+      bodyDeclaresLocal(
+        ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
+        name,
+      )
+    ) {
+      return true;
+    }
+    if (ts.isSwitchStatement(stmt)) {
+      for (const clause of stmt.caseBlock.clauses) {
+        if (bodyDeclaresLocal(clause.statements, name)) return true;
+      }
+    }
+    if (ts.isTryStatement(stmt)) {
+      if (bodyDeclaresLocal(stmt.tryBlock.statements, name)) return true;
+      if (stmt.catchClause && bodyDeclaresLocal(stmt.catchClause.block.statements, name))
+        return true;
+      if (stmt.finallyBlock && bodyDeclaresLocal(stmt.finallyBlock.statements, name)) return true;
+    }
+    if (
+      ts.isLabeledStatement(stmt) &&
+      bodyDeclaresLocal(
+        ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
+        name,
+      )
+    ) {
+      return true;
     }
   }
   return false;
@@ -1172,9 +1345,13 @@ function hasCrossModuleFreeVariable(
     if (ts.isIdentifier(node)) {
       const sym = checker.getSymbolAtLocation(node);
       if (sym && !paramSymbols.has(sym)) {
-        const resolved = sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym;
-        const decls = resolved.getDeclarations();
-        if (decls) {
+        const symbolsToCheck = [sym];
+        if (sym.flags & ts.SymbolFlags.Alias) {
+          symbolsToCheck.push(checker.getAliasedSymbol(sym));
+        }
+        for (const symbolToCheck of symbolsToCheck) {
+          const decls = symbolToCheck.getDeclarations();
+          if (!decls) continue;
           for (const decl of decls) {
             if (decl.getSourceFile() === sourceFile && !isDescendant(decl, sourceDeclaration)) {
               found = true;
@@ -1250,8 +1427,16 @@ function handleExpressionStatement(
   return buildDoEndBlock(target, callNode, checker, context);
 }
 
-function handleFunctionDeclaration(node: ts.FunctionDeclaration): tstl.Statement[] | undefined {
-  if (hasInlineTag(node) && isModuleScopeDeclaration(node) && !isExported(node)) {
+function handleFunctionDeclaration(
+  node: ts.FunctionDeclaration,
+  checker: ts.TypeChecker,
+): tstl.Statement[] | undefined {
+  if (
+    hasInlineTag(node) &&
+    isModuleScopeDeclaration(node) &&
+    !isExported(node) &&
+    canEraseInlineDeclaration(node, checker)
+  ) {
     return [];
   }
   return undefined;
@@ -1259,13 +1444,15 @@ function handleFunctionDeclaration(node: ts.FunctionDeclaration): tstl.Statement
 
 function handleVariableStatementDeclaration(
   node: ts.VariableStatement,
+  checker: ts.TypeChecker,
 ): tstl.Statement[] | undefined {
   const decls = node.declarationList.declarations;
   if (
     decls.length === 1 &&
     hasInlineTag(node) &&
     isModuleScopeDeclaration(decls[0]) &&
-    !isExported(node)
+    !isExported(node) &&
+    canEraseInlineDeclaration(decls[0], checker)
   ) {
     return [];
   }
@@ -1327,7 +1514,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
       if (!ts.isVariableStatement(node)) return undefined;
       return (
         handleVariableStatement(node, checker, context, strictMode) ??
-        handleVariableStatementDeclaration(node)
+        handleVariableStatementDeclaration(node, checker)
       );
     },
     [ts.SyntaxKind.ReturnStatement]: (node, context) => {
@@ -1336,7 +1523,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
     },
     [ts.SyntaxKind.FunctionDeclaration]: (node) => {
       if (!ts.isFunctionDeclaration(node)) return undefined;
-      return handleFunctionDeclaration(node);
+      return handleFunctionDeclaration(node, checker);
     },
   };
   return visitors as tstl.Visitors;
