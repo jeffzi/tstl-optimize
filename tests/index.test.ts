@@ -281,7 +281,7 @@ describe("SourceFile visitor fallback", () => {
     }));
 
     try {
-      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index");
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index.js");
       const plugin = new MockedOptimizePlugin({
         rules: {
           "conditional-compilation": true,
@@ -351,7 +351,7 @@ describe("visitor metadata", () => {
     }));
 
     try {
-      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index");
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index.js");
       const plugin = new MockedOptimizePlugin({
         rules: {
           "conditional-compilation": true,

@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.plugin.json",
   "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
     "rootDir": ".",
     "noEmit": true,
     "composite": false,
