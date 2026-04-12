@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { compile } from "../helpers";
 
+function expectLuaSnippets(
+  lua: string,
+  { contains, notContains = [] }: { contains: readonly string[]; notContains?: readonly string[] },
+): void {
+  expect(contains.filter((snippet) => !lua.includes(snippet))).toStrictEqual([]);
+  expect(notContains.filter((snippet) => lua.includes(snippet))).toStrictEqual([]);
+}
+
 describe("loop-rebase", () => {
   describe("when loop qualifies for rebase", () => {
     it("rebases $range(0, n-1) with arr[i] to for i = 1, n", () => {
@@ -306,12 +314,7 @@ describe("loop-rebase", () => {
       },
     ])("does not rebase loop when step is $label", ({ src, contains, notContains }) => {
       const lua = compile(src);
-      for (const s of contains) {
-        expect(lua).toContain(s);
-      }
-      for (const s of notContains) {
-        expect(lua).not.toContain(s);
-      }
+      expectLuaSnippets(lua, { contains, notContains });
     });
   });
 });

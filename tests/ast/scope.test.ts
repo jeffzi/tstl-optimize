@@ -249,6 +249,18 @@ describe("collectScopeInfo", () => {
     const { scopeDefs } = collectScopeInfo(statements, true);
     expect(scopeDefs).toStrictEqual(new Set(["fn"]));
   });
+
+  it("collects nested function expression parameters as scopeDefs when shallow=false", () => {
+    const funcBody = tstl.createBlock([
+      tstl.createReturnStatement([makeAccess("config", "timeout")]),
+    ]);
+    const funcExpr = tstl.createFunctionExpression(funcBody, [tstl.createIdentifier("config")]);
+    const callExpr = tstl.createCallExpression(funcExpr, [tstl.createIdentifier("config")]);
+    const statements: tstl.Statement[] = [tstl.createExpressionStatement(callExpr)];
+
+    const { scopeDefs } = collectScopeInfo(statements, false);
+    expect(scopeDefs).toStrictEqual(new Set(["config"]));
+  });
 });
 
 describe("buildChainExpression", () => {
