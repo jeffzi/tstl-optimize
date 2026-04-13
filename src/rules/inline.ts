@@ -104,7 +104,7 @@ function classifyBody(
   return { kind: "statements", stmts: statements };
 }
 
-type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
+type InlineTargetResult = { target: InlineTarget } | undefined;
 
 function makeTargetResult(
   classified: ClassifiedBody | undefined,
@@ -235,7 +235,7 @@ function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {
 
 function isCallSiteFullyInlined(callNode: ts.CallExpression, checker: ts.TypeChecker): boolean {
   const result = getInlineTarget(callNode, checker);
-  if (!result || "reason" in result) return false;
+  if (!result) return false;
 
   const { target } = result;
   const hasBlockingFreeVariable = (
@@ -687,6 +687,8 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false):
         if (finallyResult !== true) return finallyResult;
       }
     } else if (ts.isLabeledStatement(stmt)) {
+      // Defensive only: current TSTL rejects labeled statements end-to-end, so
+      // treat them as non-inlineable if one reaches this control-flow analysis.
       return "labeled statement in body";
     }
   }
@@ -890,10 +892,6 @@ function handleCallExpression(
 ): tstl.Expression | undefined {
   const result = getInlineTarget(node, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(node, result.reason, strict));
-    return undefined;
-  }
   const { target } = result;
 
   if (target.kind === "statements" || target.kind === "statementsWithReturn") {
@@ -970,6 +968,8 @@ function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: string): bo
       if (stmt.finallyBlock && bodyDeclaresLocal(stmt.finallyBlock.statements, name)) return true;
     }
     if (
+      // Defensive only: current TSTL rejects labeled statements end-to-end, but
+      // preserve their scope interactions if one reaches this analysis.
       ts.isLabeledStatement(stmt) &&
       bodyDeclaresLocal(
         ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
@@ -1271,10 +1271,6 @@ function handleVariableStatement(
 
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
-    return undefined;
-  }
 
   const { target } = result;
 
@@ -1377,10 +1373,6 @@ function handleReturnStatement(
 
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
-    return undefined;
-  }
 
   const { target } = result;
 
@@ -1467,6 +1459,10 @@ function hasCrossModuleFreeVariable(
     // from type-only references (e.g., `param: SomeType` where SomeType is a
     // module-level type alias).
     if (ts.isTypeNode(node)) return;
+    if (ts.isPropertyAccessExpression(node)) {
+      walk(node.expression);
+      return;
+    }
     if (ts.isIdentifier(node)) {
       const sym = checker.getSymbolAtLocation(node);
       if (sym && !paramSymbols.has(sym)) {
@@ -1506,6 +1502,13 @@ function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
   return false;
 }
 
+/** Check if inlined expression result can be discarded at void site (pure expr with pure args). */
+function isPureAtVoidSite(bodyExpr: ts.Expression, callArgs: ts.NodeArray<ts.Expression>): boolean {
+  const bodyIsPure = !hasSideEffects(bodyExpr);
+  const allArgsArePure = callArgs.every((arg) => !hasSideEffects(arg));
+  return bodyIsPure && allArgsArePure;
+}
+
 function handleExpressionStatement(
   node: ts.ExpressionStatement,
   checker: ts.TypeChecker,
@@ -1517,17 +1520,20 @@ function handleExpressionStatement(
 
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
-    return undefined;
-  }
 
   const { target } = result;
 
   if (target.kind === "expression") {
     const inlined = inlineExpressionBody(target, callNode, checker, context, strict);
     if (inlined === undefined) return undefined;
-    return [tstl.createExpressionStatement(inlined)];
+    // If the body and all arguments are pure, the result is unused at void site —
+    // drop the statement entirely rather than emitting an invalid bare expression.
+    if (isPureAtVoidSite(target.bodyExpr, callNode.arguments)) {
+      return [];
+    }
+    // For side-effectful expressions, use local _ = <expr> pattern, which is always
+    // valid Lua regardless of the expression type (call, arithmetic, function, etc.)
+    return [tstl.createVariableDeclarationStatement([tstl.createIdentifier("_")], [inlined])];
   }
 
   if (target.kind === "statementsWithReturn") {
