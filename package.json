@@ -12,8 +12,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.plugin.json",
-    "test": "vitest run && tsx scripts/conformance.ts",
-    "test:unit": "vitest run",
+    "test": "vitest run --coverage && tsx scripts/conformance.ts",
+    "test:unit": "vitest run --coverage",
     "test:conformance": "tsx scripts/conformance.ts",
     "check": "biome check --fix .",
     "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#research' '#plans'",
