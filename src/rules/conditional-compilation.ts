@@ -173,6 +173,9 @@ function containsConditionalCaseBreak(
     }
 
     if (ts.isLabeledStatement(statement)) {
+      // Defensive only: current TSTL reports Unsupported node kind
+      // LabeledStatement for full transpiles, but if a label reaches this
+      // analysis we must preserve the switch rather than expose bare breaks.
       if (containsConditionalCaseBreak([statement.statement], false)) return true;
       continue;
     }
