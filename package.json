@@ -14,6 +14,7 @@
     "build": "tsc -p tsconfig.plugin.json",
     "test": "vitest run --coverage && tsx scripts/conformance.ts",
     "test:unit": "vitest run --coverage",
+    "test:runtime": "vitest run --config vitest.config.runtime.ts",
     "test:conformance": "tsx scripts/conformance.ts",
     "check": "biome check --fix .",
     "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#research' '#plans'",

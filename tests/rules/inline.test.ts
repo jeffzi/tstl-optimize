@@ -315,8 +315,7 @@ describe("inline", () => {
   describe("warnings and rejections", () => {
     it.each([
       { body: "if (x > 0) return; print(x);", name: "early return", skipLuaCheck: false },
-      // @ts-expect-error forces invalid TS through; TSTL emits bare `break` in a function body
-      // (outside any loop), which is invalid Lua — that is unavoidable and expected.
+      // TSTL emits bare `break` in a function body (outside any loop) — invalid Lua, unavoidable.
       { body: "// @ts-ignore\nbreak;", name: "break", skipLuaCheck: true },
       { body: "// @ts-ignore\ncontinue;", name: "continue", skipLuaCheck: true },
     ])("rejects bodies with $name", ({ body, skipLuaCheck }) => {
