@@ -68,6 +68,101 @@ To customize rules:
 }
 ```
 
+## Recommended usage
+
+Use the rules in two groups:
+
+- **Build specialization:** `conditional-compilation`, `debug-strip`
+- **Performance optimization:** `constant-folding`, `dead-local`, `merge-locals`, `localizer`,
+  `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`
+
+`conditional-compilation` and `debug-strip` are useful even when raw speed is not the main goal.
+Lua has no native preprocessor, so these rules let you remove platform-specific branches, debug
+logging, and development-only helpers at build time.
+
+For most projects, start with a conservative profile and then enable more aggressive rules only for
+known hot paths or release builds.
+
+### Safe default
+
+This profile keeps the low-risk cleanup rules enabled, treats build specialization as explicit, and
+avoids relying on aggressive call-site rewrites everywhere:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true,
+        "rules": {
+          "constant-folding": true,
+          "dead-local": true,
+          "merge-locals": true,
+          "remove-empty-branch": true,
+          "localizer": { "scope": "function", "threshold": 2 },
+          "loop-rebase": true,
+          "inline": false,
+          "math-intrinsics": true,
+          "conditional-compilation": false,
+          "debug-strip": false
+        }
+      }
+    ]
+  }
+}
+```
+
+Use this when you want predictable output and only opt into code-removal rules in dedicated build
+configs.
+
+### Release build with specialization
+
+This profile is better for projects that need platform-specific code and log stripping:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true,
+        "rules": {
+          "constant-folding": true,
+          "dead-local": true,
+          "merge-locals": true,
+          "remove-empty-branch": true,
+          "localizer": { "scope": "function", "threshold": 2 },
+          "loop-rebase": true,
+          "inline": true,
+          "math-intrinsics": true,
+          "conditional-compilation": {
+            "strict": true,
+            "constants": {
+              "DEBUG": { "env": "DEBUG", "default": false },
+              "PLATFORM": { "env": "PLATFORM", "default": "desktop" }
+            }
+          },
+          "debug-strip": {
+            "functions": ["print", "assert"],
+            "namespaces": ["debug"]
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+### Rule selection notes
+
+- Prefer `conditional-compilation` for platform gates, feature flags, and dev/prod branches.
+- Prefer `debug-strip` for release builds that should remove logs, tracing, and profiling calls.
+- Use `inline` on hot paths and allocation-heavy helpers, not as a blanket annotation strategy.
+- Measure `math-intrinsics` on your target interpreter. Some rewrites help on PUC Lua, some are
+  neutral, and LuaJIT may prefer the built-in C calls.
+- Keep separate dev and release configs when you enable code-removal rules.
+
 ## Rules
 
 ### `conditional-compilation`
