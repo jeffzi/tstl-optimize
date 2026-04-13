@@ -797,6 +797,17 @@ function transformBodyStatements(
   return luaBody;
 }
 
+function getInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement {
+  const parent = returnExpr.parent;
+  if (ts.isReturnStatement(parent) && parent.expression === returnExpr) {
+    return parent;
+  }
+
+  const syntheticReturn = ts.factory.createReturnStatement(returnExpr);
+  ts.setOriginalNode(syntheticReturn, returnExpr);
+  return ts.setTextRange(syntheticReturn, returnExpr);
+}
+
 function buildDoEndBlock(
   target: StatementInlineTarget,
   callNode: ts.CallExpression,
@@ -1188,7 +1199,7 @@ function buildArrayDestructureInline(
     // Transform body AND the return statement inside a function scope so TSTL
     // handles $multi correctly ($multi must appear in return-statement context)
     // and all param symbols get registered in context.symbolIdMaps.
-    const returnStmt = target.returnExpr.parent as ts.ReturnStatement;
+    const returnStmt = getInlineReturnStatement(target.returnExpr);
     context.pushScope(FUNCTION_SCOPE, declaration);
     const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
     const luaReturnStmts = context.transformStatements(returnStmt);
@@ -1324,7 +1335,7 @@ function buildReturnSiteInline(
   // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   if (isMultiReturn) {
-    const returnStmt = target.returnExpr.parent as ts.ReturnStatement;
+    const returnStmt = getInlineReturnStatement(target.returnExpr);
     context.pushScope(FUNCTION_SCOPE, declaration);
     luaReturnStmts = context.transformStatements(returnStmt);
     context.popScope();

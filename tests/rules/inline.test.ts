@@ -383,12 +383,41 @@ describe("inline", () => {
       expect(lua).not.toMatch(brokenPattern);
     });
 
+    it("inlines expression-bodied arrow multi-return functions at array destructuring sites", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => $multi(b, a);
+        declare const x: number;
+        declare const y: number;
+        const [p, q] = swap(x, y);
+      `);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("swap(");
+      expect(lua).toMatch(/local p, q = .*____inline_result_/);
+    });
+
     it("preserves return-site context when directly returning an inlined multi-return call", () => {
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
         function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
           return $multi(b, a);
         }
+
+        function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
+          return swap(x, y);
+        }
+      `);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("swap(");
+      expect(lua).toMatch(/return (y|____inline_arg_1), (x|____inline_arg_0)/);
+    });
+
+    it("inlines expression-bodied arrow multi-return functions at return sites", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => $multi(b, a);
 
         function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
           return swap(x, y);
