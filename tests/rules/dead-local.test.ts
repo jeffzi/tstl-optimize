@@ -1,7 +1,19 @@
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors } from "../../src/rules/dead-local";
 import { compile, normalizeLua } from "../helpers";
 
 describe("dead-local", () => {
+  function createLuaFile(statements: tstl.Statement[]): tstl.File {
+    return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
+  }
+
+  function toSymbolId(value: number): tstl.SymbolId {
+    return value as tstl.SymbolId;
+  }
+
   it("removes unused inline arg temp", () => {
     const lua = compile(`
       /** @inline */
@@ -231,6 +243,44 @@ describe("dead-local", () => {
       expect(lua).not.toMatch(/local x\s*=\s*1/);
       expect(lua).toContain("x = 2");
     });
+
+    it("preserves initializer when the first read is parenthesized before a later write", () => {
+      const lua = normalizeLua(
+        compile(`
+        function f(flag: boolean) {
+          let x = 1;
+          const y = (x);
+          if (flag) {
+            x = 2;
+          }
+          return y;
+        }
+      `),
+      );
+
+      expect(lua).toContain("local x = 1");
+      expect(lua).toContain("local y = x");
+      expect(lua).toContain("x = 2");
+      expect(lua).toContain("return y");
+    });
+
+    it("preserves initializer when the first read appears in a conditional expression", () => {
+      const lua = normalizeLua(
+        compile(`
+        function f(flag: boolean) {
+          let x = 1;
+          const y = flag ? x : 0;
+          x = 2;
+          return y;
+        }
+      `),
+      );
+
+      expect(lua).toContain("local x = 1");
+      expect(lua).toContain("local y = flag and x or 0");
+      expect(lua).toContain("x = 2");
+      expect(lua).toContain("return y");
+    });
   });
 
   describe("when removing unused locals in branching statements", () => {
@@ -353,6 +403,219 @@ describe("dead-local", () => {
       for (const snippet of expectedMissing) {
         expect(lua).not.toContain(snippet);
       }
+    });
+  });
+
+  describe("additional read-shape coverage", () => {
+    it("preserves locals read through conditional and parenthesized expressions", () => {
+      const lua = compile(`
+        function f(flag: boolean) {
+          const x = 1;
+          const y = (flag ? x : 2);
+          return (y);
+        }
+      `);
+
+      expect(lua).toContain("x = 1");
+      expect(lua).toContain("return y");
+    });
+
+    it("preserves locals read from table keys and values", () => {
+      const lua = normalizeLua(
+        compile(`
+        function f() {
+          const key = "value";
+          const data = { [key]: key };
+          return data[key];
+        }
+      `),
+      );
+
+      expect(lua).toContain('local key = "value"');
+      expect(lua).toContain("return data[key]");
+    });
+
+    it("preserves locals read through computed assignment targets", () => {
+      const lua = normalizeLua(
+        compile(`
+        function f(arr: number[]) {
+          let index = 0;
+          arr[index] = arr[index] + 1;
+          return index;
+        }
+      `),
+      );
+
+      expect(lua).toContain("local index = 0");
+      expect(lua).toContain("arr[index + 1] = arr[index + 1] + 1");
+      expect(lua).toContain("return index");
+    });
+
+    it("preserves unused function-expression declarations inside nested scopes", () => {
+      const lua = normalizeLua(
+        compile(`
+        function outer() {
+          if (true) {
+            const keep = function() {
+              return 1;
+            };
+          }
+        }
+      `),
+      );
+
+      expect(lua).toContain("local function keep()");
+      expect(lua).toContain("return 1");
+    });
+  });
+
+  describe("public visitor coverage", () => {
+    it("returns non-file transform results unchanged", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression;
+      const nonFile = tstl.createBooleanLiteral(true);
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => nonFile,
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed).toBe(nonFile);
+    });
+  });
+
+  describe("raw Lua visitor coverage", () => {
+    function runSourceFileVisitor(node: tstl.Node): tstl.Node {
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+
+      return Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => node,
+        } as unknown as tstl.TransformationContext,
+      ]);
+    }
+
+    it("preserves an initializer when the first later read is parenthesized inside a nested do block", () => {
+      const xSym = toSymbolId(101);
+      const body = tstl.createBlock([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("x", undefined, xSym)],
+          [tstl.createNumericLiteral(1)],
+        ),
+        tstl.createDoStatement([
+          tstl.createVariableDeclarationStatement(
+            [tstl.createIdentifier("y")],
+            [tstl.createParenthesizedExpression(tstl.createIdentifier("x", undefined, xSym))],
+          ),
+        ]),
+        tstl.createAssignmentStatement(
+          [tstl.createIdentifier("x", undefined, xSym)],
+          [tstl.createNumericLiteral(2)],
+        ),
+      ]);
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("fn")],
+          [tstl.createFunctionExpression(body, [])],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const fnDecl = transformed.statements[0] as tstl.VariableDeclarationStatement;
+      const fnExpr = fnDecl.right?.[0] as tstl.FunctionExpression;
+      const xDecl = fnExpr.body.statements[0] as tstl.VariableDeclarationStatement;
+
+      expect(xDecl.left).toHaveLength(1);
+      expect((xDecl.left[0] as tstl.Identifier).text).toBe("x");
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isNumericLiteral(xDecl.right![0])).toBe(true);
+    });
+
+    it("preserves an initializer when the first later read is conditional inside a nested do block", () => {
+      const xSym = toSymbolId(102);
+      const body = tstl.createBlock([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("x", undefined, xSym)],
+          [tstl.createNumericLiteral(1)],
+        ),
+        tstl.createDoStatement([
+          tstl.createVariableDeclarationStatement(
+            [tstl.createIdentifier("y")],
+            [
+              tstl.createConditionalExpression(
+                tstl.createBooleanLiteral(true),
+                tstl.createIdentifier("x", undefined, xSym),
+                tstl.createNumericLiteral(0),
+              ),
+            ],
+          ),
+        ]),
+        tstl.createAssignmentStatement(
+          [tstl.createIdentifier("x", undefined, xSym)],
+          [tstl.createNumericLiteral(2)],
+        ),
+      ]);
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("fn")],
+          [tstl.createFunctionExpression(body, [])],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const fnDecl = transformed.statements[0] as tstl.VariableDeclarationStatement;
+      const fnExpr = fnDecl.right?.[0] as tstl.FunctionExpression;
+      const xDecl = fnExpr.body.statements[0] as tstl.VariableDeclarationStatement;
+
+      expect((xDecl.left[0] as tstl.Identifier).text).toBe("x");
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isNumericLiteral(xDecl.right![0])).toBe(true);
+    });
+
+    it("preserves an initializer when a raw numeric-for step expression reads the local before a later write", () => {
+      const stepSym = toSymbolId(103);
+      const body = tstl.createBlock([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("step", undefined, stepSym)],
+          [tstl.createNumericLiteral(1)],
+        ),
+        tstl.createForStatement(
+          tstl.createBlock([]),
+          tstl.createIdentifier("i"),
+          tstl.createNumericLiteral(0),
+          tstl.createNumericLiteral(4),
+          tstl.createIdentifier("step", undefined, stepSym),
+        ),
+        tstl.createAssignmentStatement(
+          [tstl.createIdentifier("step", undefined, stepSym)],
+          [tstl.createNumericLiteral(2)],
+        ),
+      ]);
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("fn")],
+          [tstl.createFunctionExpression(body, [])],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const fnDecl = transformed.statements[0] as tstl.VariableDeclarationStatement;
+      const fnExpr = fnDecl.right?.[0] as tstl.FunctionExpression;
+      const stepDecl = fnExpr.body.statements[0] as tstl.VariableDeclarationStatement;
+
+      expect((stepDecl.left[0] as tstl.Identifier).text).toBe("step");
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isNumericLiteral(stepDecl.right![0])).toBe(true);
     });
   });
 });

@@ -1,10 +1,26 @@
+import ts from "typescript";
+import type * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors } from "../../src/rules/debug-strip";
 import { compile, normalizeLua } from "../helpers";
 
 const enabled = { pluginOptions: { rules: { "debug-strip": true } } };
 
 const ENV =
   "declare function print(...args: any[]): void;\ndeclare function assert(cond: any, msg?: string): asserts cond;\n";
+
+function parseExpressionStatement(source: string): ts.ExpressionStatement {
+  const file = ts.createSourceFile("debug-strip.ts", source, ts.ScriptTarget.Latest, true);
+  const statement = file.statements[0];
+  if (!statement || !ts.isExpressionStatement(statement)) {
+    throw new Error("Expected expression statement.");
+  }
+  return statement;
+}
+
+function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
+  return checker as unknown as ts.TypeChecker;
+}
 
 describe("debug-strip", () => {
   describe("when function calls match the strip list", () => {
@@ -375,6 +391,57 @@ describe("debug-strip", () => {
       );
 
       expect(normalizeLua(lua)).toBe('getLogger():log("msg")\nx = 1');
+    });
+  });
+
+  describe("public visitor coverage", () => {
+    it("returns no visitors when the rule is disabled", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        asTypeChecker({}),
+        { rules: { "debug-strip": false } },
+      ]);
+
+      expect(visitors).toStrictEqual({});
+    });
+
+    it("treats missing checker symbols as configured globals", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        asTypeChecker({ getSymbolAtLocation: () => undefined }),
+        { rules: { "debug-strip": { functions: ["print"] } } },
+      ]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement) as (
+        node: ts.ExpressionStatement,
+        context: tstl.TransformationContext,
+      ) => tstl.Statement[];
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseExpressionStatement('print("debug");'),
+        {
+          superTransformStatements: () => ["kept"],
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed).toStrictEqual([]);
+    });
+
+    it("passes through non-call expression statements", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        asTypeChecker({ getSymbolAtLocation: () => undefined }),
+        { rules: { "debug-strip": { functions: ["print"] } } },
+      ]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement) as (
+        node: ts.ExpressionStatement,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseExpressionStatement("print;"),
+        {
+          superTransformStatements: () => ["kept"],
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed).toStrictEqual(["kept"]);
     });
   });
 });

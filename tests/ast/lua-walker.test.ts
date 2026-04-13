@@ -415,6 +415,21 @@ describe("walkStatements", () => {
       assertNode(call, tstl.isCallExpression);
       expect(tstl.isIdentifier(call.params[0]) && call.params[0].text).toBe("myTable");
     });
+
+    it("mutates top-level for-in expressions", () => {
+      const forIn = tstl.createForInStatement(tstl.createBlock([]), [id("k")], [id("iter")]);
+      const stmts: tstl.Statement[] = [forIn];
+
+      walkStatements(stmts, {
+        expr: (expr, replace) => {
+          if (tstl.isIdentifier(expr) && expr.text === "iter") {
+            replace(id("nextIter"));
+          }
+        },
+      });
+
+      expect(forIn.expressions).toStrictEqual([id("nextIter")]);
+    });
   });
 
   describe("when skip() is called from expr hook", () => {
@@ -592,6 +607,116 @@ describe("walkStatements", () => {
       });
       // if-body (42) and condition (cond) skipped, sibling 99 visited
       expect(visited).toStrictEqual([99]);
+    });
+  });
+
+  describe("when guardDepth tracking is enabled", () => {
+    it("increments guardDepth for and/or RHS and if branches", () => {
+      const hooks = {
+        guardDepth: 0,
+        expr: (expr: tstl.Expression) => {
+          if (tstl.isIdentifier(expr)) {
+            visited.push(`${expr.text}@${hooks.guardDepth}`);
+          } else if (tstl.isNumericLiteral(expr)) {
+            visited.push(`${expr.value}@${hooks.guardDepth}`);
+          }
+        },
+      };
+      const visited: string[] = [];
+      const guarded = tstl.createBinaryExpression(
+        id("lhs"),
+        id("rhs"),
+        tstl.SyntaxKind.AndOperator,
+      );
+      const branch = tstl.createIfStatement(
+        id("cond"),
+        tstl.createBlock([tstl.createExpressionStatement(num(1))]),
+        tstl.createBlock([tstl.createExpressionStatement(num(2))]),
+      );
+
+      walkStatements([tstl.createExpressionStatement(guarded), branch], hooks);
+
+      expect(visited).toStrictEqual(["lhs@0", "rhs@1", "cond@0", "1@1", "2@1"]);
+    });
+
+    it("restores guardDepth when stop() fires in a conditional branch", () => {
+      const hooks = {
+        guardDepth: 0,
+        expr: (
+          expr: tstl.Expression,
+          _replace: (n: tstl.Expression) => void,
+          control: {
+            stop(): void;
+          },
+        ) => {
+          if (tstl.isNumericLiteral(expr)) {
+            seenDepths.push(hooks.guardDepth);
+            control.stop();
+          }
+        },
+      };
+      const seenDepths: number[] = [];
+      const stmt = tstl.createExpressionStatement(
+        tstl.createConditionalExpression(id("cond"), num(1), num(2)),
+      );
+
+      walkStatements([stmt], hooks);
+
+      expect(seenDepths).toStrictEqual([1]);
+      expect(hooks.guardDepth).toBe(0);
+    });
+
+    it("restores guardDepth when stop() fires inside an if block", () => {
+      const hooks = {
+        guardDepth: 0,
+        expr: (
+          expr: tstl.Expression,
+          _replace: (n: tstl.Expression) => void,
+          control: {
+            stop(): void;
+          },
+        ) => {
+          if (tstl.isNumericLiteral(expr)) {
+            seenDepths.push(hooks.guardDepth);
+            control.stop();
+          }
+        },
+      };
+      const seenDepths: number[] = [];
+      const stmt = tstl.createIfStatement(
+        id("cond"),
+        tstl.createBlock([tstl.createExpressionStatement(num(1))]),
+        tstl.createBlock([tstl.createExpressionStatement(num(2))]),
+      );
+
+      walkStatements([stmt], hooks);
+
+      expect(seenDepths).toStrictEqual([1]);
+      expect(hooks.guardDepth).toBe(0);
+    });
+
+    it("stops after visiting a for-step expression", () => {
+      const stmt = tstl.createForStatement(
+        tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
+        id("i"),
+        num(0),
+        num(2),
+        num(1),
+      );
+      const visited: string[] = [];
+
+      walkStatements([stmt], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isNumericLiteral(expr) && expr.value === 1) {
+            visited.push("step");
+            control.stop();
+          } else if (tstl.isStringLiteral(expr)) {
+            visited.push(expr.value);
+          }
+        },
+      });
+
+      expect(visited).toStrictEqual(["step"]);
     });
   });
 

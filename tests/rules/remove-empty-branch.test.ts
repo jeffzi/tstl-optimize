@@ -1,4 +1,8 @@
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors } from "../../src/rules/remove-empty-branch";
 import { compile, normalizeLua } from "../helpers";
 
 const opts = {
@@ -10,6 +14,10 @@ const opts = {
     },
   },
 };
+
+function createLuaFile(statements: tstl.Statement[]): tstl.File {
+  return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
+}
 
 function expectCompiledLua(source: string, expected: string, options = opts): void {
   const lines = expected.split("\n");
@@ -403,6 +411,49 @@ describe("remove-empty-branch rule", () => {
         const z = 3;
       `;
       expectCompiledLua(source, "z = 3");
+    });
+  });
+
+  describe("direct source-file visitor coverage", () => {
+    it("removes raw Lua if-statements with parenthesized safe conditions", () => {
+      const file = createLuaFile([
+        tstl.createIfStatement(
+          tstl.createParenthesizedExpression(tstl.createIdentifier("flag")),
+          tstl.createBlock([]),
+        ),
+      ]);
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => file,
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed.statements).toHaveLength(0);
+    });
+
+    it("returns non-file transform results unchanged", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression;
+      const nonFile = tstl.createBooleanLiteral(true);
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => nonFile,
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed).toBe(nonFile);
     });
   });
 });

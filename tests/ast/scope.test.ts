@@ -247,6 +247,64 @@ describe("collectScopeInfo", () => {
     const { scopeDefs } = collectScopeInfo(statements, false);
     expect(scopeDefs).toStrictEqual(new Set(["config"]));
   });
+
+  it("collects chained assignment targets, function-definition params, and loop variables", () => {
+    const functionDefinition = tstl.createAssignmentStatement(
+      makeAccess("module", "run"),
+      tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("config")]),
+    );
+    const propertyAssignment = tstl.createAssignmentStatement(
+      makeAccess("state", "value"),
+      tstl.createNumericLiteral(1),
+    );
+    const forIn = tstl.createForInStatement(
+      tstl.createBlock([]),
+      [tstl.createIdentifier("key")],
+      [tstl.createIdentifier("pairsIter")],
+    );
+    const forStmt = tstl.createForStatement(
+      tstl.createBlock([]),
+      tstl.createIdentifier("i"),
+      tstl.createNumericLiteral(0),
+      tstl.createNumericLiteral(1),
+    );
+
+    const { scopeDefs } = collectScopeInfo(
+      [functionDefinition, propertyAssignment, forIn, forStmt],
+      false,
+    );
+
+    expect(scopeDefs).toStrictEqual(new Set(["module.run", "config", "state.value", "key", "i"]));
+  });
+
+  it("ignores non-identifier function and loop parameters", () => {
+    const variadicExpr = tstl.createFunctionExpression(tstl.createBlock([]), [
+      tstl.createIdentifier("arg"),
+    ]);
+    Reflect.set(variadicExpr, "params", [tstl.createDotsLiteral()]);
+    const variadicDefinition = tstl.createAssignmentStatement(
+      tstl.createIdentifier("fn"),
+      tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("arg")]),
+    );
+    const definedFunction = variadicDefinition.right[0];
+    if (!tstl.isFunctionExpression(definedFunction)) {
+      throw new Error("Expected FunctionExpression");
+    }
+    Reflect.set(definedFunction, "params", [tstl.createDotsLiteral()]);
+    const forIn = tstl.createForInStatement(
+      tstl.createBlock([]),
+      [tstl.createIdentifier("value")],
+      [tstl.createIdentifier("iter")],
+    );
+    Reflect.set(forIn, "names", [tstl.createDotsLiteral()]);
+
+    const { scopeDefs } = collectScopeInfo(
+      [tstl.createExpressionStatement(variadicExpr), variadicDefinition, forIn],
+      false,
+    );
+
+    expect(scopeDefs).toStrictEqual(new Set(["fn"]));
+  });
 });
 
 describe("buildChainExpression", () => {
@@ -407,5 +465,25 @@ describe("collectArrayElementAccesses", () => {
 
     const info = collectArrayElementAccesses([stmt], new Set(["i"]), shallow);
     expect(info.counts.get("t") ?? 0).toBe(expectedCount);
+  });
+
+  it("does not count guarded array reads toward localization", () => {
+    const guardedRead = tstl.createIfStatement(
+      tstl.createIdentifier("cond"),
+      tstl.createBlock([
+        tstl.createExpressionStatement(
+          tstl.createTableIndexExpression(
+            tstl.createIdentifier("values"),
+            tstl.createIdentifier("i"),
+          ),
+        ),
+      ]),
+    );
+
+    const info = collectArrayElementAccesses([guardedRead], new Set(["i"]), true);
+
+    expect(info.counts.size).toBe(0);
+    expect(info.loopVar.size).toBe(0);
+    expect(info.writes.size).toBe(0);
   });
 });

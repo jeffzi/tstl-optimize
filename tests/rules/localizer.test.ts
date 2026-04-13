@@ -1,6 +1,8 @@
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors } from "../../src/rules/localizer";
 import { compile, normalizeLua } from "../helpers";
 
 const MODULE_SCOPE = { pluginOptions: { rules: { localizer: { scope: "module" as const } } } };
@@ -177,6 +179,23 @@ describe("localizer", () => {
         },
       );
       expect(lua).toContain("local ____obj_x = obj.x");
+    });
+
+    it("renames hoists repeatedly when multiple generated names are already taken", () => {
+      const lua = compile(
+        [
+          "function process(obj: { x: number }, ____obj_x: number, ____obj_x_1: number) {",
+          "  const a = obj.x;",
+          "  const b = obj.x;",
+          "  return a + b + ____obj_x + ____obj_x_1;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: { rules: { localizer: { scope: "function" as const, include: ["obj"] } } },
+        },
+      );
+
+      expect(lua).toContain("local ____obj_x_2 = obj.x");
     });
   });
 
@@ -1132,6 +1151,49 @@ describe("localizer", () => {
       expect(lua).toContain("____math_floor(x)");
     });
   });
+
+  describe("public visitor coverage", () => {
+    it("returns no visitors when the rule is disabled", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        {} as ts.TypeChecker,
+        { rules: { localizer: false } },
+      ]);
+
+      expect(visitors).toStrictEqual({});
+    });
+
+    it("falls back to superTransformStatements when the source-file transform is not a Lua file", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        {} as ts.TypeChecker,
+        { rules: { localizer: true } },
+      ]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+      const sourceFile = ts.createSourceFile(
+        "localizer.ts",
+        "foo();",
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      const fallbackStatement = tstl.createExpressionStatement(tstl.createIdentifier("fallback"));
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile,
+        {
+          superTransformNode: () => fallbackStatement,
+          superTransformStatements: () => [fallbackStatement],
+          usedLuaLibFeatures: new Set(),
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(tstl.isFile(result)).toBe(true);
+      expect(result.statements).toHaveLength(1);
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isExpressionStatement(result.statements[0]!)).toBe(true);
+    });
+  });
 });
 
 describe("localizer early exit detection in array element localization", () => {
@@ -1768,5 +1830,392 @@ describe("localizer coverage", () => {
     const lua = normalizeLua(compile(code));
     expect(lua).toContain("arr[i + 1] = arr[i + 1] + 1");
     expect(lua).not.toContain("local ____arr");
+  });
+
+  it("does not hoist when an else branch wraps an early exit in a nested block", () => {
+    const code = `
+      function test(flag: boolean, arr: number[]) {
+        for (let i = 0; i < 10; i++) {
+          if (flag) {
+            arr[i] = arr[i] + 1;
+          } else {
+            {
+              return;
+            }
+          }
+          arr[i] = arr[i] + 1;
+        }
+      }
+    `;
+
+    const lua = normalizeLua(compile(code));
+
+    expect(lua).toContain("arr[i + 1] = arr[i + 1] + 1");
+    expect(lua).not.toContain("local ____arr");
+  });
+
+  it("does not hoist when a nested for-in loop returns from the enclosing function", () => {
+    const code = `
+      function test(arr: number[], obj: Record<string, number>) {
+        for (let i = 0; i < 10; i++) {
+          for (const key in obj) {
+            if (key === "stop") {
+              return;
+            }
+          }
+          arr[i] = arr[i] + 1;
+          arr[i] = arr[i] + 1;
+        }
+      }
+    `;
+
+    const lua = normalizeLua(compile(code));
+
+    expect(lua).toContain("arr[i + 1] = arr[i + 1] + 1");
+    expect(lua).not.toContain("local ____arr");
+  });
+
+  it("does not hoist when a plain nested block exits early", () => {
+    const code = `
+      function test(arr: number[]) {
+        for (let i = 0; i < 10; i++) {
+          {
+            if (i === 3) {
+              return;
+            }
+          }
+          arr[i] = arr[i] + 1;
+          arr[i] = arr[i] + 1;
+        }
+      }
+    `;
+
+    const lua = normalizeLua(compile(code));
+
+    expect(lua).toContain("arr[i + 1] = arr[i + 1] + 1");
+    expect(lua).not.toContain("local ____arr");
+  });
+});
+
+describe("localizer raw Lua visitor coverage", () => {
+  function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
+    return checker as unknown as ts.TypeChecker;
+  }
+
+  function createLuaFile(statements: tstl.Statement[]): tstl.File {
+    return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
+  }
+
+  function runSourceFileVisitor(file: tstl.File): tstl.File {
+    const visitors = Reflect.apply(createVisitors, undefined, [
+      asTypeChecker({}),
+      { rules: { localizer: true } },
+    ]);
+    const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+      node: ts.SourceFile,
+      context: tstl.TransformationContext,
+    ) => tstl.File;
+
+    return Reflect.apply(visitor, undefined, [
+      {} as ts.SourceFile,
+      {
+        nextSymbolId: (() => {
+          let current = 4000;
+          return () => current++;
+        })(),
+        superTransformNode: () => file,
+        usedLuaLibFeatures: new Set(),
+      } as unknown as tstl.TransformationContext,
+    ]);
+  }
+
+  function makeRepeatedArrayWrite(loopExtras: tstl.Statement[]): tstl.ForStatement {
+    const arrAtI = () =>
+      tstl.createTableIndexExpression(tstl.createIdentifier("arr"), tstl.createIdentifier("i"));
+
+    return tstl.createForStatement(
+      tstl.createBlock([
+        ...loopExtras,
+        tstl.createAssignmentStatement(
+          [arrAtI()],
+          [
+            tstl.createBinaryExpression(
+              arrAtI(),
+              tstl.createNumericLiteral(1),
+              tstl.SyntaxKind.AdditionOperator,
+            ),
+          ],
+        ),
+        tstl.createAssignmentStatement(
+          [arrAtI()],
+          [
+            tstl.createBinaryExpression(
+              arrAtI(),
+              tstl.createNumericLiteral(2),
+              tstl.SyntaxKind.AdditionOperator,
+            ),
+          ],
+        ),
+      ]),
+      tstl.createIdentifier("i"),
+      tstl.createNumericLiteral(0),
+      tstl.createNumericLiteral(10),
+      tstl.createNumericLiteral(1),
+    );
+  }
+
+  function getLocalizedTemp(loop: tstl.ForStatement): string | undefined {
+    const firstStatement = loop.body.statements[0];
+    if (!firstStatement || !tstl.isVariableDeclarationStatement(firstStatement)) return undefined;
+    const tempIdent = firstStatement.left[0];
+    return tempIdent?.text;
+  }
+
+  it.each([
+    {
+      buildExtras: () => [
+        tstl.createWhileStatement(
+          tstl.createBlock([
+            tstl.createIfStatement(
+              tstl.createBooleanLiteral(true),
+              tstl.createBlock([]),
+              tstl.createBlock([tstl.createReturnStatement([])]),
+            ),
+          ]),
+          tstl.createBooleanLiteral(true),
+        ),
+      ],
+      name: "a nested while loop has an if/else with a returning else branch",
+    },
+    {
+      buildExtras: () => [
+        tstl.createWhileStatement(
+          tstl.createBlock([
+            tstl.createRepeatStatement(
+              tstl.createBlock([tstl.createReturnStatement([])]),
+              tstl.createBooleanLiteral(true),
+            ),
+          ]),
+          tstl.createBooleanLiteral(true),
+        ),
+      ],
+      name: "a nested while loop contains a repeat loop that returns",
+    },
+    {
+      buildExtras: () => [
+        tstl.createForInStatement(
+          tstl.createBlock([tstl.createReturnStatement([])]),
+          [tstl.createIdentifier("key")],
+          [
+            tstl.createCallExpression(tstl.createIdentifier("pairs"), [
+              tstl.createIdentifier("obj"),
+            ]),
+          ],
+        ),
+      ],
+      name: "a nested for-in loop returns from the enclosing scope",
+    },
+    {
+      buildExtras: () => [
+        tstl.createForStatement(
+          tstl.createBlock([tstl.createReturnStatement([])]),
+          tstl.createIdentifier("j"),
+          tstl.createNumericLiteral(0),
+          tstl.createNumericLiteral(2),
+          tstl.createNumericLiteral(1),
+        ),
+      ],
+      name: "a raw nested numeric for loop returns early",
+    },
+    {
+      buildExtras: () => [tstl.createDoStatement([tstl.createReturnStatement([])])],
+      name: "a raw nested do block returns early",
+    },
+    {
+      buildExtras: () => [
+        tstl.createWhileStatement(
+          tstl.createBlock([
+            tstl.createIfStatement(
+              tstl.createBooleanLiteral(true),
+              tstl.createBlock([]),
+              tstl.createBlock([
+                tstl.createForStatement(
+                  tstl.createBlock([tstl.createReturnStatement([])]),
+                  tstl.createIdentifier("j"),
+                  tstl.createNumericLiteral(0),
+                  tstl.createNumericLiteral(2),
+                  tstl.createNumericLiteral(1),
+                ),
+              ]),
+            ),
+          ]),
+          tstl.createBooleanLiteral(true),
+        ),
+      ],
+      name: "a nested else branch contains a numeric for-loop that returns",
+    },
+  ])("does not hoist when $name", ({ buildExtras }) => {
+    const file = createLuaFile([makeRepeatedArrayWrite(buildExtras())]);
+    const transformed = runSourceFileVisitor(file);
+    const loop = transformed.statements[0] as tstl.ForStatement;
+
+    expect(getLocalizedTemp(loop)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      buildExtras: () => [
+        tstl.createWhileStatement(
+          tstl.createBlock([
+            tstl.createIfStatement(tstl.createBooleanLiteral(true), tstl.createBlock([])),
+          ]),
+          tstl.createBooleanLiteral(true),
+        ),
+        tstl.createForStatement(
+          tstl.createBlock([tstl.createExpressionStatement(tstl.createNumericLiteral(0))]),
+          tstl.createIdentifier("j"),
+          tstl.createNumericLiteral(0),
+          tstl.createNumericLiteral(2),
+          tstl.createNumericLiteral(1),
+        ),
+        tstl.createDoStatement([tstl.createExpressionStatement(tstl.createNumericLiteral(1))]),
+      ],
+      name: "nested while, numeric-for, and do blocks have no early exit",
+    },
+    {
+      buildExtras: () => [
+        tstl.createWhileStatement(
+          tstl.createBlock([
+            tstl.createRepeatStatement(
+              tstl.createBlock([tstl.createExpressionStatement(tstl.createNumericLiteral(1))]),
+              tstl.createBooleanLiteral(true),
+            ),
+          ]),
+          tstl.createBooleanLiteral(true),
+        ),
+      ],
+      name: "a nested while loop contains a repeat loop without an early exit",
+    },
+    {
+      buildExtras: () => [
+        tstl.createWhileStatement(
+          tstl.createBlock([
+            tstl.createIfStatement(
+              tstl.createBooleanLiteral(true),
+              tstl.createBlock([]),
+              tstl.createBlock([
+                tstl.createForStatement(
+                  tstl.createBlock([tstl.createExpressionStatement(tstl.createNumericLiteral(1))]),
+                  tstl.createIdentifier("j"),
+                  tstl.createNumericLiteral(0),
+                  tstl.createNumericLiteral(2),
+                  tstl.createNumericLiteral(1),
+                ),
+              ]),
+            ),
+          ]),
+          tstl.createBooleanLiteral(true),
+        ),
+      ],
+      name: "nested else branches and nested loops do not exit early",
+    },
+  ])("still hoists when $name", ({ buildExtras }) => {
+    const file = createLuaFile([makeRepeatedArrayWrite(buildExtras())]);
+    const transformed = runSourceFileVisitor(file);
+    const loop = transformed.statements[0] as tstl.ForStatement;
+
+    expect(getLocalizedTemp(loop)).toContain("____arr");
+  });
+
+  it("rewrites raw array reads and writes through the hoisted temp identifier", () => {
+    const file = createLuaFile([makeRepeatedArrayWrite([])]);
+
+    const transformed = runSourceFileVisitor(file);
+    const loop = transformed.statements[0] as tstl.ForStatement;
+    const [decl, firstWrite, secondWrite, writeback] = loop.body.statements;
+
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isVariableDeclarationStatement(decl!)).toBe(true);
+    const tempIdent = (decl as tstl.VariableDeclarationStatement).left[0] as tstl.Identifier;
+    expect(tempIdent.text).toContain("____arr");
+
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isAssignmentStatement(firstWrite!)).toBe(true);
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isIdentifier((firstWrite as tstl.AssignmentStatement).left[0]!)).toBe(true);
+    expect(((firstWrite as tstl.AssignmentStatement).left[0] as tstl.Identifier).text).toBe(
+      tempIdent.text,
+    );
+    expect(
+      tstl.isIdentifier(
+        ((firstWrite as tstl.AssignmentStatement).right[0] as tstl.BinaryExpression).left,
+      ),
+    ).toBe(true);
+
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isAssignmentStatement(secondWrite!)).toBe(true);
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isIdentifier((secondWrite as tstl.AssignmentStatement).left[0]!)).toBe(true);
+    expect(((secondWrite as tstl.AssignmentStatement).left[0] as tstl.Identifier).text).toBe(
+      tempIdent.text,
+    );
+
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isAssignmentStatement(writeback!)).toBe(true);
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isTableIndexExpression((writeback as tstl.AssignmentStatement).left[0]!)).toBe(
+      true,
+    );
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isIdentifier((writeback as tstl.AssignmentStatement).right[0]!)).toBe(true);
+    expect(((writeback as tstl.AssignmentStatement).right[0] as tstl.Identifier).text).toBe(
+      tempIdent.text,
+    );
+  });
+
+  it("does not rewrite raw nested for-in bodies that shadow the localized loop variable", () => {
+    const arrAtI = () =>
+      tstl.createTableIndexExpression(tstl.createIdentifier("arr"), tstl.createIdentifier("i"));
+    const file = createLuaFile([
+      makeRepeatedArrayWrite([
+        tstl.createForInStatement(
+          tstl.createBlock([
+            tstl.createAssignmentStatement(
+              [arrAtI()],
+              [
+                tstl.createBinaryExpression(
+                  arrAtI(),
+                  tstl.createNumericLiteral(3),
+                  tstl.SyntaxKind.AdditionOperator,
+                ),
+              ],
+            ),
+          ]),
+          [tstl.createIdentifier("i")],
+          [
+            tstl.createCallExpression(tstl.createIdentifier("pairs"), [
+              tstl.createIdentifier("obj"),
+            ]),
+          ],
+        ),
+      ]),
+    ]);
+
+    const transformed = runSourceFileVisitor(file);
+    const loop = transformed.statements[0] as tstl.ForStatement;
+    const nestedLoop = loop.body.statements.find((stmt) => tstl.isForInStatement(stmt));
+    if (!nestedLoop || !tstl.isForInStatement(nestedLoop)) {
+      throw new Error("expected nested for-in loop");
+    }
+    const nestedAssign = nestedLoop.body.statements[0];
+    if (!nestedAssign || !tstl.isAssignmentStatement(nestedAssign)) {
+      throw new Error("expected nested assignment");
+    }
+
+    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+    expect(tstl.isTableIndexExpression(nestedAssign.left[0]!)).toBe(true);
+    expect(tstl.isTableIndexExpression((nestedAssign.right[0] as tstl.BinaryExpression).left)).toBe(
+      true,
+    );
   });
 });

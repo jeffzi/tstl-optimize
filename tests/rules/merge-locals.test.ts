@@ -1,5 +1,25 @@
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors } from "../../src/rules/merge-locals";
 import { compile, normalizeLua } from "../helpers";
+
+function createLuaFile(statements: tstl.Statement[]): tstl.File {
+  return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
+}
+
+function expectTrackedPairMerge(source: string, merged: boolean): string {
+  const lua = normalizeLua(compile(source));
+
+  if (merged) {
+    expect(lua).toContain("local a, fn");
+  } else {
+    expect(lua).not.toContain("local a, fn");
+  }
+
+  return lua;
+}
 
 describe("merge-locals", () => {
   describe("when encountering consecutive variable declarations", () => {
@@ -266,102 +286,93 @@ describe("merge-locals", () => {
   });
 
   describe("closure upvalue capture", () => {
-    it("does NOT merge function that captures upvalue from current run", () => {
-      const code = `
-        function f(): number {
-          const a = 1;
-          const fn = function() { return a; };
-          return fn();
-        }
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // The function captures 'a', so it must NOT be merged with 'a = 1' in the same statement.
-      // In Lua, RHS are evaluated left-to-right BEFORE binding, so `a` in the closure would be nil.
-      // Must have separate local statements.
-      expect(lua).not.toContain("local a, fn");
-      expect(lua).toContain("local a = 1");
-      expect(lua).toContain("local function fn()");
+    it.each([
+      {
+        name: "does NOT merge function that captures upvalue from current run",
+        source: `
+          function f(): number {
+            const a = 1;
+            const fn = function() { return a; };
+            return fn();
+          }
+        `,
+        merged: false,
+        assertExtra: (lua: string) => {
+          expect(lua).toContain("local a = 1");
+          expect(lua).toContain("local function fn()");
+        },
+      },
+      {
+        name: "merges function with NO upvalue capture from run",
+        source: `
+          function f(): number {
+            const a = 1;
+            const fn = function() { return 2; };
+            const b = 3;
+            return fn() + a + b;
+          }
+        `,
+        merged: true,
+        assertExtra: (lua: string) => {
+          expect(lua).toContain("local a, fn, b");
+        },
+      },
+      {
+        name: "merges function that captures external variable (not from run)",
+        source: `
+          let global_var = 10;
+          function f(): number {
+            const a = 1;
+            const fn = function() { return global_var; };
+            return fn() + a;
+          }
+        `,
+        merged: true,
+      },
+      {
+        name: "merges function when upvalue is shadowed by function parameter",
+        source: `
+          function f(): number {
+            const a = 1;
+            const fn = function(a: number) { return a; };
+            return fn(2) + a;
+          }
+        `,
+        merged: true,
+      },
+      {
+        name: "merges function when upvalue is shadowed by local variable",
+        source: `
+          function f(): number {
+            const a = 1;
+            const fn = function() {
+              const a = 2;
+              return a;
+            };
+            return fn() + a;
+          }
+        `,
+        merged: true,
+      },
+    ])("$name", ({ source, merged, assertExtra }) => {
+      const lua = expectTrackedPairMerge(source, merged);
+      assertExtra?.(lua);
     });
 
     it("does NOT merge function with nested capture of upvalue from run", () => {
-      const code = `
+      const lua = normalizeLua(
+        compile(`
         function f(): number {
           const a = 1;
           const t = { fn: function() { return a; } };
           return t.fn();
         }
-      `;
+      `),
+      );
 
-      const lua = normalizeLua(compile(code));
-
-      // The nested function in the table captures 'a', so the table constructor
-      // references 'a'. Must NOT merge with 'a = 1'.
       expect(lua).not.toContain("local a, t");
       expect(lua).toContain("local a = 1");
       expect(lua).toContain("local t = {");
-    });
-
-    it("merges function with NO upvalue capture from run", () => {
-      const code = `
-        function f(): number {
-          const a = 1;
-          const fn = function() { return 2; };
-          const b = 3;
-          return fn() + a + b;
-        }
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // The function does NOT capture 'a' or 'b', so it CAN be merged.
-      expect(lua).toContain("local a, fn, b");
-    });
-
-    it("merges function that captures external variable (not from run)", () => {
-      const code = `
-        let global_var = 10;
-        function f(): number {
-          const a = 1;
-          const fn = function() { return global_var; };
-          return fn() + a;
-        }
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // The function captures global_var (not in the current run), so it CAN be merged with 'a'.
-      expect(lua).toContain("local a, fn");
-    });
-
-    it("merges function when upvalue is shadowed by function parameter", () => {
-      const code = `
-        function f(): number {
-          const a = 1;
-          const fn = function(a: number) { return a; };
-          return fn(2) + a;
-        }
-      `;
-      const lua = normalizeLua(compile(code));
-      // The function parameter 'a' shadows the outer 'a'. It does NOT capture the outer 'a'.
-      expect(lua).toContain("local a, fn");
-    });
-
-    it("merges function when upvalue is shadowed by local variable", () => {
-      const code = `
-        function f(): number {
-          const a = 1;
-          const fn = function() { 
-            const a = 2; 
-            return a; 
-          };
-          return fn() + a;
-        }
-      `;
-      const lua = normalizeLua(compile(code));
-      // The local 'a' shadows the outer 'a'. It does NOT capture the outer 'a'.
-      expect(lua).toContain("local a, fn");
     });
   });
 
@@ -419,6 +430,47 @@ describe("merge-locals", () => {
       expect(lua).not.toContain("local f_var, fn6");
       expect(lua).not.toContain("local g, fn7");
       expect(lua).not.toContain("local h, fn8");
+    });
+
+    it("detects upvalue capture in method-call arguments and computed indexes", () => {
+      const code = `
+        declare const receiver: { run(value: number): number };
+        declare const values: number[];
+        function f(): number {
+          const a = 1;
+          const fn = function(cond: boolean) {
+            const left = receiver.run(a);
+            const right = cond ? values[a] : 0;
+            return left + right;
+          };
+          return fn(true);
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("local a, fn");
+      expect(lua).toContain("receiver:run(a)");
+      expect(lua).toContain("values[a + 1]");
+    });
+
+    it("allows merging when a for-in loop shadows the candidate name inside the closure body", () => {
+      const code = `
+        function f(): number {
+          const a = 1;
+          const fn = function(): number {
+            for (const a in { keep: 1 }) {
+              return 2;
+            }
+            return 3;
+          };
+          return fn() + a;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("local a, fn");
     });
   });
 });
@@ -1310,6 +1362,350 @@ describe("merge-locals uncovered branches", () => {
       const lua = normalizeLua(compile(code));
 
       expect(lua).toContain("local a, fn");
+    });
+  });
+
+  describe("remaining control-flow and expression scanners", () => {
+    it("blocks merge when a repeat-until condition references a tracked name", () => {
+      const code = `
+        function f() {
+          const a = 1;
+          const fn = function() {
+            do {
+              const x = 0;
+            } while (a > 0);
+          };
+          fn();
+          return a;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("local a, fn");
+    });
+
+    it("blocks merge when numeric-for limit or step references a tracked name", () => {
+      const code = `
+        function f() {
+          const a = 2;
+          const fn = function() {
+            for (let i = 0; i < a * 3; i += a) {
+              const x = i;
+            }
+          };
+          fn();
+          return a;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("local a, fn");
+    });
+
+    it("blocks merge when a table index uses a tracked name as the index", () => {
+      const code = `
+        function f(values: number[]) {
+          const a = 1;
+          const fn = function() {
+            return values[a];
+          };
+          return fn() + a;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("local a, fn");
+    });
+
+    it("blocks merge when a parenthesized tracked name is captured", () => {
+      const code = `
+        function f() {
+          const a = 1;
+          const fn = function() {
+            return (a);
+          };
+          return fn();
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("local a, fn");
+    });
+
+    it("blocks merge when a conditional expression captures a tracked name in the false branch", () => {
+      const code = `
+        function f(flag: boolean) {
+          const a = 1;
+          const fn = function() {
+            return flag ? 0 : a;
+          };
+          return fn() + a;
+        }
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("local a, fn");
+    });
+  });
+
+  describe("public visitor coverage", () => {
+    it("falls back to the transformed node when the source-file visitor does not receive a Lua file", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+      const sourceFile = ts.createSourceFile(
+        "merge-locals.ts",
+        "foo();",
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      const fallbackStatement = tstl.createExpressionStatement(tstl.createIdentifier("fallback"));
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile,
+        {
+          superTransformNode: () => fallbackStatement,
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(tstl.isExpressionStatement(result as unknown as tstl.Statement)).toBe(true);
+    });
+  });
+
+  describe("raw Lua visitor coverage", () => {
+    function runSourceFileVisitor(node: tstl.Node): tstl.Node {
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+
+      return Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => node,
+        } as unknown as tstl.TransformationContext,
+      ]);
+    }
+
+    function extractInnerBody(file: tstl.File): tstl.Statement[] {
+      const outerDecl = file.statements[0] as tstl.VariableDeclarationStatement;
+      const outerFn = outerDecl.right?.[0] as tstl.FunctionExpression;
+      return outerFn.body.statements;
+    }
+    function expectRawTrackedPair(options: {
+      bodyStatements: tstl.Statement[];
+      merged: boolean;
+      params?: tstl.Identifier[];
+    }): tstl.Statement[] {
+      const innerBody = tstl.createBlock([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("a")],
+          [tstl.createNumericLiteral(1)],
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("fn")],
+          [
+            tstl.createFunctionExpression(
+              tstl.createBlock(options.bodyStatements),
+              options.params ?? [],
+            ),
+          ],
+        ),
+      ]);
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("outer")],
+          [tstl.createFunctionExpression(innerBody, [])],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const statements = extractInnerBody(transformed);
+
+      if (options.merged) {
+        const merged = statements[0] as tstl.VariableDeclarationStatement;
+        expect(statements).toHaveLength(1);
+        expect(merged.left).toHaveLength(2);
+        expect((merged.left[0] as tstl.Identifier).text).toBe("a");
+        expect((merged.left[1] as tstl.Identifier).text).toBe("fn");
+      } else {
+        expect((statements[0] as tstl.VariableDeclarationStatement).left).toHaveLength(1);
+        expect((statements[1] as tstl.VariableDeclarationStatement).left).toHaveLength(1);
+      }
+
+      return statements;
+    }
+
+    it.each([
+      {
+        name: "does not merge when a raw function body captures a tracked name through a parenthesized expression",
+        merged: false,
+        bodyStatements: [
+          tstl.createReturnStatement([
+            tstl.createParenthesizedExpression(tstl.createIdentifier("a")),
+          ]),
+        ],
+      },
+      {
+        name: "does not merge when a raw function body captures a tracked name through a conditional expression",
+        merged: false,
+        bodyStatements: [
+          tstl.createReturnStatement([
+            tstl.createConditionalExpression(
+              tstl.createBooleanLiteral(true),
+              tstl.createNumericLiteral(0),
+              tstl.createIdentifier("a"),
+            ),
+          ]),
+        ],
+      },
+      {
+        name: "does not merge when a raw if else-block captures a tracked name",
+        merged: false,
+        bodyStatements: [
+          tstl.createIfStatement(
+            tstl.createBooleanLiteral(true),
+            tstl.createBlock([tstl.createReturnStatement([tstl.createNumericLiteral(0)])]),
+            tstl.createBlock([tstl.createReturnStatement([tstl.createIdentifier("a")])]),
+          ),
+        ],
+      },
+      {
+        name: "does not merge when a raw numeric-for step expression captures a tracked name",
+        merged: false,
+        bodyStatements: [
+          tstl.createForStatement(
+            tstl.createBlock([]),
+            tstl.createIdentifier("i"),
+            tstl.createNumericLiteral(0),
+            tstl.createNumericLiteral(5),
+            tstl.createIdentifier("a"),
+          ),
+        ],
+      },
+      {
+        name: "does not merge when a raw numeric-for initializer captures a tracked name",
+        merged: false,
+        bodyStatements: [
+          tstl.createForStatement(
+            tstl.createBlock([]),
+            tstl.createIdentifier("i"),
+            tstl.createIdentifier("a"),
+            tstl.createNumericLiteral(5),
+            tstl.createNumericLiteral(1),
+          ),
+        ],
+      },
+      {
+        name: "merges when a raw function parameter shadows the tracked name",
+        merged: true,
+        bodyStatements: [tstl.createReturnStatement([tstl.createIdentifier("a")])],
+        params: [tstl.createIdentifier("a")],
+      },
+      {
+        name: "merges when a raw for-in loop shadows the tracked name for the whole body",
+        merged: true,
+        bodyStatements: [
+          tstl.createForInStatement(
+            tstl.createBlock([tstl.createReturnStatement([tstl.createIdentifier("a")])]),
+            [tstl.createIdentifier("a")],
+            [tstl.createIdentifier("iterable")],
+          ),
+        ],
+      },
+      {
+        name: "does not merge when raw repeat and numeric-for constructs reference a tracked name",
+        merged: false,
+        bodyStatements: [
+          tstl.createRepeatStatement(tstl.createBlock([]), tstl.createIdentifier("a")),
+          tstl.createForStatement(
+            tstl.createBlock([]),
+            tstl.createIdentifier("i"),
+            tstl.createNumericLiteral(0),
+            tstl.createIdentifier("a"),
+            tstl.createIdentifier("a"),
+          ),
+        ],
+      },
+    ])("$name", ({ bodyStatements, merged, params }) => {
+      expectRawTrackedPair({ bodyStatements, merged, params });
+    });
+
+    it("does not merge when a raw method call uses the tracked name as its prefix", () => {
+      const innerBody = tstl.createBlock([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("obj")],
+          [tstl.createTableExpression([])],
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("fn")],
+          [
+            tstl.createFunctionExpression(
+              tstl.createBlock([
+                tstl.createExpressionStatement(
+                  tstl.createMethodCallExpression(
+                    tstl.createIdentifier("obj"),
+                    tstl.createIdentifier("push"),
+                    [tstl.createNumericLiteral(1)],
+                  ),
+                ),
+              ]),
+              [],
+            ),
+          ],
+        ),
+      ]);
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("outer")],
+          [tstl.createFunctionExpression(innerBody, [])],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const statements = extractInnerBody(transformed);
+
+      expect((statements[0] as tstl.VariableDeclarationStatement).left).toHaveLength(1);
+      expect((statements[1] as tstl.VariableDeclarationStatement).left).toHaveLength(1);
+    });
+
+    it("does not merge a raw declaration that has multiple RHS expressions", () => {
+      const innerBody = tstl.createBlock([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("a")],
+          [tstl.createNumericLiteral(1)],
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("b")],
+          [tstl.createNumericLiteral(2), tstl.createNumericLiteral(3)],
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("c")],
+          [tstl.createNumericLiteral(4)],
+        ),
+      ]);
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("outer")],
+          [tstl.createFunctionExpression(innerBody, [])],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const statements = extractInnerBody(transformed) as tstl.VariableDeclarationStatement[];
+
+      expect(statements).toHaveLength(3);
+      expect(statements[0].left).toHaveLength(1);
+      expect(statements[1].right).toHaveLength(2);
+      expect(statements[2].left).toHaveLength(1);
     });
   });
 });

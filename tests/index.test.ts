@@ -18,6 +18,10 @@ describe("default export", () => {
     // factory(pluginOption). A pre-instantiated object bypasses options entirely.
     expect(typeof pluginFactory).toBe("function");
   });
+
+  it("constructs an OptimizePlugin instance", () => {
+    expect(pluginFactory({ target: "puc" })).toBeInstanceOf(OptimizePlugin);
+  });
 });
 
 describe("plugin infrastructure", () => {
@@ -329,6 +333,83 @@ describe("SourceFile visitor fallback", () => {
       vi.resetModules();
     }
   });
+
+  it("passes through existing SourceFile array results without re-wrapping them", async () => {
+    vi.resetModules();
+
+    vi.doMock("../src/rules/conditional-compilation", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile) => [tstl.createDoStatement([], node)],
+      }),
+    }));
+
+    vi.doMock("../src/rules/constant-folding", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.SourceFile]: (
+          node: ts.SourceFile,
+          context: {
+            superTransformNode(node: ts.Node): unknown;
+            usedLuaLibFeatures: Set<tstl.LuaLibFeature>;
+          },
+        ) => {
+          const statements = context.superTransformNode(node);
+          if (!Array.isArray(statements)) {
+            throw new Error("expected statement array");
+          }
+          return tstl.createFile(statements, context.usedLuaLibFeatures, "", node);
+        },
+      }),
+    }));
+
+    try {
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index.js");
+      const plugin = new MockedOptimizePlugin({
+        rules: {
+          "conditional-compilation": true,
+          "constant-folding": true,
+          "remove-empty-branch": false,
+          "math-intrinsics": false,
+          "loop-rebase": false,
+          inline: false,
+          "dead-local": false,
+          "merge-locals": false,
+          localizer: false,
+          "debug-strip": false,
+        },
+      });
+
+      Reflect.set(plugin, "checker", {});
+      const buildVisitors = Reflect.get(plugin, "buildVisitors");
+      if (typeof buildVisitors !== "function") {
+        throw new Error("missing buildVisitors");
+      }
+      Reflect.apply(buildVisitors, plugin, []);
+
+      const sourceVisitor = plugin.visitors[ts.SyntaxKind.SourceFile];
+      if (typeof sourceVisitor !== "function") {
+        throw new Error("missing SourceFile visitor");
+      }
+
+      const sourceFile = ts.createSourceFile("main.ts", "const x = 1;", ts.ScriptTarget.ESNext);
+      const result = Reflect.apply(sourceVisitor, undefined, [
+        sourceFile,
+        {
+          superTransformNode: () => tstl.createFile([], new Set(), "", sourceFile),
+          superTransformStatements: () => [],
+          usedLuaLibFeatures: new Set<tstl.LuaLibFeature>(),
+        },
+      ]);
+
+      expect(result).toMatchObject({
+        kind: tstl.SyntaxKind.File,
+        statements: [expect.objectContaining({ kind: tstl.SyntaxKind.DoStatement })],
+      });
+    } finally {
+      vi.doUnmock("../src/rules/conditional-compilation");
+      vi.doUnmock("../src/rules/constant-folding");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("visitor metadata", () => {
@@ -380,6 +461,101 @@ describe("visitor metadata", () => {
     } finally {
       vi.doUnmock("../src/rules/conditional-compilation");
       vi.doUnmock("../src/rules/constant-folding");
+      vi.resetModules();
+    }
+  });
+
+  it("preserves the higher priority when both merged visitors provide one", async () => {
+    vi.resetModules();
+
+    vi.doMock("../src/rules/conditional-compilation", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.CallExpression]: {
+          priority: 3,
+          transform: () => undefined,
+        },
+      }),
+    }));
+
+    vi.doMock("../src/rules/constant-folding", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.CallExpression]: {
+          priority: 9,
+          transform: () => undefined,
+        },
+      }),
+    }));
+
+    try {
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index.js");
+      const plugin = new MockedOptimizePlugin({
+        rules: {
+          "conditional-compilation": true,
+          "constant-folding": true,
+          "remove-empty-branch": false,
+          "math-intrinsics": false,
+          "loop-rebase": false,
+          inline: false,
+          "dead-local": false,
+          "merge-locals": false,
+          localizer: false,
+          "debug-strip": false,
+        },
+      });
+
+      Reflect.set(plugin, "checker", {});
+      const buildVisitors = Reflect.get(plugin, "buildVisitors");
+      if (typeof buildVisitors !== "function") {
+        throw new Error("missing buildVisitors");
+      }
+      Reflect.apply(buildVisitors, plugin, []);
+
+      expect(plugin.visitors[ts.SyntaxKind.CallExpression]).toMatchObject({
+        priority: 9,
+      });
+    } finally {
+      vi.doUnmock("../src/rules/conditional-compilation");
+      vi.doUnmock("../src/rules/constant-folding");
+      vi.resetModules();
+    }
+  });
+
+  it("skips undefined visitors returned by a rule factory", async () => {
+    vi.resetModules();
+
+    vi.doMock("../src/rules/conditional-compilation", () => ({
+      createVisitors: () => ({
+        [ts.SyntaxKind.CallExpression]: undefined,
+      }),
+    }));
+
+    try {
+      const { OptimizePlugin: MockedOptimizePlugin } = await import("../src/index.js");
+      const plugin = new MockedOptimizePlugin({
+        rules: {
+          "conditional-compilation": true,
+          "constant-folding": false,
+          "remove-empty-branch": false,
+          "math-intrinsics": false,
+          "loop-rebase": false,
+          inline: false,
+          "dead-local": false,
+          "merge-locals": false,
+          localizer: false,
+          "debug-strip": false,
+        },
+      });
+
+      Reflect.set(plugin, "checker", {});
+      const buildVisitors = Reflect.get(plugin, "buildVisitors");
+      if (typeof buildVisitors !== "function") {
+        throw new Error("missing buildVisitors");
+      }
+      Reflect.apply(buildVisitors, plugin, []);
+
+      expect(plugin.visitors[ts.SyntaxKind.CallExpression]).toBeUndefined();
+    } finally {
+      vi.doUnmock("../src/rules/conditional-compilation");
       vi.resetModules();
     }
   });

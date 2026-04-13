@@ -1,5 +1,8 @@
 import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors, mapLuaStatements } from "../../src/rules/inline";
 import {
   compile,
   compileMultiFileWithDiagnostics,
@@ -188,6 +191,81 @@ describe("inline", () => {
       expect(lua).toContain("do");
       expect(lua).toMatch(/local result = ____inline_result_\d+/);
     });
+
+    it.each([
+      {
+        name: "switch case block",
+        body: `
+          switch (x) {
+            case 0: {
+              const result = 1;
+              break;
+            }
+          }
+        `,
+      },
+      {
+        name: "try/finally block",
+        body: `
+          try {
+            const result = x;
+          } finally {
+            const cleanup = x + 1;
+          }
+        `,
+      },
+      {
+        name: "catch block",
+        body: `
+          try {
+            const value = x;
+          } catch {
+            const result = x + 1;
+          }
+        `,
+      },
+      {
+        name: "finally block",
+        body: `
+          try {
+            const value = x;
+          } finally {
+            const result = x + 1;
+          }
+        `,
+      },
+      {
+        name: "while loop body",
+        body: `
+          let done = false;
+          while (!done) {
+            const result = x;
+            done = true;
+          }
+        `,
+      },
+      {
+        name: "for-of loop body",
+        body: `
+          for (const entry of [x]) {
+            const result = entry;
+          }
+        `,
+      },
+    ])("uses a temp when $name declares the outer binding name", ({ body }) => {
+      const lua = compile(`
+        /** @inline */
+        function fn(x: number): number {
+          ${body}
+          return x + 1;
+        }
+        declare const n: number;
+        const result = fn(n);
+      `);
+
+      expect(lua).toContain("do");
+      expect(lua).toMatch(/local result = ____inline_result_\d+/);
+    });
   });
 
   describe("switch with break in body", () => {
@@ -236,16 +314,21 @@ describe("inline", () => {
 
   describe("warnings and rejections", () => {
     it.each([
-      { body: "if (x > 0) return; print(x);", name: "early return" },
-      { body: "// @ts-ignore\nbreak;", name: "break" },
-      { body: "// @ts-ignore\ncontinue;", name: "continue" },
-    ])("rejects bodies with $name", ({ body }) => {
-      const { diagnostics } = compileWithDiagnostics(`
+      { body: "if (x > 0) return; print(x);", name: "early return", skipLuaCheck: false },
+      // @ts-expect-error forces invalid TS through; TSTL emits bare `break` in a function body
+      // (outside any loop), which is invalid Lua — that is unavoidable and expected.
+      { body: "// @ts-ignore\nbreak;", name: "break", skipLuaCheck: true },
+      { body: "// @ts-ignore\ncontinue;", name: "continue", skipLuaCheck: true },
+    ])("rejects bodies with $name", ({ body, skipLuaCheck }) => {
+      const { diagnostics } = compileWithDiagnostics(
+        `
           declare function print(...args: any[]): void;
           /** @inline */
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
-        `);
+        `,
+        { skipLuaCheck },
+      );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("@inline ignored");
     });
@@ -272,6 +355,54 @@ describe("inline", () => {
       `);
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("cannot be inlined at expression position");
+    });
+
+    it.each([
+      {
+        name: "argument count mismatch",
+        source: `
+          /** @inline */
+          function add(a: number, b: number) { return a + b; }
+          // @ts-ignore exercising plugin validation after type-check suppression
+          add(1);
+        `,
+        expected: "argument count does not match parameter count",
+      },
+      {
+        name: "nested declaration",
+        source: `
+          function outer(value: number) {
+            /** @inline */
+            function inner(x: number) { return x * 2; }
+            return inner(value);
+          }
+        `,
+        expected: "function must be declared at module scope",
+      },
+      {
+        name: "recursive expression body",
+        source: `
+          /** @inline */
+          function recurse(x: number): number { return recurse(x); }
+          recurse(1);
+        `,
+        expected: "recursive functions cannot be inlined",
+      },
+      {
+        name: "parameter write in expression body",
+        source: `
+          /** @inline */
+          const bump = (x: number) => ++x;
+          bump(1);
+        `,
+        expected: "parameter is written inside body",
+      },
+    ])("rejects $name", ({ expected, source }) => {
+      const { diagnostics } = compileWithDiagnostics(source);
+
+      expect(
+        diagnostics.some((diagnostic) => String(diagnostic.messageText).includes(expected)),
+      ).toBe(true);
     });
 
     it("warns on side-effect duplication", () => {
@@ -330,6 +461,27 @@ describe("inline", () => {
       });
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("non-parameter");
+    });
+
+    it("inlines self-contained arrow multi-return functions", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          /** @inline */
+          export const swap = (a: number, b: number): LuaMultiReturn<[number, number]> =>
+            $multi(b, a);
+        `,
+        "main.ts": `
+          import { swap } from "./utils";
+
+          declare const x: number;
+          declare const y: number;
+          const [p, q] = swap(x, y);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("swap(");
+      expect(lua).toMatch(/local p, q = .*____inline_result_/);
     });
   });
 
@@ -428,6 +580,45 @@ describe("inline", () => {
       expect(lua).not.toContain("swap(");
       expect(lua).toMatch(/return (y|____inline_arg_1), (x|____inline_arg_0)/);
     });
+
+    it("inlines block-bodied arrow multi-return functions at return sites", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => {
+          const tmp = a;
+          return $multi(b, tmp);
+        };
+
+        function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
+          return swap(x, y);
+        }
+      `);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("swap(");
+      expect(lua).toMatch(/return (y|____inline_arg_1), (x|tmp|____inline_arg_0)/);
+    });
+
+    it("preserves argument evaluation order for block-bodied arrow destructuring sites", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        declare function s1(): number;
+        declare function s2(): number;
+
+        /** @inline */
+        const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => {
+          const tmp = a;
+          return $multi(b, tmp);
+        };
+
+        const [p, q] = swap(s1(), s2());
+      `);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).not.toContain("swap(");
+      expect(lua).toContain("____inline_arg_0 = s1()");
+      expect(lua).toContain("____inline_arg_1 = s2()");
+      expect(lua).toMatch(/local p, q = .*____inline_result_/);
+    });
   });
 
   describe("strict mode", () => {
@@ -492,6 +683,134 @@ describe("inline", () => {
       // Without the definition, ____exports.double would reference an undefined local.
       expect(lua).toContain("function double");
     });
+  });
+});
+
+describe("inline public API coverage", () => {
+  it("maps method-call, conditional, for-loop, and return Lua nodes", () => {
+    const statements = mapLuaStatements(
+      [
+        tstl.createExpressionStatement(
+          tstl.createMethodCallExpression(
+            tstl.createIdentifier("receiver"),
+            tstl.createIdentifier("run"),
+            [tstl.createIdentifier("param")],
+          ),
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("result")],
+          [
+            tstl.createConditionalExpression(
+              tstl.createIdentifier("param"),
+              tstl.createNumericLiteral(1),
+              tstl.createNumericLiteral(2),
+            ),
+          ],
+        ),
+        tstl.createForStatement(
+          tstl.createBlock([tstl.createReturnStatement([tstl.createIdentifier("param")])]),
+          tstl.createIdentifier("i"),
+          tstl.createNumericLiteral(1),
+          tstl.createNumericLiteral(3),
+        ),
+      ],
+      (expr) =>
+        tstl.isIdentifier(expr) && expr.text === "param"
+          ? tstl.createIdentifier("mapped")
+          : undefined,
+    );
+
+    const methodCall = (statements[0] as tstl.ExpressionStatement)
+      .expression as tstl.MethodCallExpression;
+    const conditional = (statements[1] as tstl.VariableDeclarationStatement)
+      .right?.[0] as tstl.ConditionalExpression;
+    const loopBody = (statements[2] as tstl.ForStatement).body.statements;
+    const loopReturn = loopBody[0] as tstl.ReturnStatement;
+    const methodParam = methodCall.params[0];
+    const loopExpression = loopReturn.expressions[0];
+    if (!methodParam || !loopExpression) {
+      throw new Error("expected mapped inline nodes");
+    }
+
+    expect(tstl.isIdentifier(methodParam)).toBe(true);
+    expect((methodParam as tstl.Identifier).text).toBe("mapped");
+    expect(tstl.isIdentifier(conditional.condition)).toBe(true);
+    expect((conditional.condition as tstl.Identifier).text).toBe("mapped");
+    expect(tstl.isIdentifier(loopExpression)).toBe(true);
+    expect((loopExpression as tstl.Identifier).text).toBe("mapped");
+  });
+
+  it("returns no visitors when inline is disabled", () => {
+    const visitors = Reflect.apply(createVisitors, undefined, [
+      {} as ts.TypeChecker,
+      { rules: { inline: false } },
+    ]);
+
+    expect(visitors).toStrictEqual({});
+  });
+
+  it("ignores type-only references when checking cross-module free variables", () => {
+    const { diagnostics, lua } = compileMultiFileWithDiagnostics(
+      {
+        "shared.ts": `
+          export type Shared = { value: number };
+          /** @inline */
+          export function pickValue(input: Shared) {
+            return input.value;
+          }
+        `,
+        "main.ts": `
+          import { pickValue, type Shared } from "./shared";
+          declare const shared: Shared;
+          export const result = pickValue(shared);
+        `,
+      },
+      {},
+    );
+
+    expect(diagnostics).toHaveLength(0);
+    expect(lua).toContain("shared.value");
+  });
+
+  it("returns undefined when direct visitors receive the wrong node kinds", () => {
+    const visitors = Reflect.apply(createVisitors, undefined, [
+      {} as ts.TypeChecker,
+      { rules: { inline: true } },
+    ]);
+    const context = {} as tstl.TransformationContext;
+    const sourceFile = ts.createSourceFile("inline.ts", "foo();", ts.ScriptTarget.Latest, true);
+    const expressionStatement = sourceFile.statements[0] as ts.ExpressionStatement;
+    const callNode = expressionStatement.expression as ts.CallExpression;
+
+    expect(
+      Reflect.apply(Reflect.get(visitors, ts.SyntaxKind.CallExpression), undefined, [
+        expressionStatement,
+        context,
+      ]),
+    ).toBeUndefined();
+    expect(
+      Reflect.apply(Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement), undefined, [
+        callNode,
+        context,
+      ]),
+    ).toBeUndefined();
+    expect(
+      Reflect.apply(Reflect.get(visitors, ts.SyntaxKind.VariableStatement), undefined, [
+        sourceFile,
+        context,
+      ]),
+    ).toBeUndefined();
+    expect(
+      Reflect.apply(Reflect.get(visitors, ts.SyntaxKind.ReturnStatement), undefined, [
+        expressionStatement,
+        context,
+      ]),
+    ).toBeUndefined();
+    expect(
+      Reflect.apply(Reflect.get(visitors, ts.SyntaxKind.FunctionDeclaration), undefined, [
+        expressionStatement,
+      ]),
+    ).toBeUndefined();
   });
 });
 
@@ -634,7 +953,8 @@ describe("inline coverage", () => {
 
 describe("inline uncovered branches", () => {
   describe("Expression-kind inline at statement position (handleExpressionStatement)", () => {
-    it("wraps inlined expression in createExpressionStatement when target kind is expression", () => {
+    // Pure expression-body inline at void site → drop entirely (no side effects)
+    it("drops pure expression-body call at statement position", () => {
       const code = `
         declare const x: number;
         declare const y: number;
@@ -644,18 +964,85 @@ describe("inline uncovered branches", () => {
           return a + b;
         }
 
-        function test() {
-          add(x, y);
-        }
+        add(x, y);
       `;
 
       const lua = normalizeLua(compile(code));
 
-      // When the expression inline is at statement position, it should be wrapped
-      // in an expression statement. The call should be inlined (not remain as "add()").
-      expect(lua).not.toContain("add(x, y)");
-      // Should contain the inlined expression (x + y, not the call)
-      expect(lua).toContain("x + y");
+      // The call add(x, y) should be inlined
+      expect(lua).not.toContain("add(");
+      // Pure expression x + y at void site should be dropped entirely
+      expect(lua).not.toContain("x + y");
+      // No invalid bare parenthesized expression statement
+      expect(lua).not.toContain("(x + y)");
+    });
+
+    // Side-effectful expression-body calls preserve side effects with local _ =
+    it.each([
+      {
+        name: "side-effectful body",
+        code: `
+          declare function sideEffect(): number;
+
+          /** @inline */
+          function foo(): number {
+            return sideEffect();
+          }
+
+          foo();
+        `,
+        shouldContain: "sideEffect()",
+        wrapperName: "foo",
+      },
+      {
+        name: "side-effectful argument",
+        code: `
+          declare function impure(): number;
+
+          /** @inline */
+          function double(n: number): number {
+            return n * 2;
+          }
+
+          double(impure());
+        `,
+        shouldContain: "impure()",
+        wrapperName: "double",
+      },
+      {
+        name: "both side-effectful",
+        code: `
+          declare function f(x: number): number;
+          declare function g(): number;
+
+          /** @inline */
+          function compute(n: number): number {
+            return f(n);
+          }
+
+          compute(g());
+        `,
+        shouldContain: ["f(", "g()"],
+        wrapperName: "compute",
+      },
+    ])("preserves side effect from expression-body call with $name at statement position", ({
+      code,
+      shouldContain,
+      wrapperName,
+    }) => {
+      const lua = normalizeLua(compile(code));
+      const patterns = Array.isArray(shouldContain) ? shouldContain : [shouldContain];
+
+      // All side-effect patterns should appear
+      patterns.forEach((pattern) => {
+        expect(lua).toContain(pattern);
+      });
+
+      // The inline wrapper should not appear
+      expect(lua).not.toContain(`${wrapperName}(`);
+
+      // Should use local _ = pattern to preserve side effect
+      expect(lua).toContain("local _ =");
     });
   });
 
@@ -1340,7 +1727,8 @@ describe("inline uncovered branches", () => {
       expect(lua).not.toContain("add(");
     });
 
-    it("wraps expression-kind function result when inlined at statement position", () => {
+    // Pure expression-body inline at void site → drop entirely (no side effects)
+    it("drops pure expression-body call at top-level statement position", () => {
       const code = `
         declare const x: number;
 
@@ -1354,8 +1742,12 @@ describe("inline uncovered branches", () => {
 
       const lua = normalizeLua(compile(code));
 
-      // Expression at statement position gets wrapped
-      expect(lua).toContain("x * x");
+      // The call square(x) should be inlined
+      expect(lua).not.toContain("square(");
+      // Pure expression x * x at void site should be dropped entirely
+      expect(lua).not.toContain("x * x");
+      // No invalid bare parenthesized expression statement
+      expect(lua).not.toContain("(x * x)");
     });
 
     it("inlines arrow function assigned to const variable", () => {
@@ -1649,6 +2041,1399 @@ describe("inline uncovered branches", () => {
 
       // Call must be preserved
       expect(normalized).toContain("processValue(42)");
+    });
+  });
+
+  describe("additional control-flow rejection coverage", () => {
+    it.each([
+      {
+        name: "an else branch returns",
+        source: `
+          declare const value: number;
+
+          /** @inline */
+          function maybeLog(x: number): void {
+            if (x > 0) {
+              const y = x;
+            } else {
+              return;
+            }
+          }
+
+          maybeLog(value);
+        `,
+      },
+      {
+        name: "a while loop returns",
+        source: `
+          declare const value: number;
+
+          /** @inline */
+          function maybeLoop(x: number): void {
+            while (x > 0) {
+              return;
+            }
+          }
+
+          maybeLoop(value);
+        `,
+      },
+      {
+        name: "a numeric for loop returns",
+        source: `
+          declare const value: number;
+
+          /** @inline */
+          function maybeCount(x: number): void {
+            for (let i = 0; i < x; i++) {
+              return;
+            }
+          }
+
+          maybeCount(value);
+        `,
+      },
+      {
+        name: "a for-in loop returns",
+        source: `
+          declare const values: Record<string, number>;
+
+          /** @inline */
+          function maybeVisit(obj: Record<string, number>): void {
+            for (const key in obj) {
+              return;
+            }
+          }
+
+          maybeVisit(values);
+        `,
+      },
+      {
+        name: "a do-while loop returns",
+        source: `
+          declare const value: number;
+
+          /** @inline */
+          function maybeRetry(x: number): void {
+            do {
+              return;
+            } while (x > 0);
+          }
+
+          maybeRetry(value);
+        `,
+      },
+      {
+        name: "a switch clause returns",
+        source: `
+          declare const value: number;
+
+          /** @inline */
+          function maybeSwitch(x: number): void {
+            switch (x) {
+              case 1:
+                return;
+              default:
+                const y = x;
+            }
+          }
+
+          maybeSwitch(value);
+        `,
+      },
+      {
+        name: "a catch clause returns",
+        source: `
+          declare function run(): void;
+
+          /** @inline */
+          function maybeCatch(): void {
+            try {
+              run();
+            } catch {
+              return;
+            }
+          }
+
+          maybeCatch();
+        `,
+      },
+      {
+        name: "a try block returns",
+        source: `
+          declare function run(): void;
+
+          /** @inline */
+          function maybeTry(): void {
+            try {
+              run();
+              return;
+            } finally {
+              const _ = 1;
+            }
+          }
+
+          maybeTry();
+        `,
+      },
+      {
+        name: "a finally clause returns",
+        source: `
+          declare function run(): void;
+
+          /** @inline */
+          function maybeFinally(): void {
+            try {
+              run();
+            } finally {
+              return;
+            }
+          }
+
+          maybeFinally();
+        `,
+      },
+    ])("does not inline when $name", ({ source }) => {
+      const { diagnostics } = compileWithDiagnostics(source);
+
+      expect(diagnostics.some((d) => String(d.messageText).includes("early return in body"))).toBe(
+        true,
+      );
+    });
+  });
+
+  describe("additional variable and return inlining coverage", () => {
+    it("reports unsupported optional parameters from a variable-declaration call site", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function greet(name?: string): string {
+          return name || "fallback";
+        }
+
+        const result = greet();
+      `);
+
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("optional parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("reports unsupported default parameters from a return-site call", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function scale(value: number = 2): number {
+          return value * 2;
+        }
+
+        function test() {
+          return scale();
+        }
+      `);
+
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("default parameters are not supported"),
+        ),
+      ).toBe(true);
+    });
+
+    it("uses a temporary result name when an else branch declares the call-site binding name", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function choose(flag: boolean): number {
+          if (flag) {
+            const keep = 1;
+          } else {
+            const result = 2;
+          }
+          return 3;
+        }
+
+        const result = choose(true);
+      `),
+      );
+
+      expect(lua).toContain("____inline_result_");
+      expect(lua).toContain("local result =");
+    });
+
+    it("keeps a cross-module return-site call when the inline target closes over module state", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "utils.ts": `
+          export const factor = 2;
+
+          /** @inline */
+          export function multiply(value: number): number {
+            const result = value * factor;
+            return result;
+          }
+        `,
+        "main.ts": `
+          import { multiply } from "./utils";
+
+          export function test() {
+            return multiply(3);
+          }
+        `,
+      });
+
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes(
+            "cross-module function references non-parameter identifiers",
+          ),
+        ),
+      ).toBe(true);
+      expect(normalizeLua(lua)).toContain("return multiply(3)");
+    });
+  });
+
+  describe("additional destructuring rejection coverage", () => {
+    it("falls back to the call for object destructuring with a rest element", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getObj(): { a: number; b: number } {
+          const obj = { a: 1, b: 2 };
+          return obj;
+        }
+
+        function test() {
+          const { a, ...rest } = getObj();
+          return a + rest.b;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getObj()");
+    });
+
+    it("falls back to the call for object destructuring with a default initializer", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getObj(): { a?: number } {
+          const obj = {};
+          return obj;
+        }
+
+        function test() {
+          const { a = 1 } = getObj();
+          return a;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getObj()");
+    });
+
+    it("falls back to the call for object destructuring with a string-literal property name", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getObj(): { value: number } {
+          const obj = { value: 1 };
+          return obj;
+        }
+
+        function test() {
+          const { "value": localValue } = getObj();
+          return localValue;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getObj()");
+    });
+
+    it("falls back to the call for array destructuring with an omitted element", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getArr(): [number, number] {
+          const values: [number, number] = [1, 2];
+          return values;
+        }
+
+        function test() {
+          const [, second] = getArr();
+          return second;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getArr()");
+    });
+
+    it("falls back to the call for array destructuring with a rest element", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getArr(): number[] {
+          const values = [1, 2, 3];
+          return values;
+        }
+
+        function test() {
+          const [...rest] = getArr();
+          return rest.length;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getArr()");
+    });
+
+    it("falls back to the call for array destructuring with a nested binding pattern", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getArr(): Array<[number]> {
+          const values: Array<[number]> = [[1]];
+          return values;
+        }
+
+        function test() {
+          const [[first]] = getArr();
+          return first;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getArr()");
+    });
+
+    it("falls back to the call for array destructuring with a default initializer", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function getArr(): [number?] {
+          const values: [number?] = [];
+          return values;
+        }
+
+        function test() {
+          const [first = 1] = getArr();
+          return first;
+        }
+      `),
+      );
+
+      expect(lua).toContain("getArr()");
+    });
+  });
+
+  describe("direct visitor branch coverage", () => {
+    interface TestProgram {
+      checker: ts.TypeChecker;
+      getSourceFile(path: string): ts.SourceFile;
+    }
+
+    function createTestProgram(files: Record<string, string>): TestProgram {
+      const options: ts.CompilerOptions = {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ESNext,
+        strict: true,
+      };
+      const host = ts.createCompilerHost(options, true);
+
+      host.readFile = (fileName) => files[fileName] ?? ts.sys.readFile(fileName);
+      host.fileExists = (fileName) => files[fileName] !== undefined || ts.sys.fileExists(fileName);
+      host.getSourceFile = (fileName, languageVersion) => {
+        const text = host.readFile(fileName);
+        return text === undefined
+          ? undefined
+          : ts.createSourceFile(fileName, text, languageVersion, true);
+      };
+      host.writeFile = () => {};
+
+      const program = ts.createProgram(Object.keys(files), options, host);
+      return {
+        checker: program.getTypeChecker(),
+        getSourceFile: (path) => {
+          const sourceFile = program.getSourceFile(path);
+          if (!sourceFile) {
+            throw new Error(`Missing source file: ${path}`);
+          }
+          return sourceFile;
+        },
+      };
+    }
+
+    function createInlineVisitors(
+      files: Record<string, string>,
+      config: { rules: { inline: unknown }; strict?: boolean } = { rules: { inline: true } },
+    ): { visitors: tstl.Visitors; program: TestProgram } {
+      const program = createTestProgram(files);
+      const visitors = Reflect.apply(createVisitors, undefined, [program.checker, config]);
+      return { visitors, program };
+    }
+
+    function createDirectContext(
+      overrides: Partial<tstl.TransformationContext> = {},
+    ): tstl.TransformationContext {
+      let nextSymbolId = 9500;
+      return {
+        symbolIdMaps: new Map<ts.Symbol, tstl.SymbolId>(),
+        diagnostics: [] as ts.Diagnostic[],
+        nextSymbolId: () => nextSymbolId++,
+        pushScope: () => {},
+        popScope: () => {},
+        transformExpression: () => tstl.createIdentifier("mapped"),
+        transformStatements: () => [],
+        ...overrides,
+      } as unknown as tstl.TransformationContext;
+    }
+
+    function toSymbolId(value: number): tstl.SymbolId {
+      return value as tstl.SymbolId;
+    }
+
+    function isReturnStatementNode(
+      node: ts.Statement | readonly ts.Statement[],
+    ): node is ts.ReturnStatement {
+      return !Array.isArray(node) && ts.isReturnStatement(node as unknown as ts.Node);
+    }
+
+    type StatementVisitorKind = ts.SyntaxKind.ExpressionStatement | ts.SyntaxKind.VariableStatement;
+
+    function expectDiagnosticFragment(
+      diagnostics: readonly ts.Diagnostic[],
+      fragment: string,
+    ): void {
+      expect(
+        diagnostics.some((diagnostic) => String(diagnostic.messageText).includes(fragment)),
+      ).toBe(true);
+    }
+
+    function runDirectStatementVisitor(options: {
+      files: Record<string, string>;
+      kind: StatementVisitorKind;
+      statementIndex: number;
+      context: tstl.TransformationContext;
+      sourcePath?: string;
+    }): unknown {
+      const { files, kind, statementIndex, context, sourcePath = "/main.ts" } = options;
+      const { visitors, program } = createInlineVisitors(files);
+      const sourceFile = program.getSourceFile(sourcePath);
+      const visitor = Reflect.get(visitors, kind) as (
+        node: ts.Node,
+        visitorContext: tstl.TransformationContext,
+      ) => unknown;
+      const statement = sourceFile.statements[statementIndex];
+      if (!statement) {
+        throw new Error(`Missing statement at index ${statementIndex}`);
+      }
+
+      return Reflect.apply(visitor, undefined, [statement, context]);
+    }
+
+    function runDirectReturnVisitor(options: {
+      files: Record<string, string>;
+      functionStatementIndex: number;
+      context: tstl.TransformationContext;
+      sourcePath?: string;
+    }): unknown {
+      const { files, functionStatementIndex, context, sourcePath = "/main.ts" } = options;
+      const { visitors, program } = createInlineVisitors(files);
+      const sourceFile = program.getSourceFile(sourcePath);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ReturnStatement) as (
+        node: ts.Node,
+        visitorContext: tstl.TransformationContext,
+      ) => unknown;
+      const runBody = (sourceFile.statements[functionStatementIndex] as ts.FunctionDeclaration)
+        .body;
+      if (!runBody) {
+        throw new Error("expected run body");
+      }
+
+      return Reflect.apply(visitor, undefined, [
+        runBody.statements[0] as ts.ReturnStatement,
+        context,
+      ]);
+    }
+
+    it("accepts inline config objects with per-rule strict overrides", () => {
+      const { visitors } = createInlineVisitors(
+        {
+          "/main.ts": `
+            /** @inline */
+            function double(value: number): number {
+              return value * 2;
+            }
+          `,
+        },
+        { rules: { inline: { strict: true } }, strict: false },
+      );
+
+      expect(Reflect.has(visitors, ts.SyntaxKind.CallExpression)).toBe(true);
+      expect(Reflect.has(visitors, ts.SyntaxKind.ReturnStatement)).toBe(true);
+    });
+
+    it("preserves inline destructured variable declarations when the binding name is not an identifier", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          declare const source: { fn: (value: number) => number };
+
+          /** @inline */
+          const { fn } = source;
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[1] as ts.VariableStatement,
+        {} as tstl.TransformationContext,
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("preserves inline-tagged variable call sites when the initializer is not a function", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          const maybeCallable: any = 1;
+
+          maybeCallable();
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+
+      const result = Reflect.apply(visitor, undefined, [
+        expressionStatement.expression,
+        createDirectContext(),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("leaves multi-declaration variable statements to the fallback visitor", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          function double(value: number): number {
+            return value * 2;
+          }
+
+          const result = double(2), keep = 1;
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[1] as ts.VariableStatement,
+        {} as tstl.TransformationContext,
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("preserves exported inline variable declarations found through export blocks", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          const double = (value: number) => value * 2;
+          export { double as doubled };
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[0] as ts.VariableStatement,
+        {} as tstl.TransformationContext,
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("erases an inline function declaration when all remaining call sites are fully inlined", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          function double(value: number): number {
+            return value * 2;
+          }
+
+          const result = double(2);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.FunctionDeclaration) as (
+        node: ts.Node,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[0] as ts.FunctionDeclaration,
+      ]);
+
+      expect(result).toStrictEqual([]);
+    });
+
+    it("preserves nested inline variable declarations outside module scope", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          function outer() {
+            /** @inline */
+            const double = (value: number) => value * 2;
+            return double(1);
+          }
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const outerBody = (sourceFile.statements[0] as ts.FunctionDeclaration).body;
+      if (!outerBody) {
+        throw new Error("expected outer function body");
+      }
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        outerBody.statements[0] as ts.VariableStatement,
+        createDirectContext(),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("preserves nested inline function declarations outside module scope", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          function outer() {
+            /** @inline */
+            function double(value: number): number {
+              return value * 2;
+            }
+            return double(1);
+          }
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const outerBody = (sourceFile.statements[0] as ts.FunctionDeclaration).body;
+      if (!outerBody) {
+        throw new Error("expected outer function body");
+      }
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.FunctionDeclaration) as (
+        node: ts.Node,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        outerBody.statements[0] as ts.FunctionDeclaration,
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("keeps an inline function declaration when it is referenced in a non-call position", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          function double(value: number): number {
+            return value * 2;
+          }
+
+          const alias = double;
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.FunctionDeclaration) as (
+        node: ts.Node,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[0] as ts.FunctionDeclaration,
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    describe("statement-position visitor diagnostics", () => {
+      it.each([
+        {
+          name: "expression-statement visitor rejects optional parameters",
+          kind: ts.SyntaxKind.ExpressionStatement as const,
+          source: `
+            /** @inline */
+            function greet(name?: string): void {}
+
+            greet();
+          `,
+          messageFragment: "optional parameters are not supported",
+        },
+        {
+          name: "expression-statement visitor rejects labeled statements",
+          kind: ts.SyntaxKind.ExpressionStatement as const,
+          source: `
+            /** @inline */
+            function run(flag: boolean): void {
+              loop: {
+                if (flag) {
+                  break loop;
+                }
+              }
+            }
+
+            run(true);
+          `,
+          messageFragment: "labeled statement in body",
+        },
+        {
+          name: "variable-statement visitor rejects optional parameters",
+          kind: ts.SyntaxKind.VariableStatement as const,
+          source: `
+            /** @inline */
+            function scale(value?: number): number {
+              const result = value || 0;
+              return result;
+            }
+
+            const result = scale();
+          `,
+          messageFragment: "optional parameters are not supported",
+        },
+      ])("$name", ({ kind, source, messageFragment }) => {
+        const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
+
+        const result = runDirectStatementVisitor({
+          files: { "/main.ts": source },
+          kind,
+          statementIndex: 1,
+          context,
+        });
+
+        expect(result).toBeUndefined();
+        expectDiagnosticFragment(context.diagnostics, messageFragment);
+      });
+    });
+
+    it("inlines imported aliases that only reference local params through type assertions", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "shared.ts": `
+          export type SharedNumber = number;
+
+          /** @inline */
+          export function identity(value: number): number {
+            const typed = value as SharedNumber;
+            return typed;
+          }
+        `,
+        "main.ts": `
+          import { identity as alias } from "./shared";
+
+          export const result = alias(1);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      expect(normalizeLua(lua)).not.toContain("alias(1)");
+    });
+
+    describe("return visitor diagnostics", () => {
+      it.each([
+        {
+          name: "reports parameter writes from return expressions",
+          source: `
+            /** @inline */
+            function bump(value: number): number {
+              const keep = value;
+              return ++value;
+            }
+
+            function run() {
+              return bump(1);
+            }
+          `,
+          messageFragment: "parameter is written inside body",
+        },
+        {
+          name: "reports optional-parameter rejection",
+          source: `
+            /** @inline */
+            function greet(name?: string): string {
+              const value = name || "fallback";
+              return value;
+            }
+
+            function run() {
+              return greet();
+            }
+          `,
+          messageFragment: "optional parameters are not supported",
+        },
+      ])("$name", ({ source, messageFragment }) => {
+        const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
+
+        const result = runDirectReturnVisitor({
+          files: { "/main.ts": source },
+          functionStatementIndex: 1,
+          context,
+        });
+
+        expect(result).toBeUndefined();
+        expectDiagnosticFragment(context.diagnostics, messageFragment);
+      });
+    });
+
+    it("returns undefined from statement-position visitors when body parameter maps are missing", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          function logValue(value: number): void {
+            const keep = value;
+          }
+
+          logValue(1);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[1] as ts.ExpressionStatement,
+        createDirectContext(),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined from direct call visitors when expression bindings cannot map params", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          const identity = (value: number) => value;
+
+          identity(1);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+
+      const result = Reflect.apply(visitor, undefined, [
+        expressionStatement.expression,
+        createDirectContext(),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("reports unresolved parameter symbols from direct call visitors", () => {
+      const program = createTestProgram({
+        "/main.ts": `
+          /** @inline */
+          const double = (value: number) => value * 2;
+
+          double(1);
+        `,
+      });
+      const checker = {
+        ...program.checker,
+        getAliasedSymbol: program.checker.getAliasedSymbol.bind(program.checker),
+        getResolvedSignature: program.checker.getResolvedSignature.bind(program.checker),
+        getReturnTypeOfSignature: program.checker.getReturnTypeOfSignature.bind(program.checker),
+        getSymbolAtLocation: (node: ts.Node) => {
+          if (ts.isIdentifier(node) && node.text === "value") {
+            return undefined;
+          }
+          return program.checker.getSymbolAtLocation(node);
+        },
+      } as ts.TypeChecker;
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        checker,
+        { rules: { inline: true } },
+      ]);
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+      const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
+
+      const result = Reflect.apply(visitor, undefined, [expressionStatement.expression, context]);
+
+      expect(result).toBeUndefined();
+      expect(
+        context.diagnostics.some((d) =>
+          String(d.messageText).includes("parameter symbol could not be resolved"),
+        ),
+      ).toBe(true);
+    });
+
+    it("returns undefined from direct call visitors when the resolved symbol has no declarations", () => {
+      const program = createTestProgram({
+        "/main.ts": `
+          declare const maybeCallable: (value: number) => number;
+
+          maybeCallable(1);
+        `,
+      });
+      const declarationlessSymbol = {
+        flags: ts.SymbolFlags.Function,
+        getDeclarations: () => [],
+      } as unknown as ts.Symbol;
+      const checker = {
+        ...program.checker,
+        getAliasedSymbol: program.checker.getAliasedSymbol.bind(program.checker),
+        getResolvedSignature: program.checker.getResolvedSignature.bind(program.checker),
+        getReturnTypeOfSignature: program.checker.getReturnTypeOfSignature.bind(program.checker),
+        getSymbolAtLocation: (node: ts.Node) => {
+          if (ts.isIdentifier(node) && node.text === "maybeCallable") {
+            return declarationlessSymbol;
+          }
+          return program.checker.getSymbolAtLocation(node);
+        },
+      } as ts.TypeChecker;
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        checker,
+        { rules: { inline: true } },
+      ]);
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+
+      const result = Reflect.apply(visitor, undefined, [
+        expressionStatement.expression,
+        createDirectContext(),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("reports unresolved parameter symbols from direct statement-position visitors", () => {
+      const program = createTestProgram({
+        "/main.ts": `
+          /** @inline */
+          function logValue(value: number): void {
+            const keep = value;
+          }
+
+          logValue(1);
+        `,
+      });
+      const checker = {
+        ...program.checker,
+        getAliasedSymbol: program.checker.getAliasedSymbol.bind(program.checker),
+        getResolvedSignature: program.checker.getResolvedSignature.bind(program.checker),
+        getReturnTypeOfSignature: program.checker.getReturnTypeOfSignature.bind(program.checker),
+        getSymbolAtLocation: (node: ts.Node) => {
+          if (ts.isIdentifier(node) && node.text === "value" && ts.isParameter(node.parent)) {
+            return undefined;
+          }
+          return program.checker.getSymbolAtLocation(node);
+        },
+      } as ts.TypeChecker;
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        checker,
+        { rules: { inline: true } },
+      ]);
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[1] as ts.ExpressionStatement,
+        context,
+      ]);
+
+      expect(result).toBeUndefined();
+      expect(
+        context.diagnostics.some((d) =>
+          String(d.messageText).includes("parameter symbol could not be resolved"),
+        ),
+      ).toBe(true);
+    });
+
+    it("skips eager temp remapping when a later param lookup cannot be rebuilt", () => {
+      const program = createTestProgram({
+        "/main.ts": `
+          declare function sideEffect(): number;
+
+          /** @inline */
+          const identity = (value: number) => value;
+
+          identity(sideEffect());
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const paramDecl = (
+        (sourceFile.statements[1] as ts.VariableStatement).declarationList.declarations[0]
+          ?.initializer as ts.ArrowFunction
+      ).parameters[0];
+      if (!paramDecl) {
+        throw new Error("expected inline parameter");
+      }
+      const paramSymbol = program.checker.getSymbolAtLocation(paramDecl.name);
+      if (!paramSymbol) {
+        throw new Error("expected parameter symbol");
+      }
+      let paramLookups = 0;
+      const checker = {
+        ...program.checker,
+        getAliasedSymbol: program.checker.getAliasedSymbol.bind(program.checker),
+        getResolvedSignature: program.checker.getResolvedSignature.bind(program.checker),
+        getReturnTypeOfSignature: program.checker.getReturnTypeOfSignature.bind(program.checker),
+        getSymbolAtLocation: (node: ts.Node) => {
+          if (ts.isIdentifier(node) && node.text === "value" && ts.isParameter(node.parent)) {
+            paramLookups++;
+            return paramLookups >= 3 ? undefined : paramSymbol;
+          }
+          return program.checker.getSymbolAtLocation(node);
+        },
+      } as ts.TypeChecker;
+      const visitors = Reflect.apply(createVisitors, undefined, [
+        checker,
+        { rules: { inline: true } },
+      ]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const expressionStatement = sourceFile.statements[2] as ts.ExpressionStatement;
+
+      const result = Reflect.apply(visitor, undefined, [
+        expressionStatement.expression,
+        createDirectContext({
+          symbolIdMaps: new Map<ts.Symbol, tstl.SymbolId>([[paramSymbol, 1 as tstl.SymbolId]]),
+          transformExpression: (node) =>
+            ts.isCallExpression(node)
+              ? tstl.createCallExpression(tstl.createIdentifier("sideEffect"), [])
+              : tstl.createIdentifier("mapped"),
+        }),
+      ]);
+
+      expect(tstl.isIdentifier(result as tstl.Expression)).toBe(true);
+      expect((result as tstl.Identifier).text).toBe("mapped");
+    });
+
+    describe("direct variable visitor guard rails", () => {
+      it.each([
+        {
+          name: "returns undefined when identifier bindings cannot map params",
+          source: `
+            /** @inline */
+            function compute(value: number): number {
+              const interim = value + 1;
+              return interim;
+            }
+
+            const result = compute(1);
+          `,
+          statementIndex: 1,
+          buildContext: () =>
+            createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
+        },
+        {
+          name: "returns undefined when destructuring bindings cannot map params",
+          source: `
+            /** @inline */
+            function compute(value: number): { value: number } {
+              const result = { value };
+              return result;
+            }
+
+            const { value } = compute(1);
+          `,
+          statementIndex: 1,
+          buildContext: () => createDirectContext(),
+        },
+        {
+          name: "returns undefined when plain array bindings cannot map params",
+          source: `
+            /** @inline */
+            function pair(value: number): [number, number] {
+              const first = value;
+              return [first, value + 1];
+            }
+
+            const [left, right] = pair(1);
+          `,
+          statementIndex: 1,
+          buildContext: () =>
+            createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
+        },
+      ])("$name", ({ source, statementIndex, buildContext }) => {
+        const result = runDirectStatementVisitor({
+          files: { "/main.ts": source },
+          kind: ts.SyntaxKind.VariableStatement,
+          statementIndex,
+          context: buildContext(),
+        });
+
+        expect(result).toBeUndefined();
+      });
+    });
+
+    it("returns undefined from direct variable visitors when multi-return array bindings cannot map params", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          type LuaMultiReturn<T extends unknown[]> = T & { __brand: never };
+
+          /** @inline */
+          function pair(value: number): LuaMultiReturn<[number, number]> {
+            return undefined as unknown as LuaMultiReturn<[number, number]>;
+          }
+
+          const [left, right] = pair(1);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[2] as ts.VariableStatement,
+        createDirectContext({
+          transformExpression: () => tstl.createNumericLiteral(1),
+          transformStatements: (node) =>
+            isReturnStatementNode(node)
+              ? [
+                  tstl.createReturnStatement([
+                    tstl.createNumericLiteral(1),
+                    tstl.createNumericLiteral(2),
+                  ]),
+                ]
+              : [],
+        }),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined from direct variable visitors when multi-return array lowering emits no return node", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          type LuaMultiReturn<T extends unknown[]> = T & { __brand: never };
+
+          /** @inline */
+          function pair(value: number): LuaMultiReturn<[number, number]> {
+            return undefined as unknown as LuaMultiReturn<[number, number]>;
+          }
+
+          const [left, right] = pair(1);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const pairDecl = sourceFile.statements[1] as ts.FunctionDeclaration;
+      const paramDecl = pairDecl.parameters[0];
+      if (!paramDecl) {
+        throw new Error("expected pair parameter");
+      }
+      const paramSymbol = program.checker.getSymbolAtLocation(paramDecl.name);
+      if (!paramSymbol) {
+        throw new Error("expected parameter symbol");
+      }
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[2] as ts.VariableStatement,
+        createDirectContext({
+          symbolIdMaps: new Map<ts.Symbol, tstl.SymbolId>([[paramSymbol, toSymbolId(1)]]),
+          transformExpression: () => tstl.createNumericLiteral(1),
+          transformStatements: (node) =>
+            isReturnStatementNode(node)
+              ? [tstl.createExpressionStatement(tstl.createNumericLiteral(0))]
+              : [],
+        }),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined from direct return visitors when param mapping cannot be built", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          function compute(value: number): number {
+            const interim = value + 1;
+            return interim;
+          }
+
+          function run() {
+            return compute(1);
+          }
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ReturnStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const runBody = (sourceFile.statements[1] as ts.FunctionDeclaration).body;
+      if (!runBody) {
+        throw new Error("expected run body");
+      }
+
+      const result = Reflect.apply(visitor, undefined, [
+        runBody.statements[0] as ts.ReturnStatement,
+        createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined from direct variable visitors when cross-module free variables block inlining", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/utils.ts": `
+          export const factor = 2;
+
+          /** @inline */
+          export function multiply(value: number): number {
+            const result = value * factor;
+            return result;
+          }
+        `,
+        "/main.ts": `
+          import { multiply } from "./utils";
+
+          const result = multiply(3);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
+
+      const result = Reflect.apply(visitor, undefined, [
+        sourceFile.statements[1] as ts.VariableStatement,
+        context,
+      ]);
+
+      expect(result).toBeUndefined();
+      expect(
+        context.diagnostics.some((d) =>
+          String(d.messageText).includes(
+            "cross-module function references non-parameter identifiers",
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it("returns undefined from direct variable visitors when binding names are syntactically invalid", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          /** @inline */
+          function compute(value: number): number {
+            const interim = value + 1;
+            return interim;
+          }
+
+          const result = compute(1);
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const variableStatement = sourceFile.statements[1] as ts.VariableStatement;
+      const declaration = variableStatement.declarationList.declarations[0];
+      if (!declaration) {
+        throw new Error("expected variable declaration");
+      }
+      (declaration as { name: ts.BindingName }).name = ts.factory.createStringLiteral(
+        "result",
+      ) as unknown as ts.BindingName;
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+
+      const result = Reflect.apply(visitor, undefined, [
+        variableStatement,
+        createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
+      ]);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined from direct return visitors when multi-return lowering emits no return node", () => {
+      const { visitors, program } = createInlineVisitors({
+        "/main.ts": `
+          type LuaMultiReturn<T extends unknown[]> = T & { __brand: never };
+
+          /** @inline */
+          function pair(value: number): LuaMultiReturn<[number, number]> {
+            return undefined as unknown as LuaMultiReturn<[number, number]>;
+          }
+
+          function run() {
+            return pair(1);
+          }
+        `,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.ReturnStatement) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => unknown;
+      const runBody = (sourceFile.statements[2] as ts.FunctionDeclaration).body;
+      if (!runBody) {
+        throw new Error("expected run body");
+      }
+      const pairDecl = sourceFile.statements[1] as ts.FunctionDeclaration;
+      const paramDecl = pairDecl.parameters[0];
+      if (!paramDecl) {
+        throw new Error("expected pair parameter");
+      }
+      const paramSymbol = program.checker.getSymbolAtLocation(paramDecl.name);
+      if (!paramSymbol) {
+        throw new Error("expected parameter symbol");
+      }
+      let nextSymbolId = 9300;
+      const context = {
+        symbolIdMaps: new Map<ts.Symbol, tstl.SymbolId>([[paramSymbol, 1 as tstl.SymbolId]]),
+        diagnostics: [] as ts.Diagnostic[],
+        nextSymbolId: () => nextSymbolId++,
+        pushScope: () => {},
+        popScope: () => {},
+        transformExpression: () => tstl.createNumericLiteral(1),
+        transformStatements: () => [tstl.createExpressionStatement(tstl.createNumericLiteral(0))],
+      } as unknown as tstl.TransformationContext;
+
+      const result = Reflect.apply(visitor, undefined, [
+        runBody.statements[0] as ts.ReturnStatement,
+        context,
+      ]);
+
+      expect(result).toBeUndefined();
     });
   });
 });

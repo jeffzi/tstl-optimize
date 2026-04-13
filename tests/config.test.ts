@@ -34,6 +34,17 @@ describe("resolveConditionalCompilationConfig", () => {
 
     expect(result).toStrictEqual(new Map([["GOOD", false]]));
   });
+
+  it("ignores non-record constants at resolution time", () => {
+    const result = Reflect.apply(resolveConditionalCompilationConfig, undefined, [
+      {
+        enabled: true,
+        constants: "DEBUG",
+      },
+    ]);
+
+    expect(result).toStrictEqual(new Map());
+  });
 });
 
 describe("resolveInlineConfig", () => {
@@ -59,6 +70,25 @@ describe("parseConfig", () => {
     ])("parses inline: $input as $expected", ({ input, expected }) => {
       const config = parseConfig({ rules: { inline: input } });
       expect(config.rules.inline).toStrictEqual(expected);
+    });
+  });
+
+  describe("when parsing conditional-compilation rule config", () => {
+    it("preserves enabled and strict flags even without a constants object", () => {
+      const config = parseConfig({
+        rules: {
+          "conditional-compilation": {
+            enabled: false,
+            strict: true,
+          },
+        },
+      });
+
+      expect(config.rules["conditional-compilation"]).toStrictEqual({
+        enabled: false,
+        strict: true,
+        constants: {},
+      });
     });
   });
 
@@ -162,6 +192,22 @@ describe("resolveDebugStripConfig", () => {
     expect(resolveDebugStripConfig(false)).toBe(false);
   });
 
+  it("falls back to default arrays when direct input contains non-array fields", () => {
+    const result = Reflect.apply(resolveDebugStripConfig, undefined, [
+      {
+        enabled: true,
+        functions: "print",
+        namespaces: 0,
+      },
+    ]);
+
+    expect(result).toStrictEqual({
+      enabled: true,
+      functions: ["print", "assert"],
+      namespaces: ["debug"],
+    });
+  });
+
   it("filters invalid structured fields before applying defaults", () => {
     const parsed = parseConfig({
       rules: {
@@ -184,6 +230,24 @@ describe("resolveDebugStripConfig", () => {
 describe("resolveLocalizerConfig", () => {
   it("returns disabled config when given false", () => {
     expect(resolveLocalizerConfig(false)).toBe(false);
+  });
+
+  it("falls back to default arrays when direct input contains non-array fields", () => {
+    const result = Reflect.apply(resolveLocalizerConfig, undefined, [
+      {
+        enabled: true,
+        include: "math",
+        exclude: null,
+      },
+    ]);
+
+    expect(result).toStrictEqual({
+      enabled: true,
+      threshold: 2,
+      scope: "all",
+      include: [],
+      exclude: [],
+    });
   });
 
   it("falls back to defaults when partial config contains undefined fields", () => {

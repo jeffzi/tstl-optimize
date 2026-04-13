@@ -1,9 +1,15 @@
+import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { createVisitors } from "../../src/rules/constant-folding";
 import { compile, normalizeLua } from "../helpers";
 
 describe("constant-folding", () => {
+  function createLuaFile(statements: tstl.Statement[]): tstl.File {
+    return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
+  }
+
   it("folds binary arithmetic expressions", () => {
     const lua = compile("const a = 1 + 2 * 3;");
     expect(lua).toContain("a = 7");
@@ -252,6 +258,18 @@ describe("constant-folding", () => {
       expect(lua).toContain("gt = true");
     });
 
+    it("folds prefix string comparisons by shorter-byte-length ordering", () => {
+      const code = `
+        export const lt = ("a" as string) < ("aa" as string);
+        export const gt = ("aa" as string) > ("a" as string);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("lt = true");
+      expect(lua).toContain("gt = true");
+    });
+
     it("folds comparison and logical operators for booleans", () => {
       const code = `
         export const eq = true === true;
@@ -288,6 +306,20 @@ describe("constant-folding", () => {
 
       expect(lua).toContain("len = 3");
       expect(lua).toContain("neg = -1");
+    });
+
+    it("preserves unary operators whose runtime semantics are not safe to fold for non-matching types", () => {
+      const code = `
+        export const neq = (1 as any) !== ("1" as any);
+        export const notNumber = !(1 as any);
+        export const negateString = -("hi" as any);
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).toContain("neq = true");
+      expect(lua).toContain("notNumber = not 1");
+      expect(lua).toContain('negateString = __TS__Number(-"hi")');
     });
 
     it("folds string length using Lua byte length", () => {
@@ -332,5 +364,105 @@ describe("constant-folding", () => {
 
     expect(lua).toContain("elseif get() then");
     expect(lua).toContain("print(2)");
+  });
+
+  describe("direct source-file visitor coverage", () => {
+    function runSourceFileVisitor(file: tstl.File | tstl.Expression): tstl.File | tstl.Expression {
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File | tstl.Expression;
+
+      return Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => file,
+        } as unknown as tstl.TransformationContext,
+      ]);
+    }
+
+    it("folds raw Lua floor-division expressions", () => {
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("x")],
+          [
+            tstl.createBinaryExpression(
+              tstl.createNumericLiteral(7),
+              tstl.createNumericLiteral(2),
+              tstl.SyntaxKind.FloorDivisionOperator,
+            ),
+          ],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const rhs = (transformed.statements[0] as tstl.VariableDeclarationStatement).right?.[0];
+
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isNumericLiteral(rhs!)).toBe(true);
+      expect((rhs as tstl.NumericLiteral).value).toBe(3);
+    });
+
+    it("preserves unsupported unary folds", () => {
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("bitwise")],
+          [
+            tstl.createUnaryExpression(
+              tstl.createNumericLiteral(1.5),
+              tstl.SyntaxKind.BitwiseNotOperator,
+            ),
+          ],
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("length")],
+          [
+            tstl.createUnaryExpression(
+              tstl.createNumericLiteral(1),
+              tstl.SyntaxKind.LengthOperator,
+            ),
+          ],
+        ),
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("neg")],
+          [
+            tstl.createUnaryExpression(
+              tstl.createBooleanLiteral(true),
+              tstl.SyntaxKind.NegationOperator,
+            ),
+          ],
+        ),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+      const [bitwise, length, neg] = transformed.statements as tstl.VariableDeclarationStatement[];
+
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isUnaryExpression(bitwise.right![0])).toBe(true);
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isUnaryExpression(length.right![0])).toBe(true);
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isUnaryExpression(neg.right![0])).toBe(true);
+    });
+
+    it("truncates raw Lua statements after a direct return", () => {
+      const file = createLuaFile([
+        tstl.createReturnStatement([tstl.createNumericLiteral(1)]),
+        tstl.createExpressionStatement(tstl.createIdentifier("later")),
+      ]);
+
+      const transformed = runSourceFileVisitor(file) as tstl.File;
+
+      expect(transformed.statements).toHaveLength(1);
+      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
+      expect(tstl.isReturnStatement(transformed.statements[0]!)).toBe(true);
+    });
+
+    it("returns non-file transform results unchanged", () => {
+      const nonFile = tstl.createBooleanLiteral(true);
+
+      expect(runSourceFileVisitor(nonFile)).toBe(nonFile);
+    });
   });
 });

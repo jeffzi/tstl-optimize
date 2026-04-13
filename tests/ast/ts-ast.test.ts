@@ -50,6 +50,7 @@ describe("hasSideEffects", () => {
       { expr: "void 0" },
       { expr: "typeof x" },
       { expr: "(a + b)" },
+      { expr: "(<number>x)" },
       { expr: "x as number" },
       { expr: "x!" },
       { expr: "x satisfies number" },
@@ -74,6 +75,7 @@ describe("hasSideEffects", () => {
       { name: "pure binary expression", expr: "a + b" },
       { name: "conditional with pure branches", expr: "x ? a : b" },
       { name: "array literal with pure elements", expr: "[1, 2, 3]" },
+      { name: "array literal with pure spread element", expr: "[...items]" },
       { name: "object literal with pure properties", expr: "({ a: 1, b: 2 })" },
       { name: "object literal with pure computed key", expr: '({ ["literal"]: 1 })' },
       { name: "object literal with shorthand property", expr: "({ x })" },
@@ -154,6 +156,26 @@ describe("hasSideEffects", () => {
       expect(hasSideEffects(parseExpr("({ [foo()]() {} })"))).toBe(true);
     });
 
+    it("returns true for unsupported synthetic object literal members", () => {
+      const parsed = parseExpr("({ a: 1 })");
+      const expr = ts.isParenthesizedExpression(parsed) ? parsed.expression : parsed;
+      if (!ts.isObjectLiteralExpression(expr)) {
+        throw new Error("Expected ObjectLiteralExpression");
+      }
+
+      Reflect.set(expr, "properties", [
+        ts.factory.createPropertyDeclaration(
+          undefined,
+          ts.factory.createIdentifier("field"),
+          undefined,
+          undefined,
+          undefined,
+        ),
+      ]);
+
+      expect(hasSideEffects(expr)).toBe(true);
+    });
+
     // Class expressions are always side-effectful (decorators, static initializers, computed keys)
     it("returns true for class expression", () => {
       expect(hasSideEffects(parseExpr("(class {})"))).toBe(true);
@@ -208,6 +230,7 @@ describe("hasSideEffects", () => {
         // biome-ignore lint/suspicious/noTemplateCurlyInString: testing template parsing
         expr: "`${foo()}`",
       },
+      { name: "spread element", expr: "[...items(foo())]" },
       { name: "spread assignment in object literal", expr: "({ ...foo() })" },
     ])("detects call inside $name", ({ expr }) => {
       expect(hasSideEffects(parseExpr(expr))).toBe(true);

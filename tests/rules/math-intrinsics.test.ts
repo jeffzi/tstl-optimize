@@ -32,6 +32,15 @@ function parseCallExpression(source: string): ts.CallExpression {
   return statement.expression;
 }
 
+function parseBinaryExpression(source: string): ts.BinaryExpression {
+  const sourceFile = ts.createSourceFile("main.ts", source, ts.ScriptTarget.Latest, true);
+  const statement = sourceFile.statements[0];
+  if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression)) {
+    throw new Error("Expected first statement to be a binary expression.");
+  }
+  return statement.expression;
+}
+
 function collectExpressionReferences(expression: tstl.Expression): tstl.Expression[] {
   const refs: tstl.Expression[] = [];
   walkStatements([tstl.createExpressionStatement(expression)], {
@@ -40,6 +49,10 @@ function collectExpressionReferences(expression: tstl.Expression): tstl.Expressi
     },
   });
   return refs;
+}
+
+function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
+  return checker as unknown as ts.TypeChecker;
 }
 
 describe("math-intrinsics", () => {
@@ -180,6 +193,79 @@ describe("math-intrinsics", () => {
       const refs = collectExpressionReferences(expression);
 
       expect(new Set(refs).size).toBe(refs.length);
+    });
+  });
+
+  describe("visitor guard coverage", () => {
+    const checker = asTypeChecker({
+      getSymbolAtLocation: () => ({ flags: ts.SymbolFlags.Namespace }) as unknown as ts.Symbol,
+      getTypeOfSymbol: () => ({ flags: ts.TypeFlags.Object }) as unknown as ts.Type,
+      typeToString: () => "Math",
+    });
+    const context = {
+      transformExpression: (expr: ts.Expression) =>
+        tstl.createIdentifier(ts.isIdentifier(expr) ? expr.text : "arg"),
+    } as unknown as tstl.TransformationContext;
+
+    it.each([
+      { source: "Math.sqrt(value, other);", label: "sqrt with wrong arity" },
+      { source: "Math.floor(value, other);", label: "floor with wrong arity" },
+      { source: "Math.abs(value, other);", label: "abs with wrong arity" },
+    ])("returns undefined for $label", ({ source }) => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.CallExpression,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [parseCallExpression(source), context]);
+
+      expect(transformed).toBeUndefined();
+    });
+
+    it("skips the call-expression visitor when configured for LuaJIT", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "luajit" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.CallExpression,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseCallExpression("Math.sqrt(value);"),
+        context,
+      ]);
+
+      expect(transformed).toBeUndefined();
+    });
+
+    it("returns undefined when the call-expression visitor receives a non-call node", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseBinaryExpression("value ** 2;"),
+        context,
+      ]);
+
+      expect(transformed).toBeUndefined();
+    });
+
+    it("returns undefined when the binary-expression visitor receives a non-binary node", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.BinaryExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseCallExpression("Math.sqrt(value);"),
+        context,
+      ]);
+
+      expect(transformed).toBeUndefined();
     });
   });
 
