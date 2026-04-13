@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.plugin.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "rootDir": ".",
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

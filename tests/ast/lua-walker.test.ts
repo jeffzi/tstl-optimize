@@ -1,6 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
+import { isLuaExprPure, isLuaRhsPure } from "../../src/ast/lua-ast";
 import { walkStatements } from "../../src/ast/lua-walker";
 
 function id(name: string): tstl.Identifier {
@@ -34,7 +35,7 @@ function collectExprs(statements: tstl.Statement[], shallow?: boolean): tstl.Exp
 }
 
 describe("walkStatements", () => {
-  describe("expression visitor", () => {
+  describe("when visiting expressions", () => {
     it("visits expressions in variable declarations", () => {
       const stmts: tstl.Statement[] = [
         tstl.createVariableDeclarationStatement(id("x"), num(1)),
@@ -44,11 +45,10 @@ describe("walkStatements", () => {
       expect(exprs.filter(tstl.isNumericLiteral).map((e) => e.value)).toStrictEqual([1, 2]);
     });
 
-    it("visits expressions in assignments (RHS and TableIndexExpression LHS parts)", () => {
+    it("visits assignment expression children", () => {
       const tableIdx = tstl.createTableIndexExpression(id("arr"), str("key"));
       const stmts: tstl.Statement[] = [tstl.createAssignmentStatement(tableIdx, num(42))];
       const exprs = collectExprs(stmts);
-      // LHS TableIndexExpression: table (arr) + index (key), then RHS: 42
       const identifiers = exprs.filter(tstl.isIdentifier).map((e) => e.text);
       expect(identifiers).toContain("arr");
       expect(exprs.filter(tstl.isNumericLiteral).map((e) => e.value)).toContain(42);
@@ -73,37 +73,56 @@ describe("walkStatements", () => {
       expect(exprs).toHaveLength(3);
     });
 
-    it("visits for-init, limit, step, and body", () => {
-      const stmts: tstl.Statement[] = [
-        tstl.createForStatement(
-          tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
-          id("i"),
-          num(0),
-          num(10),
-          num(1),
-        ),
-      ];
-      const exprs = collectExprs(stmts);
-      const nums = exprs.filter(tstl.isNumericLiteral).map((e) => e.value);
-      expect(nums).toContain(0);
-      expect(nums).toContain(10);
-      expect(nums).toContain(1);
-      const strs = exprs.filter(tstl.isStringLiteral).map((e) => e.value);
-      expect(strs).toContain("body");
-    });
-
-    it("visits for-in expressions and body", () => {
-      const stmts: tstl.Statement[] = [
-        tstl.createForInStatement(
-          tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
-          [id("k")],
-          [tstl.createCallExpression(id("pairs"), [id("t")])],
-        ),
-      ];
-      const exprs = collectExprs(stmts);
-      const identifiers = exprs.filter(tstl.isIdentifier).map((e) => e.text);
-      expect(identifiers).toContain("pairs");
-      expect(identifiers).toContain("t");
+    it.each([
+      {
+        name: "for statement",
+        createStatements: (): tstl.Statement[] => [
+          tstl.createForStatement(
+            tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
+            id("i"),
+            num(0),
+            num(10),
+            num(1),
+          ),
+        ],
+        assertVisited: (exprs: tstl.Expression[]) => {
+          expect(exprs.filter(tstl.isNumericLiteral).map((e) => e.value)).toEqual(
+            expect.arrayContaining([0, 10, 1]),
+          );
+          expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
+        },
+      },
+      {
+        name: "for-in statement",
+        createStatements: (): tstl.Statement[] => [
+          tstl.createForInStatement(
+            tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
+            [id("k")],
+            [tstl.createCallExpression(id("pairs"), [id("t")])],
+          ),
+        ],
+        assertVisited: (exprs: tstl.Expression[]) => {
+          const identifiers = exprs.filter(tstl.isIdentifier).map((e) => e.text);
+          expect(identifiers).toEqual(expect.arrayContaining(["pairs", "t"]));
+          expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
+        },
+      },
+      {
+        name: "while statement",
+        createStatements: (): tstl.Statement[] => [
+          tstl.createWhileStatement(
+            tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
+            id("cond"),
+          ),
+        ],
+        assertVisited: (exprs: tstl.Expression[]) => {
+          expect(exprs.filter(tstl.isIdentifier).map((e) => e.text)).toContain("cond");
+          expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
+        },
+      },
+    ])("visits all relevant expressions in $name", ({ createStatements, assertVisited }) => {
+      const exprs = collectExprs(createStatements());
+      assertVisited(exprs);
     });
 
     it("visits return statement expressions", () => {
@@ -118,18 +137,6 @@ describe("walkStatements", () => {
       expect(exprs).toHaveLength(1);
     });
 
-    it("visits while condition and body", () => {
-      const stmts: tstl.Statement[] = [
-        tstl.createWhileStatement(
-          tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
-          id("cond"),
-        ),
-      ];
-      const exprs = collectExprs(stmts);
-      expect(exprs.filter(tstl.isIdentifier).map((e) => e.text)).toContain("cond");
-      expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
-    });
-
     it("visits do-statement body", () => {
       const stmts: tstl.Statement[] = [
         tstl.createDoStatement([tstl.createExpressionStatement(num(1))]),
@@ -137,9 +144,22 @@ describe("walkStatements", () => {
       const exprs = collectExprs(stmts);
       expect(exprs).toHaveLength(1);
     });
+
+    it("visits table field keys before values", () => {
+      const field = tstl.createTableFieldExpression(id("valueExpr"), id("keyExpr"));
+      const stmts: tstl.Statement[] = [
+        tstl.createExpressionStatement(tstl.createTableExpression([field])),
+      ];
+
+      const identifiers = collectExprs(stmts)
+        .filter(tstl.isIdentifier)
+        .map((expr) => expr.text);
+
+      expect(identifiers).toStrictEqual(["keyExpr", "valueExpr"]);
+    });
   });
 
-  describe("replace callback", () => {
+  describe("when using the replace callback", () => {
     it("mutates single expression in variable declaration", () => {
       const stmts: tstl.Statement[] = [tstl.createVariableDeclarationStatement(id("x"), num(1))];
       walkStatements(stmts, {
@@ -207,7 +227,7 @@ describe("walkStatements", () => {
       expect(tstl.isNumericLiteral(unary.operand) && unary.operand.value).toBe(99);
     });
 
-    it("mutates call expression callee and params", () => {
+    it("mutates call expression replaceable children", () => {
       const call = tstl.createCallExpression(id("fn"), [num(1), num(2)]);
       const stmts: tstl.Statement[] = [tstl.createExpressionStatement(call)];
       walkStatements(stmts, {
@@ -220,7 +240,7 @@ describe("walkStatements", () => {
       expect(tstl.isNumericLiteral(call.params[0]) && call.params[0].value).toBe(10);
     });
 
-    it("mutates method call expression prefix and params", () => {
+    it("mutates method call expression replaceable children", () => {
       const method = tstl.createMethodCallExpression(id("obj"), id("method"), [num(1)]);
       const stmts: tstl.Statement[] = [tstl.createExpressionStatement(method)];
       walkStatements(stmts, {
@@ -235,7 +255,7 @@ describe("walkStatements", () => {
       expect(tstl.isNumericLiteral(method.params[0]) && method.params[0].value).toBe(42);
     });
 
-    it("mutates table index expression parts", () => {
+    it("mutates table index expression replaceable children", () => {
       const idx = tstl.createTableIndexExpression(id("tbl"), str("key"));
       const stmts: tstl.Statement[] = [tstl.createExpressionStatement(idx)];
       walkStatements(stmts, {
@@ -248,17 +268,27 @@ describe("walkStatements", () => {
       expect(tstl.isStringLiteral(idx.index) && idx.index.value).toBe("idx");
     });
 
-    it("mutates table expression field value and key", () => {
+    it("mutates table expression field value", () => {
       const field = tstl.createTableFieldExpression(num(1), str("k"));
       const tbl = tstl.createTableExpression([field]);
       const stmts: tstl.Statement[] = [tstl.createExpressionStatement(tbl)];
       walkStatements(stmts, {
         expr: (expr, replace) => {
           if (tstl.isNumericLiteral(expr)) replace(num(99));
-          if (tstl.isStringLiteral(expr) && expr.value === "k") replace(str("newKey"));
         },
       });
       expect(tstl.isNumericLiteral(field.value) && field.value.value).toBe(99);
+    });
+
+    it("mutates table expression field key", () => {
+      const field = tstl.createTableFieldExpression(num(1), str("k"));
+      const tbl = tstl.createTableExpression([field]);
+      const stmts: tstl.Statement[] = [tstl.createExpressionStatement(tbl)];
+      walkStatements(stmts, {
+        expr: (expr, replace) => {
+          if (tstl.isStringLiteral(expr) && expr.value === "k") replace(str("newKey"));
+        },
+      });
       expect(field.key && tstl.isStringLiteral(field.key) && field.key.value).toBe("newKey");
     });
 
@@ -273,7 +303,7 @@ describe("walkStatements", () => {
       expect(tstl.isNumericLiteral(paren.expression) && paren.expression.value).toBe(77);
     });
 
-    it("mutates conditional expression parts", () => {
+    it("mutates conditional expression replaceable children", () => {
       const cond = tstl.createConditionalExpression(id("c"), num(1), num(2));
       const stmts: tstl.Statement[] = [tstl.createExpressionStatement(cond)];
       walkStatements(stmts, {
@@ -288,7 +318,7 @@ describe("walkStatements", () => {
       expect(tstl.isNumericLiteral(cond.whenFalse) && cond.whenFalse.value).toBe(20);
     });
 
-    it("mutates assignment statement LHS and RHS", () => {
+    it("mutates assignment statement replaceable children", () => {
       const lhs = tstl.createTableIndexExpression(id("arr"), str("idx"));
       const stmt = tstl.createAssignmentStatement(lhs, num(5));
       const stmts: tstl.Statement[] = [stmt];
@@ -296,7 +326,7 @@ describe("walkStatements", () => {
         expr: (expr, replace) => {
           if (tstl.isIdentifier(expr) && expr.text === "arr") replace(id("buf"));
           if (tstl.isStringLiteral(expr) && expr.value === "idx") replace(str("pos"));
-          if (tstl.isNumericLiteral(expr)) replace(num(42));
+          if (tstl.isNumericLiteral(expr) && expr.value === 5) replace(num(42));
         },
       });
       const left = stmt.left[0];
@@ -339,7 +369,7 @@ describe("walkStatements", () => {
       expect(tstl.isIdentifier(repeatStmt.condition) && repeatStmt.condition.text).toBe("done");
     });
 
-    it("mutates for-statement init, limit, and step", () => {
+    it("mutates for-statement replaceable children", () => {
       const forStmt = tstl.createForStatement(
         tstl.createBlock([]),
         id("i"),
@@ -385,9 +415,24 @@ describe("walkStatements", () => {
       assertNode(call, tstl.isCallExpression);
       expect(tstl.isIdentifier(call.params[0]) && call.params[0].text).toBe("myTable");
     });
+
+    it("mutates top-level for-in expressions", () => {
+      const forIn = tstl.createForInStatement(tstl.createBlock([]), [id("k")], [id("iter")]);
+      const stmts: tstl.Statement[] = [forIn];
+
+      walkStatements(stmts, {
+        expr: (expr, replace) => {
+          if (tstl.isIdentifier(expr) && expr.text === "iter") {
+            replace(id("nextIter"));
+          }
+        },
+      });
+
+      expect(forIn.expressions).toStrictEqual([id("nextIter")]);
+    });
   });
 
-  describe("skip children", () => {
+  describe("when skip() is called from expr hook", () => {
     it("control.skip() from expr hook skips children", () => {
       const inner = tstl.createCallExpression(id("inner"), [num(1)]);
       const outer = tstl.createCallExpression(inner, []);
@@ -411,7 +456,7 @@ describe("walkStatements", () => {
     });
   });
 
-  describe("stmt hook", () => {
+  describe("when using the statement hook", () => {
     it("control.skip() skips entire statement", () => {
       const stmts: tstl.Statement[] = [
         tstl.createVariableDeclarationStatement(id("x"), num(1)),
@@ -453,7 +498,7 @@ describe("walkStatements", () => {
     });
   });
 
-  describe("shallow mode", () => {
+  describe("when shallow mode is enabled", () => {
     it("skips FunctionExpression bodies when shallow=true", () => {
       const funcBody = tstl.createBlock([tstl.createExpressionStatement(num(42))]);
       const funcExpr = tstl.createFunctionExpression(funcBody, []);
@@ -469,7 +514,7 @@ describe("walkStatements", () => {
     });
   });
 
-  describe("repeat statement", () => {
+  describe("when walking a repeat statement", () => {
     it("visits body before condition", () => {
       const stmts: tstl.Statement[] = [
         tstl.createRepeatStatement(
@@ -487,7 +532,7 @@ describe("walkStatements", () => {
     });
   });
 
-  describe("traversal control", () => {
+  describe("when controlling traversal", () => {
     it("stop() in expr hook halts all traversal", () => {
       const stmts: tstl.Statement[] = [
         tstl.createVariableDeclarationStatement(id("x"), num(1)),
@@ -565,7 +610,117 @@ describe("walkStatements", () => {
     });
   });
 
-  describe("stop() in specific expression contexts", () => {
+  describe("when guardDepth tracking is enabled", () => {
+    it("increments guardDepth for and/or RHS and if branches", () => {
+      const hooks = {
+        guardDepth: 0,
+        expr: (expr: tstl.Expression) => {
+          if (tstl.isIdentifier(expr)) {
+            visited.push(`${expr.text}@${hooks.guardDepth}`);
+          } else if (tstl.isNumericLiteral(expr)) {
+            visited.push(`${expr.value}@${hooks.guardDepth}`);
+          }
+        },
+      };
+      const visited: string[] = [];
+      const guarded = tstl.createBinaryExpression(
+        id("lhs"),
+        id("rhs"),
+        tstl.SyntaxKind.AndOperator,
+      );
+      const branch = tstl.createIfStatement(
+        id("cond"),
+        tstl.createBlock([tstl.createExpressionStatement(num(1))]),
+        tstl.createBlock([tstl.createExpressionStatement(num(2))]),
+      );
+
+      walkStatements([tstl.createExpressionStatement(guarded), branch], hooks);
+
+      expect(visited).toStrictEqual(["lhs@0", "rhs@1", "cond@0", "1@1", "2@1"]);
+    });
+
+    it("restores guardDepth when stop() fires in a conditional branch", () => {
+      const hooks = {
+        guardDepth: 0,
+        expr: (
+          expr: tstl.Expression,
+          _replace: (n: tstl.Expression) => void,
+          control: {
+            stop(): void;
+          },
+        ) => {
+          if (tstl.isNumericLiteral(expr)) {
+            seenDepths.push(hooks.guardDepth);
+            control.stop();
+          }
+        },
+      };
+      const seenDepths: number[] = [];
+      const stmt = tstl.createExpressionStatement(
+        tstl.createConditionalExpression(id("cond"), num(1), num(2)),
+      );
+
+      walkStatements([stmt], hooks);
+
+      expect(seenDepths).toStrictEqual([1]);
+      expect(hooks.guardDepth).toBe(0);
+    });
+
+    it("restores guardDepth when stop() fires inside an if block", () => {
+      const hooks = {
+        guardDepth: 0,
+        expr: (
+          expr: tstl.Expression,
+          _replace: (n: tstl.Expression) => void,
+          control: {
+            stop(): void;
+          },
+        ) => {
+          if (tstl.isNumericLiteral(expr)) {
+            seenDepths.push(hooks.guardDepth);
+            control.stop();
+          }
+        },
+      };
+      const seenDepths: number[] = [];
+      const stmt = tstl.createIfStatement(
+        id("cond"),
+        tstl.createBlock([tstl.createExpressionStatement(num(1))]),
+        tstl.createBlock([tstl.createExpressionStatement(num(2))]),
+      );
+
+      walkStatements([stmt], hooks);
+
+      expect(seenDepths).toStrictEqual([1]);
+      expect(hooks.guardDepth).toBe(0);
+    });
+
+    it("stops after visiting a for-step expression", () => {
+      const stmt = tstl.createForStatement(
+        tstl.createBlock([tstl.createExpressionStatement(str("body"))]),
+        id("i"),
+        num(0),
+        num(2),
+        num(1),
+      );
+      const visited: string[] = [];
+
+      walkStatements([stmt], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isNumericLiteral(expr) && expr.value === 1) {
+            visited.push("step");
+            control.stop();
+          } else if (tstl.isStringLiteral(expr)) {
+            visited.push(expr.value);
+          }
+        },
+      });
+
+      expect(visited).toStrictEqual(["step"]);
+    });
+  });
+
+  describe("when stop() is called in specific expression contexts", () => {
     it("stop() inside binary expression halts before right operand", () => {
       const bin = tstl.createBinaryExpression(num(1), num(2), tstl.SyntaxKind.AdditionOperator);
       const stmts: tstl.Statement[] = [tstl.createExpressionStatement(bin)];
@@ -811,7 +966,7 @@ describe("walkStatements", () => {
     });
   });
 
-  describe("elseif chain", () => {
+  describe("when walking an elseif chain", () => {
     it("visits all branches of an elseif chain", () => {
       // if (a) then ... elseif (b) then ... else ... end
       const elseBlock = tstl.createBlock([tstl.createExpressionStatement(str("else"))]);
@@ -835,5 +990,73 @@ describe("walkStatements", () => {
       });
       expect(strings).toStrictEqual(["if", "elseif", "else"]);
     });
+  });
+});
+
+describe("isLuaRhsPure", () => {
+  function id(text: string): tstl.Identifier {
+    return tstl.createIdentifier(text);
+  }
+
+  it("returns true for identifiers", () => {
+    expect(isLuaRhsPure(id("a"))).toBe(true);
+  });
+
+  it.each<{ name: string; isPure: boolean; field: tstl.TableFieldExpression }>([
+    {
+      name: "pure field",
+      isPure: true,
+      field: tstl.createTableFieldExpression(id("v"), id("k")),
+    },
+    {
+      name: "non-pure field value",
+      isPure: false,
+      field: tstl.createTableFieldExpression(tstl.createCallExpression(id("f"), []), id("k")),
+    },
+    {
+      name: "non-pure field key",
+      isPure: false,
+      field: tstl.createTableFieldExpression(id("v"), tstl.createCallExpression(id("f"), [])),
+    },
+  ])("returns correct purity for TableExpression $name", ({ isPure, field }) => {
+    expect(isLuaRhsPure(tstl.createTableExpression([field]))).toBe(isPure);
+  });
+});
+
+describe("isLuaExprPure", () => {
+  function id(text: string): tstl.Identifier {
+    return tstl.createIdentifier(text);
+  }
+
+  it("returns false for call and method expressions", () => {
+    expect(isLuaExprPure(tstl.createCallExpression(id("f"), []))).toBe(false);
+  });
+
+  it.each<{ name: string; expr: tstl.Expression }>([
+    { name: "identifier", expr: id("a") },
+    { name: "string literal", expr: tstl.createStringLiteral("s") },
+    {
+      name: "conditional expression",
+      expr: tstl.createConditionalExpression(id("c"), id("t"), id("f")),
+    },
+    {
+      name: "parenthesized expression",
+      expr: tstl.createParenthesizedExpression(id("a")),
+    },
+  ])("returns true for $name", ({ expr }) => {
+    expect(isLuaExprPure(expr)).toBe(true);
+  });
+
+  it.each<{ name: string; expr: tstl.Expression }>([
+    {
+      name: "binary expression",
+      expr: tstl.createBinaryExpression(id("a"), id("b"), tstl.SyntaxKind.AdditionOperator),
+    },
+    {
+      name: "unary expression",
+      expr: tstl.createUnaryExpression(id("a"), tstl.SyntaxKind.NegationOperator),
+    },
+  ])("returns false for $name", ({ expr }) => {
+    expect(isLuaExprPure(expr)).toBe(false);
   });
 });

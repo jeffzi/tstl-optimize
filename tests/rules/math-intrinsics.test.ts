@@ -1,17 +1,103 @@
+import ts from "typescript";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { compile } from "../helpers";
+import { walkStatements } from "../../src/ast/lua-walker";
+import { createVisitors } from "../../src/rules/math-intrinsics";
+import { compile, normalizeLua } from "../helpers";
+
+function countOccurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+function expectLuaSnippets(
+  lua: string,
+  { contains, excludes = [] }: { contains: readonly string[]; excludes?: readonly string[] },
+): void {
+  for (const snippet of contains) {
+    expect(lua, `expected Lua to contain snippet: ${snippet}`).toContain(snippet);
+  }
+
+  for (const snippet of excludes) {
+    expect(lua, `expected Lua to exclude snippet: ${snippet}`).not.toContain(snippet);
+  }
+}
+
+function parseCallExpression(source: string): ts.CallExpression {
+  const sourceFile = ts.createSourceFile("main.ts", source, ts.ScriptTarget.Latest, true);
+  const statement = sourceFile.statements[0];
+  if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+    throw new Error("Expected first statement to be a call expression.");
+  }
+  return statement.expression;
+}
+
+function parseBinaryExpression(source: string): ts.BinaryExpression {
+  const sourceFile = ts.createSourceFile("main.ts", source, ts.ScriptTarget.Latest, true);
+  const statement = sourceFile.statements[0];
+  if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression)) {
+    throw new Error("Expected first statement to be a binary expression.");
+  }
+  return statement.expression;
+}
+
+function collectExpressionReferences(expression: tstl.Expression): tstl.Expression[] {
+  const refs: tstl.Expression[] = [];
+  walkStatements([tstl.createExpressionStatement(expression)], {
+    expr: (node) => {
+      refs.push(node);
+    },
+  });
+  return refs;
+}
+
+function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
+  return checker as unknown as ts.TypeChecker;
+}
 
 describe("math-intrinsics", () => {
   describe("Math.floor", () => {
-    it("replaces with x - x % 1 when argument is pure", () => {
+    it("lowers Math.floor to modulo math while keeping the infinity guard", () => {
       const lua = compile("declare const x: number; const a = Math.floor(x);");
       expect(lua).toContain("% 1");
-      expect(lua).not.toContain("math.floor");
+      expect(lua).toContain("math.floor(x)");
     });
 
     it("keeps math.floor when argument has side effects", () => {
       const lua = compile("declare function foo(): number; const a = Math.floor(foo());");
       expect(lua).toContain("math.floor");
+    });
+
+    it("keeps math.floor when argument is a property access that could invoke a getter", () => {
+      const lua = compile(`
+        declare const box: { readonly value: number };
+        const a = Math.floor(box.value);
+      `);
+
+      expect(lua).toContain("math.floor");
+    });
+
+    it("keeps math.floor for Infinity to preserve Lua math.floor semantics", () => {
+      const lua = compile("const a = Math.floor(Infinity);");
+
+      expect(lua).toContain("math.floor");
+    });
+
+    it("keeps math.floor for oversized numeric literals that become non-finite", () => {
+      const lua = compile("const a = Math.floor(1e309);");
+
+      expect(lua).toContain("math.floor");
+      expect(lua).not.toContain("= Infinity");
+    });
+
+    it("does not rewrite user receivers that are only typed as Math", () => {
+      const lua = compile(`
+        const myMath = ({ floor(x: number) { return x + 100; } } as unknown) as Math;
+        const y = myMath.floor(1.2);
+      `);
+
+      expect(lua).toContain("myMath:floor(1.2)");
+      expect(lua).not.toContain("math.floor");
     });
   });
 
@@ -24,7 +110,9 @@ describe("math-intrinsics", () => {
 
     it("replaces even when argument has side effects (single use)", () => {
       const lua = compile("declare function foo(): number; const a = Math.sqrt(foo());");
-      expect(lua).toContain("^ 0.5");
+
+      expect(lua).toContain("foo() ^ 0.5");
+      expect(countOccurrences(lua, "foo()")).toBe(1);
       expect(lua).not.toContain("math.sqrt");
     });
   });
@@ -49,69 +137,192 @@ describe("math-intrinsics", () => {
       const lua = compile("declare function foo(): number; const a = Math.abs(foo());");
       expect(lua).toContain("math.abs");
     });
-  });
 
-  describe("Math.max", () => {
-    it("replaces 2-arg call with conditional when args are pure", () => {
-      const lua = compile(
-        "declare const a: number; declare const b: number; const c = Math.max(a, b);",
-      );
-      expect(lua).not.toContain("math.max");
+    it("keeps math.abs when argument is a property access that could invoke a getter", () => {
+      const lua = compile(`
+        declare const box: { readonly value: number };
+        const a = Math.abs(box.value);
+      `);
+
+      expect(lua).toContain("math.abs");
     });
 
-    it("keeps math.max with 3+ arguments", () => {
-      const lua = compile(
-        "declare const a: number; declare const b: number; declare const c: number; const d = Math.max(a, b, c);",
+    it("normalizes negative zero to zero", () => {
+      const lua = normalizeLua(
+        compile("const x = Math.abs(-0);", {
+          pluginOptions: { rules: { "constant-folding": false } },
+        }),
       );
-      expect(lua).toContain("math.max");
-    });
 
-    it("keeps math.max when any argument has side effects", () => {
-      const lua = compile(
-        "declare function foo(): number; declare const b: number; const c = Math.max(foo(), b);",
-      );
-      expect(lua).toContain("math.max");
+      expect(lua).toContain("== 0");
+      expect(lua).not.toContain("math.abs");
     });
   });
 
-  describe("Math.min", () => {
-    it("replaces 2-arg call with conditional when args are pure", () => {
-      const lua = compile(
-        "declare const a: number; declare const b: number; const c = Math.min(a, b);",
-      );
-      expect(lua).not.toContain("math.min");
+  describe("generated AST ownership", () => {
+    type VisitorTestContext = {
+      transformExpression(): tstl.Expression;
+    };
+    const checker = {
+      getSymbolAtLocation: () => ({}),
+      getTypeOfSymbol: () => ({}),
+      typeToString: () => "Math",
+    };
+    const config = {
+      target: "puc",
+    };
+    const context = {
+      transformExpression: () =>
+        tstl.createBinaryExpression(
+          tstl.createIdentifier("lhs"),
+          tstl.createIdentifier("rhs"),
+          tstl.SyntaxKind.AdditionOperator,
+        ),
+    };
+
+    it.each([
+      { method: "abs", source: "Math.abs(value);" },
+      { method: "floor", source: "Math.floor(value);" },
+    ])("does not alias repeated Lua subtrees for Math.$method", ({ source }) => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, config]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.CallExpression,
+        context: VisitorTestContext,
+      ) => tstl.Expression;
+      const expression = Reflect.apply(visitor, undefined, [parseCallExpression(source), context]);
+      const refs = collectExpressionReferences(expression);
+
+      expect(new Set(refs).size).toBe(refs.length);
+    });
+  });
+
+  describe("visitor guard coverage", () => {
+    const checker = asTypeChecker({
+      getSymbolAtLocation: () => ({ flags: ts.SymbolFlags.Namespace }) as unknown as ts.Symbol,
+      getTypeOfSymbol: () => ({ flags: ts.TypeFlags.Object }) as unknown as ts.Type,
+      typeToString: () => "Math",
+    });
+    const context = {
+      transformExpression: (expr: ts.Expression) =>
+        tstl.createIdentifier(ts.isIdentifier(expr) ? expr.text : "arg"),
+    } as unknown as tstl.TransformationContext;
+
+    it.each([
+      { source: "Math.sqrt(value, other);", label: "sqrt with wrong arity" },
+      { source: "Math.floor(value, other);", label: "floor with wrong arity" },
+      { source: "Math.abs(value, other);", label: "abs with wrong arity" },
+    ])("returns undefined for $label", ({ source }) => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.CallExpression,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [parseCallExpression(source), context]);
+
+      expect(transformed).toBeUndefined();
     });
 
-    it("keeps math.min with 3+ arguments", () => {
-      const lua = compile(
-        "declare const a: number; declare const b: number; declare const c: number; const d = Math.min(a, b, c);",
-      );
-      expect(lua).toContain("math.min");
+    it("skips the call-expression visitor when configured for LuaJIT", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "luajit" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.CallExpression,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseCallExpression("Math.sqrt(value);"),
+        context,
+      ]);
+
+      expect(transformed).toBeUndefined();
     });
 
-    it("keeps math.min when any argument has side effects", () => {
-      const lua = compile(
-        "declare function foo(): number; declare const b: number; const c = Math.min(foo(), b);",
-      );
-      expect(lua).toContain("math.min");
+    it("returns undefined when the call-expression visitor receives a non-call node", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseBinaryExpression("value ** 2;"),
+        context,
+      ]);
+
+      expect(transformed).toBeUndefined();
+    });
+
+    it("returns undefined when the binary-expression visitor receives a non-binary node", () => {
+      const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.BinaryExpression) as (
+        node: ts.Node,
+        context: tstl.TransformationContext,
+      ) => tstl.Expression | undefined;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        parseCallExpression("Math.sqrt(value);"),
+        context,
+      ]);
+
+      expect(transformed).toBeUndefined();
+    });
+  });
+
+  describe.each([
+    { name: "Math.max", method: "max" },
+    { name: "Math.min", method: "min" },
+  ])("$name", ({ method }) => {
+    it.each([
+      {
+        name: "arguments can be NaN",
+        template: (mathMethod: string) =>
+          `declare const a: number; declare const b: number; const c = Math.${mathMethod}(a, b);`,
+      },
+      {
+        name: "3+ arguments are present",
+        template: (mathMethod: string) =>
+          `declare const a: number; declare const b: number; declare const c: number; const d = Math.${mathMethod}(a, b, c);`,
+      },
+      {
+        name: "any argument has side effects",
+        template: (mathMethod: string) =>
+          `declare function foo(): number; declare const b: number; const c = Math.${mathMethod}(foo(), b);`,
+      },
+    ])("keeps math.$method when $name", ({ template }) => {
+      const lua = compile(template(method));
+
+      expect(lua).toContain(`math.${method}`);
     });
   });
 
   describe("x ** 2", () => {
-    it("replaces x ** 2 with x * x when base is pure", () => {
-      const lua = compile("declare const x: number; const a = x ** 2;");
-      expect(lua).toContain("x * x");
-      expect(lua).not.toContain("^");
-    });
+    it.each([
+      {
+        name: "replaces x ** 2 when base is pure",
+        source: "declare const x: number; const a = x ** 2;",
+        contains: ["x * x"],
+        excludes: ["^"],
+      },
+      {
+        name: "keeps x ^ 2 when base has side effects",
+        source: "declare function foo(): number; const a = foo() ** 2;",
+        contains: ["^ 2"],
+      },
+      {
+        name: "does not replace x ** 3 or other exponents",
+        source: "declare const x: number; const a = x ** 3;",
+        contains: ["x ^ 3"],
+      },
+      {
+        name: "keeps element-access bases to avoid duplicating indexed reads",
+        source: "declare const arr: number[]; const a = arr[0] ** 2;",
+        contains: ["^ 2"],
+      },
+    ])("$name", ({ source, contains, excludes }) => {
+      const lua = compile(source);
 
-    it("keeps x ^ 2 when base has side effects", () => {
-      const lua = compile("declare function foo(): number; const a = foo() ** 2;");
-      expect(lua).toContain("^ 2");
-    });
-
-    it("does not replace x ** 3 or other exponents", () => {
-      const lua = compile("declare const x: number; const a = x ** 3;");
-      expect(lua).toContain("x ^ 3");
+      expectLuaSnippets(lua, { contains, excludes });
     });
   });
 
@@ -121,6 +332,7 @@ describe("math-intrinsics", () => {
 
       expect(lua).toContain("= 1");
       expect(lua).not.toContain("% 1");
+      expect(lua).not.toContain("math.floor");
     });
 
     it("folds Math.abs conditional with constant argument", () => {
@@ -194,8 +406,7 @@ describe("math-intrinsics", () => {
       },
     ])("$name on LuaJIT", ({ source, contains, excludes }) => {
       const lua = compile(source, jit);
-      for (const s of contains) expect(lua).toContain(s);
-      for (const s of excludes ?? []) expect(lua).not.toContain(s);
+      expectLuaSnippets(lua, { contains, excludes });
     });
   });
 });

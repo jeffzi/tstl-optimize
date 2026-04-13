@@ -2,7 +2,12 @@
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { walkStatements } from "../../src/ast/lua-walker";
-import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../src/ast/scope";
+import {
+  buildChainExpression,
+  collectArrayElementAccesses,
+  collectScopeInfo,
+  luaPropertyChain,
+} from "../../src/ast/scope";
 
 function countPropertyAccess(statements: tstl.Statement[], chain: string): number {
   let count = 0;
@@ -17,7 +22,6 @@ function countPropertyAccess(statements: tstl.Statement[], chain: string): numbe
   return count;
 }
 
-// Helper: build `table.field` as a Lua TableIndexExpression
 function makeAccess(table: string, ...fields: string[]): tstl.TableIndexExpression {
   let expr: tstl.Expression = tstl.createIdentifier(table);
   for (const field of fields) {
@@ -57,7 +61,7 @@ describe("luaPropertyChain", () => {
   });
 });
 
-describe("countPropertyAccess", () => {
+describe("when counting property chain occurrences in statements", () => {
   it("counts matching chains at any depth", () => {
     const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(
@@ -153,7 +157,10 @@ describe("collectScopeInfo", () => {
     expect(chainCounts.has("math")).toBe(false);
   });
 
-  it("counts chains inside function bodies when shallow=false", () => {
+  it.each([
+    { shallow: false, expectedCount: 1, description: "includes function bodies" },
+    { shallow: true, expectedCount: 0, description: "skips function bodies" },
+  ])("chain counting $description", ({ shallow, expectedCount }) => {
     const funcBody = tstl.createBlock([
       tstl.createVariableDeclarationStatement(
         tstl.createIdentifier("x"),
@@ -165,24 +172,8 @@ describe("collectScopeInfo", () => {
       tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
     ];
 
-    const { chainCounts } = collectScopeInfo(statements, false);
-    expect(chainCounts.get("math.cos")).toBe(1);
-  });
-
-  it("skips function bodies when shallow=true", () => {
-    const funcBody = tstl.createBlock([
-      tstl.createVariableDeclarationStatement(
-        tstl.createIdentifier("x"),
-        makeAccess("math", "cos"),
-      ),
-    ]);
-    const funcExpr = tstl.createFunctionExpression(funcBody, []);
-    const statements: tstl.Statement[] = [
-      tstl.createVariableDeclarationStatement(tstl.createIdentifier("fn"), funcExpr),
-    ];
-
-    const { chainCounts } = collectScopeInfo(statements, true);
-    expect(chainCounts.has("math.cos")).toBe(false);
+    const { chainCounts } = collectScopeInfo(statements, shallow);
+    expect(chainCounts.get("math.cos") ?? 0).toBe(expectedCount);
   });
 
   it("collects variable declaration LHS identifiers as scopeDefs", () => {
@@ -244,6 +235,76 @@ describe("collectScopeInfo", () => {
     const { scopeDefs } = collectScopeInfo(statements, true);
     expect(scopeDefs).toStrictEqual(new Set(["fn"]));
   });
+
+  it("collects nested function expression parameters as scopeDefs when shallow=false", () => {
+    const funcBody = tstl.createBlock([
+      tstl.createReturnStatement([makeAccess("config", "timeout")]),
+    ]);
+    const funcExpr = tstl.createFunctionExpression(funcBody, [tstl.createIdentifier("config")]);
+    const callExpr = tstl.createCallExpression(funcExpr, [tstl.createIdentifier("config")]);
+    const statements: tstl.Statement[] = [tstl.createExpressionStatement(callExpr)];
+
+    const { scopeDefs } = collectScopeInfo(statements, false);
+    expect(scopeDefs).toStrictEqual(new Set(["config"]));
+  });
+
+  it("collects chained assignment targets, function-definition params, and loop variables", () => {
+    const functionDefinition = tstl.createAssignmentStatement(
+      makeAccess("module", "run"),
+      tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("config")]),
+    );
+    const propertyAssignment = tstl.createAssignmentStatement(
+      makeAccess("state", "value"),
+      tstl.createNumericLiteral(1),
+    );
+    const forIn = tstl.createForInStatement(
+      tstl.createBlock([]),
+      [tstl.createIdentifier("key")],
+      [tstl.createIdentifier("pairsIter")],
+    );
+    const forStmt = tstl.createForStatement(
+      tstl.createBlock([]),
+      tstl.createIdentifier("i"),
+      tstl.createNumericLiteral(0),
+      tstl.createNumericLiteral(1),
+    );
+
+    const { scopeDefs } = collectScopeInfo(
+      [functionDefinition, propertyAssignment, forIn, forStmt],
+      false,
+    );
+
+    expect(scopeDefs).toStrictEqual(new Set(["module.run", "config", "state.value", "key", "i"]));
+  });
+
+  it("ignores non-identifier function and loop parameters", () => {
+    const variadicExpr = tstl.createFunctionExpression(tstl.createBlock([]), [
+      tstl.createIdentifier("arg"),
+    ]);
+    Reflect.set(variadicExpr, "params", [tstl.createDotsLiteral()]);
+    const variadicDefinition = tstl.createAssignmentStatement(
+      tstl.createIdentifier("fn"),
+      tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("arg")]),
+    );
+    const definedFunction = variadicDefinition.right[0];
+    if (!tstl.isFunctionExpression(definedFunction)) {
+      throw new Error("Expected FunctionExpression");
+    }
+    Reflect.set(definedFunction, "params", [tstl.createDotsLiteral()]);
+    const forIn = tstl.createForInStatement(
+      tstl.createBlock([]),
+      [tstl.createIdentifier("value")],
+      [tstl.createIdentifier("iter")],
+    );
+    Reflect.set(forIn, "names", [tstl.createDotsLiteral()]);
+
+    const { scopeDefs } = collectScopeInfo(
+      [tstl.createExpressionStatement(variadicExpr), variadicDefinition, forIn],
+      false,
+    );
+
+    expect(scopeDefs).toStrictEqual(new Set(["fn"]));
+  });
 });
 
 describe("buildChainExpression", () => {
@@ -260,5 +321,169 @@ describe("buildChainExpression", () => {
 
   it("throws for single-segment chain", () => {
     expect(() => buildChainExpression("math")).toThrow("dotted chain");
+  });
+});
+
+describe("collectArrayElementAccesses", () => {
+  it("ignores array accesses with non-identifier indices", () => {
+    // Numeric literal index — not a loop variable
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createNumericLiteral(1);
+    const expr = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createExpressionStatement(expr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i", "j"]), true);
+
+    expect(info.counts.size).toBe(0);
+    expect(info.writes.size).toBe(0);
+    expect(info.loopVar.size).toBe(0);
+  });
+
+  it("ignores array accesses with identifiers not in loopVarNames", () => {
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("x"); // x is not in loopVarNames
+    const expr = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createExpressionStatement(expr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i", "j"]), true);
+
+    expect(info.counts.size).toBe(0);
+    expect(info.loopVar.size).toBe(0);
+  });
+
+  it("counts RHS array element accesses with loop variable index", () => {
+    // t[i] on RHS (expression statement)
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("i");
+    const expr = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createExpressionStatement(expr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
+
+    expect(info.counts.get("t")).toBe(1);
+    expect(info.loopVar.get("t")).toBe("i");
+    expect(info.writes.has("t")).toBe(false);
+  });
+
+  it("marks LHS array element writes without counting them as reads", () => {
+    // t[i] on LHS (assignment statement)
+    const table = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("i");
+    const lhs = tstl.createTableIndexExpression(table, index);
+    const stmt = tstl.createAssignmentStatement([lhs], [tstl.createNumericLiteral(1)]);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), true);
+
+    expect(info.counts.has("t")).toBe(false);
+    expect(info.loopVar.get("t")).toBe("i");
+    expect(info.writes.has("t")).toBe(true);
+  });
+
+  it("counts multiple accesses to the same base with same loop var", () => {
+    const table1 = tstl.createIdentifier("t");
+    const table2 = tstl.createIdentifier("t");
+    const index = tstl.createIdentifier("i");
+
+    const expr1 = tstl.createTableIndexExpression(table1, index);
+    const expr2 = tstl.createTableIndexExpression(table2, index);
+
+    const stmts = [tstl.createExpressionStatement(expr1), tstl.createExpressionStatement(expr2)];
+
+    const info = collectArrayElementAccesses(stmts, new Set(["i"]), true);
+
+    expect(info.counts.get("t")).toBe(2);
+    expect(info.loopVar.get("t")).toBe("i");
+  });
+
+  it("excludes array base from hoisting when accessed with different loop variables", () => {
+    // t[i] in one place, t[j] in another (same base, different loop variables)
+    const table1 = tstl.createIdentifier("t");
+    const table2 = tstl.createIdentifier("t");
+    const indexI = tstl.createIdentifier("i");
+    const indexJ = tstl.createIdentifier("j");
+
+    const expr1 = tstl.createTableIndexExpression(table1, indexI);
+    const expr2 = tstl.createTableIndexExpression(table2, indexJ);
+
+    const stmts = [tstl.createExpressionStatement(expr1), tstl.createExpressionStatement(expr2)];
+
+    const info = collectArrayElementAccesses(stmts, new Set(["i", "j"]), true);
+
+    // t has mixed indices, so it should be excluded from optimization
+    expect(info.counts.has("t")).toBe(false);
+    expect(info.loopVar.has("t")).toBe(false);
+  });
+
+  it("cleanup removes tracking for arrays with mixed loop variable indices", () => {
+    // t[i] and t[j] (mixed), s[k] (consistent)
+    const tableT1 = tstl.createIdentifier("t");
+    const tableT2 = tstl.createIdentifier("t");
+    const tableS = tstl.createIdentifier("s");
+    const indexI = tstl.createIdentifier("i");
+    const indexJ = tstl.createIdentifier("j");
+    const indexK = tstl.createIdentifier("k");
+
+    const exprTI = tstl.createTableIndexExpression(tableT1, indexI);
+    const exprTJ = tstl.createTableIndexExpression(tableT2, indexJ);
+    const exprSK = tstl.createTableIndexExpression(tableS, indexK);
+
+    // Also include a write to t to test cleanup of writes map
+    const lhs = tstl.createTableIndexExpression(tstl.createIdentifier("t"), indexI);
+    const assignStmt = tstl.createAssignmentStatement([lhs], [tstl.createNumericLiteral(1)]);
+
+    const stmts = [
+      tstl.createExpressionStatement(exprTI),
+      tstl.createExpressionStatement(exprTJ),
+      tstl.createExpressionStatement(exprSK),
+      assignStmt,
+    ];
+
+    const info = collectArrayElementAccesses(stmts, new Set(["i", "j", "k"]), true);
+
+    // t is mixed, so all its entries should be removed from counts, loopVar, and writes
+    expect(info.counts.has("t")).toBe(false);
+    expect(info.loopVar.has("t")).toBe(false);
+    expect(info.writes.has("t")).toBe(false);
+
+    // s is consistent, so it should remain in all maps
+    expect(info.counts.has("s")).toBe(true);
+    expect(info.loopVar.get("s")).toBe("k");
+    expect(info.writes.has("s")).toBe(false);
+  });
+
+  it.each([
+    { shallow: false, expectedCount: 1, description: "includes function bodies" },
+    { shallow: true, expectedCount: 0, description: "skips function bodies" },
+  ])("array access collection $description", ({ shallow, expectedCount }) => {
+    const funcBody = tstl.createBlock([
+      tstl.createExpressionStatement(
+        tstl.createTableIndexExpression(tstl.createIdentifier("t"), tstl.createIdentifier("i")),
+      ),
+    ]);
+    const funcExpr = tstl.createFunctionExpression(funcBody, []);
+    const stmt = tstl.createVariableDeclarationStatement(tstl.createIdentifier("f"), funcExpr);
+
+    const info = collectArrayElementAccesses([stmt], new Set(["i"]), shallow);
+    expect(info.counts.get("t") ?? 0).toBe(expectedCount);
+  });
+
+  it("does not count guarded array reads toward localization", () => {
+    const guardedRead = tstl.createIfStatement(
+      tstl.createIdentifier("cond"),
+      tstl.createBlock([
+        tstl.createExpressionStatement(
+          tstl.createTableIndexExpression(
+            tstl.createIdentifier("values"),
+            tstl.createIdentifier("i"),
+          ),
+        ),
+      ]),
+    );
+
+    const info = collectArrayElementAccesses([guardedRead], new Set(["i"]), true);
+
+    expect(info.counts.size).toBe(0);
+    expect(info.loopVar.size).toBe(0);
+    expect(info.writes.size).toBe(0);
   });
 });

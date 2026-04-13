@@ -1,7 +1,6 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { isLuaExprPure } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
@@ -20,13 +19,39 @@ function isLoopStatement(
 }
 
 /**
- * Returns true if all branches of an if/elseif/else chain are empty and have pure conditions.
+ * Empty-branch pruning only removes conditions whose truthiness can be read
+ * without invoking operators that Lua may dispatch through metamethods.
+ */
+function isSafeEmptyBranchCondition(expr: tstl.Expression): boolean {
+  if (
+    tstl.isBooleanLiteral(expr) ||
+    tstl.isNumericLiteral(expr) ||
+    tstl.isStringLiteral(expr) ||
+    tstl.isNilLiteral(expr) ||
+    tstl.isIdentifier(expr)
+  ) {
+    return true;
+  }
+
+  if (tstl.isParenthesizedExpression(expr)) {
+    return isSafeEmptyBranchCondition(expr.expression);
+  }
+
+  return (
+    tstl.isUnaryExpression(expr) &&
+    expr.operator === tstl.SyntaxKind.NotOperator &&
+    isSafeEmptyBranchCondition(expr.operand)
+  );
+}
+
+/**
+ * Returns true if all branches of an if/elseif/else chain are empty and have safe removable conditions.
  */
 function isRemovableIfChain(stmt: tstl.IfStatement): boolean {
   let cursor: tstl.IfStatement | tstl.Block | undefined = stmt;
   while (cursor) {
     if (tstl.isIfStatement(cursor)) {
-      if (cursor.ifBlock.statements.length > 0 || !isLuaExprPure(cursor.condition)) {
+      if (cursor.ifBlock.statements.length > 0 || !isSafeEmptyBranchCondition(cursor.condition)) {
         return false;
       }
       cursor = cursor.elseBlock;
@@ -39,7 +64,7 @@ function isRemovableIfChain(stmt: tstl.IfStatement): boolean {
 }
 
 /**
- * Prunes trailing empty elseif/else branches when their conditions are pure.
+ * Prunes trailing empty elseif/else branches when their conditions are safe to remove.
  */
 function pruneTrailingEmptyBranches(stmt: tstl.IfStatement): void {
   // Collect the if/elseif chain into an array for easy right-to-left traversal
@@ -67,7 +92,10 @@ function pruneTrailingEmptyBranches(stmt: tstl.IfStatement): void {
     // Work backwards through the elseif chain (skipping the main if at index 0)
     for (let i = chain.length - 1; i > 0; i--) {
       const current = chain[i];
-      if (current.ifBlock.statements.length === 0 && isLuaExprPure(current.condition)) {
+      if (
+        current.ifBlock.statements.length === 0 &&
+        isSafeEmptyBranchCondition(current.condition)
+      ) {
         const parent = chain[i - 1];
         if (parent) {
           parent.elseBlock = undefined;

@@ -25,38 +25,42 @@ function add_inline(a: number, b: number) {
 
 // Simple arithmetic: double(x) → x * 2
 print("=== Inline: double(x) ===");
+let double_acc = 0;
 print(
   render(
     compare_time({
       "double(x) [call]": () => {
         for (let i = 0; i < N; i++) {
-          double_baseline(x);
+          double_acc += double_baseline(x);
         }
       },
       "double(x) [inlined]": () => {
         for (let i = 0; i < N; i++) {
-          double_inline(x);
+          double_acc += double_inline(x);
         }
       },
     }),
   ),
 );
+print(double_acc); // prevent DCE
 
 // Multi-param: add(a, b) → a + b
 print("\n=== Inline: add(a, b) ===");
+let add_acc = 0;
 print(
   render(
     compare_time({
       "add(a, b) [call]": () => {
         for (let i = 0; i < N; i++) {
-          add_baseline(a, b);
+          add_acc += add_baseline(a, b);
         }
       },
       "add(a, b) [inlined]": () => {
         for (let i = 0; i < N; i++) {
-          add_inline(a, b);
+          add_acc += add_inline(a, b);
         }
       },
     }),
   ),
 );
+print(add_acc); // prevent DCE

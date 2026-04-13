@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { compile } from "../helpers";
 
+function expectLuaSnippets(
+  lua: string,
+  { contains, notContains = [] }: { contains: readonly string[]; notContains?: readonly string[] },
+): void {
+  expect(contains.filter((snippet) => !lua.includes(snippet))).toStrictEqual([]);
+  expect(notContains.filter((snippet) => lua.includes(snippet))).toStrictEqual([]);
+}
+
 describe("loop-rebase", () => {
-  describe("positive cases (rebased)", () => {
+  describe("when loop qualifies for rebase", () => {
     it("rebases $range(0, n-1) with arr[i] to for i = 1, n", () => {
       const lua = compile(
         "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[i]; }",
@@ -44,7 +52,7 @@ describe("loop-rebase", () => {
     });
   });
 
-  describe("negative cases (not rebased)", () => {
+  describe("when loop does not qualify for rebase", () => {
     it("does not rebase $range(1, n) — start is not 0", () => {
       const lua = compile(
         "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(1, n)) { sum += arr[i]; }",
@@ -95,7 +103,7 @@ describe("loop-rebase", () => {
     });
   });
 
-  describe("edge cases", () => {
+  describe("when handling edge cases", () => {
     it("rebases outer loop independently when nested loop shadows variable", () => {
       const lua = compile(
         [
@@ -239,6 +247,69 @@ describe("loop-rebase", () => {
       // Inner for-in shadows `i` — its body is skipped
       // Outer `arr[i]` still rebases
       expect(lua).toContain("for i = 1, n do");
+    });
+  });
+
+  describe("when loop pattern matching and step validation are evaluated", () => {
+    it("rebases loops while preserving a leading offset in array indices", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[1 + i]; }",
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "arr[i + 1]"],
+        notContains: ["for i = 0, n - 1 do", "arr[i + 2]"],
+      });
+    });
+
+    it.each([
+      {
+        label: "step = 2",
+        src: `
+          declare const arr: number[];
+          const sum = (function () {
+            let sum = 0;
+            for (let i = 0; i < 10; i += 2) {
+              sum += arr[i];
+            }
+            return sum;
+          })();
+        `,
+        contains: ["while i < 10 do", "i = i + 2"],
+        notContains: ["for i = 1"],
+      },
+      {
+        label: "step = 0.5 (fractional)",
+        src: `
+          declare const arr: number[];
+          const sum = (function () {
+            let sum = 0;
+            for (let i = 0; i < 10; i += 0.5) {
+              sum += arr[i];
+            }
+            return sum;
+          })();
+        `,
+        contains: ["while i < 10 do", "i = i + 0.5"],
+        notContains: ["for i = 1"],
+      },
+      {
+        label: "step = -1 (negative)",
+        src: `
+          declare const arr: number[];
+          const sum = (function () {
+            let sum = 0;
+            for (let i = 10; i > 0; i--) {
+              sum += arr[i];
+            }
+            return sum;
+          })();
+        `,
+        contains: ["while i > 0 do", "i = i - 1"],
+        notContains: ["for i = 1"],
+      },
+    ])("does not rebase loop when step is $label", ({ src, contains, notContains }) => {
+      const lua = compile(src);
+      expectLuaSnippets(lua, { contains, notContains });
     });
   });
 });

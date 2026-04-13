@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
@@ -7,6 +8,29 @@ export interface CompileOptions {
   pluginOptions?: Record<string, unknown>;
   luaTarget?: tstl.LuaTarget;
   luaLibImport?: tstl.LuaLibImportKind;
+  /** Skip the luac syntax-validity check. Use only for intentionally-malformed fixtures. */
+  skipLuaCheck?: boolean;
+}
+
+/**
+ * Runs `luac -p -` on the emitted Lua to catch syntax errors the string-assertion
+ * layer would otherwise miss. Requires the `luac` binary to be present.
+ */
+function checkLuaSyntax(lua: string): void {
+  const result = spawnSync("luac", ["-p", "-"], {
+    input: lua,
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  if (result.error) {
+    throw new Error(
+      `luac binary not found or failed to spawn — install Lua and ensure luac is on PATH.\nCause: ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr as string).trim();
+    throw new Error(`Emitted Lua failed luac -p syntax check:\n${stderr}\n\nEmitted Lua:\n${lua}`);
+  }
 }
 
 export interface CompileResult {
@@ -40,25 +64,39 @@ function transpile(
   });
 }
 
-function extractLua(result: tstl.TranspileVirtualProjectResult): string {
+function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChain): string {
+  if (typeof messageText === "string") {
+    return messageText;
+  }
+  const parts: string[] = [messageText.messageText];
+  if (messageText.next) {
+    for (const c of messageText.next) {
+      parts.push(extractDiagnosticMessage(c));
+    }
+  }
+  return parts.join("\n");
+}
+
+function extractLua(result: tstl.TranspileVirtualProjectResult, options?: CompileOptions): string {
   const errors = result.diagnostics.filter(
     (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
   );
   if (errors.length > 0) {
-    const msgs = errors
-      .map((d) => (typeof d.messageText === "string" ? d.messageText : d.messageText.messageText))
-      .join("\n");
+    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
     throw new Error(msgs);
   }
   const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
   if (file === undefined || file.lua === undefined) {
     throw new Error("No Lua output.");
   }
+  if (!options?.skipLuaCheck) {
+    checkLuaSyntax(file.lua);
+  }
   return file.lua;
 }
 
 export function compile(source: string, options?: CompileOptions): string {
-  return extractLua(transpile({ "main.ts": source }, options));
+  return extractLua(transpile({ "main.ts": source }, options), options);
 }
 
 export function compileMultiFileWithDiagnostics(
@@ -66,7 +104,7 @@ export function compileMultiFileWithDiagnostics(
   options?: CompileOptions,
 ): CompileResult {
   const result = transpile(files, options);
-  const lua = extractLua(result);
+  const lua = extractLua(result, options);
   const diagnostics = result.diagnostics.filter((d) => d.source === "tstl-optimize");
   return { lua, diagnostics };
 }

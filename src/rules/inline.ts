@@ -35,6 +35,36 @@ interface ReturnValueInlineTarget {
 
 type InlineTarget = ExpressionInlineTarget | StatementInlineTarget | ReturnValueInlineTarget;
 
+function hasLuaMultiReturnTypeNode(typeNode: ts.TypeNode | undefined): boolean {
+  return (
+    typeNode !== undefined &&
+    ts.isTypeReferenceNode(typeNode) &&
+    ts.isIdentifier(typeNode.typeName) &&
+    typeNode.typeName.text === "LuaMultiReturn"
+  );
+}
+
+function declarationHasLuaMultiReturnReturnType(declaration: ts.Node): boolean {
+  if (
+    ts.isFunctionDeclaration(declaration) ||
+    ts.isFunctionExpression(declaration) ||
+    ts.isArrowFunction(declaration)
+  ) {
+    return hasLuaMultiReturnTypeNode(declaration.type);
+  }
+
+  if (
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer &&
+    (ts.isArrowFunction(declaration.initializer) ||
+      ts.isFunctionExpression(declaration.initializer))
+  ) {
+    return hasLuaMultiReturnTypeNode(declaration.initializer.type);
+  }
+
+  return false;
+}
+
 function hasInlineTag(node: ts.Node): boolean {
   return ts.getJSDocTags(node).some((tag) => tag.tagName.text === "inline");
 }
@@ -74,7 +104,7 @@ function classifyBody(
   return { kind: "statements", stmts: statements };
 }
 
-type InlineTargetResult = { target: InlineTarget } | { reason: string } | undefined;
+type InlineTargetResult = { target: InlineTarget } | undefined;
 
 function makeTargetResult(
   classified: ClassifiedBody | undefined,
@@ -103,6 +133,18 @@ function makeTargetResult(
         kind: "statementsWithReturn",
         bodyStmts: classified.stmts,
         returnExpr: classified.returnExpr,
+        params,
+        declaration,
+        resolvedSymbol,
+      },
+    };
+  }
+  if (declarationHasLuaMultiReturnReturnType(declaration)) {
+    return {
+      target: {
+        kind: "statementsWithReturn",
+        bodyStmts: [],
+        returnExpr: classified.expr,
         params,
         declaration,
         resolvedSymbol,
@@ -154,6 +196,133 @@ function isModuleScopeDeclaration(node: ts.Node): boolean {
     );
   }
   return false;
+}
+
+function resolveSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
+  return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+}
+
+function isDeclarationNameReference(
+  node: ts.Identifier,
+  declaration: ts.FunctionDeclaration | ts.VariableDeclaration,
+): boolean {
+  if (ts.isFunctionDeclaration(declaration)) {
+    return declaration.name === node;
+  }
+  return declaration.name === node;
+}
+
+function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {
+  if (ts.isIdentifier(name)) return true;
+
+  if (ts.isObjectBindingPattern(name)) {
+    return name.elements.every(
+      (element) =>
+        !element.dotDotDotToken &&
+        ts.isIdentifier(element.name) &&
+        element.initializer === undefined,
+    );
+  }
+
+  return name.elements.every(
+    (element) =>
+      !ts.isOmittedExpression(element) &&
+      !element.dotDotDotToken &&
+      ts.isIdentifier(element.name) &&
+      element.initializer === undefined,
+  );
+}
+
+function isCallSiteFullyInlined(callNode: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  const result = getInlineTarget(callNode, checker);
+  if (!result) return false;
+
+  const { target } = result;
+  const hasBlockingFreeVariable = (
+    nodes: readonly ts.Node[],
+    declaration: ts.Node,
+    params: readonly ts.ParameterDeclaration[],
+  ): boolean =>
+    callNode.getSourceFile().fileName !== declaration.getSourceFile().fileName &&
+    hasCrossModuleFreeVariable(nodes, params, declaration, checker);
+
+  if (target.kind === "expression") {
+    return (
+      canInline(target, callNode, checker) === true &&
+      !hasBlockingFreeVariable([target.bodyExpr], target.declaration, target.params)
+    );
+  }
+
+  if (target.kind === "statements") {
+    return (
+      ts.isExpressionStatement(callNode.parent) &&
+      canInlineStatements(target, callNode, checker) === true &&
+      !hasBlockingFreeVariable(target.bodyStmts, target.declaration, target.params)
+    );
+  }
+
+  if (ts.isReturnStatement(callNode.parent)) {
+    return (
+      canInlineStatements(target, callNode, checker) === true &&
+      !hasBlockingFreeVariable(
+        [...target.bodyStmts, target.returnExpr],
+        target.declaration,
+        target.params,
+      )
+    );
+  }
+
+  if (!ts.isVariableDeclaration(callNode.parent)) {
+    return false;
+  }
+
+  const variableStatement = callNode.parent.parent?.parent;
+  return (
+    !!variableStatement &&
+    ts.isVariableStatement(variableStatement) &&
+    variableStatement.declarationList.declarations.length === 1 &&
+    isSupportedInlineBindingPattern(callNode.parent.name) &&
+    canInlineStatements(target, callNode, checker) === true &&
+    !hasBlockingFreeVariable(
+      [...target.bodyStmts, target.returnExpr],
+      target.declaration,
+      target.params,
+    )
+  );
+}
+
+function canEraseInlineDeclaration(
+  declaration: ts.FunctionDeclaration | ts.VariableDeclaration,
+  checker: ts.TypeChecker,
+): boolean {
+  const name = declaration.name;
+  if (!name || !ts.isIdentifier(name)) return false;
+
+  const symbol = checker.getSymbolAtLocation(name);
+  if (!symbol) return false;
+  const resolvedSymbol = resolveSymbol(symbol, checker);
+
+  let canErase = true;
+  function visit(node: ts.Node): void {
+    if (!canErase || ts.isTypeNode(node)) return;
+
+    if (ts.isIdentifier(node)) {
+      const refSymbol = checker.getSymbolAtLocation(node);
+      if (refSymbol && resolveSymbol(refSymbol, checker) === resolvedSymbol) {
+        if (isDeclarationNameReference(node, declaration)) return;
+        if (ts.isCallExpression(node.parent) && node.parent.expression === node) {
+          if (isCallSiteFullyInlined(node.parent, checker)) return;
+        }
+        canErase = false;
+        return;
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(declaration.getSourceFile());
+  return canErase;
 }
 
 function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeChecker): number {
@@ -518,8 +687,9 @@ function hasLinearControlFlow(stmts: readonly ts.Statement[], loopBody = false):
         if (finallyResult !== true) return finallyResult;
       }
     } else if (ts.isLabeledStatement(stmt)) {
-      const labelResult = hasLinearControlFlow([stmt.statement], loopBody);
-      if (labelResult !== true) return labelResult;
+      // Defensive only: current TSTL rejects labeled statements end-to-end, so
+      // treat them as non-inlineable if one reaches this control-flow analysis.
+      return "labeled statement in body";
     }
   }
   return true;
@@ -571,6 +741,28 @@ interface ParamMapResult {
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }
 
+function needsEagerArgumentTemps(
+  target: ExpressionInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): boolean {
+  for (let i = 0; i < target.params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    if (!paramSymbol) {
+      return false;
+    }
+
+    if (
+      countReferences(target.bodyExpr, paramSymbol, checker) === 1 &&
+      hasSideEffects(callNode.arguments[i], SideEffectOptions.None)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /** Build temp-var declarations and a symbolId→expression map for each call argument.
  *  Returns undefined if any param symbol or Lua symbolId cannot be resolved. */
 function buildParamMap(
@@ -605,6 +797,17 @@ function transformBodyStatements(
   const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
   context.popScope();
   return luaBody;
+}
+
+function getInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement {
+  const parent = returnExpr.parent;
+  if (ts.isReturnStatement(parent) && parent.expression === returnExpr) {
+    return parent;
+  }
+
+  const syntheticReturn = ts.factory.createReturnStatement(returnExpr);
+  ts.setOriginalNode(syntheticReturn, returnExpr);
+  return ts.setTextRange(syntheticReturn, returnExpr);
 }
 
 function buildDoEndBlock(
@@ -661,6 +864,19 @@ function inlineExpressionBody(
     return undefined;
   }
 
+  if (needsEagerArgumentTemps(target, callNode, checker)) {
+    const mapped = buildParamMap(target.params, callNode.arguments, checker, context);
+    if (!mapped) return undefined;
+
+    const substituted = substituteParams(luaBody, mapped.paramMap);
+    return tstl.createCallExpression(
+      tstl.createFunctionExpression(
+        tstl.createBlock([...mapped.tempDecls, tstl.createReturnStatement([substituted])]),
+      ),
+      [],
+    );
+  }
+
   const substituted = substituteParams(luaBody, paramMap);
 
   return needsParentheses(substituted)
@@ -676,10 +892,6 @@ function handleCallExpression(
 ): tstl.Expression | undefined {
   const result = getInlineTarget(node, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(node, result.reason, strict));
-    return undefined;
-  }
   const { target } = result;
 
   if (target.kind === "statements" || target.kind === "statementsWithReturn") {
@@ -709,13 +921,62 @@ function handleCallExpression(
   return inlineExpressionBody(target, node, checker, context, strict);
 }
 
-/** Check whether any VariableStatement in the body declares a binding with the given name. */
+/** Check whether any VariableStatement or FunctionDeclaration in the body declares a binding with the given name. */
 function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: string): boolean {
   for (const stmt of bodyStmts) {
     if (ts.isVariableStatement(stmt)) {
       for (const decl of stmt.declarationList.declarations) {
         if (ts.isIdentifier(decl.name) && decl.name.text === name) return true;
       }
+    }
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) return true;
+    if (ts.isBlock(stmt) && bodyDeclaresLocal(stmt.statements, name)) return true;
+    if (ts.isIfStatement(stmt)) {
+      const thenStatements = ts.isBlock(stmt.thenStatement)
+        ? stmt.thenStatement.statements
+        : [stmt.thenStatement];
+      if (bodyDeclaresLocal(thenStatements, name)) return true;
+      if (stmt.elseStatement) {
+        const elseStatements = ts.isBlock(stmt.elseStatement)
+          ? stmt.elseStatement.statements
+          : [stmt.elseStatement];
+        if (bodyDeclaresLocal(elseStatements, name)) return true;
+      }
+    }
+    if (
+      (ts.isWhileStatement(stmt) ||
+        ts.isDoStatement(stmt) ||
+        ts.isForStatement(stmt) ||
+        ts.isForInStatement(stmt) ||
+        ts.isForOfStatement(stmt)) &&
+      bodyDeclaresLocal(
+        ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
+        name,
+      )
+    ) {
+      return true;
+    }
+    if (ts.isSwitchStatement(stmt)) {
+      for (const clause of stmt.caseBlock.clauses) {
+        if (bodyDeclaresLocal(clause.statements, name)) return true;
+      }
+    }
+    if (ts.isTryStatement(stmt)) {
+      if (bodyDeclaresLocal(stmt.tryBlock.statements, name)) return true;
+      if (stmt.catchClause && bodyDeclaresLocal(stmt.catchClause.block.statements, name))
+        return true;
+      if (stmt.finallyBlock && bodyDeclaresLocal(stmt.finallyBlock.statements, name)) return true;
+    }
+    if (
+      // Defensive only: current TSTL rejects labeled statements end-to-end, but
+      // preserve their scope interactions if one reaches this analysis.
+      ts.isLabeledStatement(stmt) &&
+      bodyDeclaresLocal(
+        ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
+        name,
+      )
+    ) {
+      return true;
     }
   }
   return false;
@@ -781,6 +1042,23 @@ interface DestructureShared {
   resultDecl: tstl.VariableDeclarationStatement;
   tempDecls: tstl.VariableDeclarationStatement[];
   doEnd: tstl.DoStatement;
+}
+
+function returnsLuaMultiReturn(
+  declaration: ts.Node,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): boolean {
+  if (declarationHasLuaMultiReturnReturnType(declaration)) {
+    return true;
+  }
+
+  const signature = checker.getResolvedSignature(callNode);
+  const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
+  return (
+    returnType?.symbol?.name === "LuaMultiReturn" ||
+    returnType?.aliasSymbol?.name === "LuaMultiReturn"
+  );
 }
 
 /**
@@ -921,7 +1199,7 @@ function buildArrayDestructureInline(
     // Transform body AND the return statement inside a function scope so TSTL
     // handles $multi correctly ($multi must appear in return-statement context)
     // and all param symbols get registered in context.symbolIdMaps.
-    const returnStmt = target.returnExpr.parent as ts.ReturnStatement;
+    const returnStmt = getInlineReturnStatement(target.returnExpr);
     context.pushScope(FUNCTION_SCOPE, declaration);
     const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
     const luaReturnStmts = context.transformStatements(returnStmt);
@@ -993,10 +1271,6 @@ function handleVariableStatement(
 
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
-    return undefined;
-  }
 
   const { target } = result;
 
@@ -1049,18 +1323,38 @@ function buildReturnSiteInline(
   context: tstl.TransformationContext,
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
+  const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
+  let luaReturnStmts: tstl.Statement[] | undefined;
 
   // Transform body and return expression first so ALL param symbols are registered
   // in context.symbolIdMaps before buildParamMap looks them up. A param that only
   // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  if (isMultiReturn) {
+    const returnStmt = getInlineReturnStatement(target.returnExpr);
+    context.pushScope(FUNCTION_SCOPE, declaration);
+    luaReturnStmts = context.transformStatements(returnStmt);
+    context.popScope();
+  }
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
   const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
+  if (isMultiReturn) {
+    const luaReturn = luaReturnStmts?.find(
+      (stmt): stmt is tstl.ReturnStatement => stmt.kind === tstl.SyntaxKind.ReturnStatement,
+    );
+    if (!luaReturn) return undefined;
+
+    const substitutedReturns = luaReturn.expressions.map((expr) =>
+      substituteParams(expr, paramMap),
+    );
+    return [...tempDecls, ...substitutedBody, tstl.createReturnStatement(substitutedReturns)];
+  }
+
+  const luaReturnExpr = context.transformExpression(target.returnExpr);
   const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   // Flat emission: arg temps + body statements + return (no do...end wrapper needed).
@@ -1079,10 +1373,6 @@ function handleReturnStatement(
 
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
-    return undefined;
-  }
 
   const { target } = result;
 
@@ -1169,12 +1459,20 @@ function hasCrossModuleFreeVariable(
     // from type-only references (e.g., `param: SomeType` where SomeType is a
     // module-level type alias).
     if (ts.isTypeNode(node)) return;
+    if (ts.isPropertyAccessExpression(node)) {
+      walk(node.expression);
+      return;
+    }
     if (ts.isIdentifier(node)) {
       const sym = checker.getSymbolAtLocation(node);
       if (sym && !paramSymbols.has(sym)) {
-        const resolved = sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym;
-        const decls = resolved.getDeclarations();
-        if (decls) {
+        const symbolsToCheck = [sym];
+        if (sym.flags & ts.SymbolFlags.Alias) {
+          symbolsToCheck.push(checker.getAliasedSymbol(sym));
+        }
+        for (const symbolToCheck of symbolsToCheck) {
+          const decls = symbolToCheck.getDeclarations();
+          if (!decls) continue;
           for (const decl of decls) {
             if (decl.getSourceFile() === sourceFile && !isDescendant(decl, sourceDeclaration)) {
               found = true;
@@ -1204,6 +1502,13 @@ function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
   return false;
 }
 
+/** Check if inlined expression result can be discarded at void site (pure expr with pure args). */
+function isPureAtVoidSite(bodyExpr: ts.Expression, callArgs: ts.NodeArray<ts.Expression>): boolean {
+  const bodyIsPure = !hasSideEffects(bodyExpr);
+  const allArgsArePure = callArgs.every((arg) => !hasSideEffects(arg));
+  return bodyIsPure && allArgsArePure;
+}
+
 function handleExpressionStatement(
   node: ts.ExpressionStatement,
   checker: ts.TypeChecker,
@@ -1215,17 +1520,20 @@ function handleExpressionStatement(
 
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
-  if ("reason" in result) {
-    context.diagnostics.push(createInlineWarning(callNode, result.reason, strict));
-    return undefined;
-  }
 
   const { target } = result;
 
   if (target.kind === "expression") {
     const inlined = inlineExpressionBody(target, callNode, checker, context, strict);
     if (inlined === undefined) return undefined;
-    return [tstl.createExpressionStatement(inlined)];
+    // If the body and all arguments are pure, the result is unused at void site —
+    // drop the statement entirely rather than emitting an invalid bare expression.
+    if (isPureAtVoidSite(target.bodyExpr, callNode.arguments)) {
+      return [];
+    }
+    // For side-effectful expressions, use local _ = <expr> pattern, which is always
+    // valid Lua regardless of the expression type (call, arithmetic, function, etc.)
+    return [tstl.createVariableDeclarationStatement([tstl.createIdentifier("_")], [inlined])];
   }
 
   if (target.kind === "statementsWithReturn") {
@@ -1250,8 +1558,16 @@ function handleExpressionStatement(
   return buildDoEndBlock(target, callNode, checker, context);
 }
 
-function handleFunctionDeclaration(node: ts.FunctionDeclaration): tstl.Statement[] | undefined {
-  if (hasInlineTag(node) && isModuleScopeDeclaration(node) && !isExported(node)) {
+function handleFunctionDeclaration(
+  node: ts.FunctionDeclaration,
+  checker: ts.TypeChecker,
+): tstl.Statement[] | undefined {
+  if (
+    hasInlineTag(node) &&
+    isModuleScopeDeclaration(node) &&
+    !isExported(node) &&
+    canEraseInlineDeclaration(node, checker)
+  ) {
     return [];
   }
   return undefined;
@@ -1259,13 +1575,15 @@ function handleFunctionDeclaration(node: ts.FunctionDeclaration): tstl.Statement
 
 function handleVariableStatementDeclaration(
   node: ts.VariableStatement,
+  checker: ts.TypeChecker,
 ): tstl.Statement[] | undefined {
   const decls = node.declarationList.declarations;
   if (
     decls.length === 1 &&
     hasInlineTag(node) &&
     isModuleScopeDeclaration(decls[0]) &&
-    !isExported(node)
+    !isExported(node) &&
+    canEraseInlineDeclaration(decls[0], checker)
   ) {
     return [];
   }
@@ -1327,7 +1645,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
       if (!ts.isVariableStatement(node)) return undefined;
       return (
         handleVariableStatement(node, checker, context, strictMode) ??
-        handleVariableStatementDeclaration(node)
+        handleVariableStatementDeclaration(node, checker)
       );
     },
     [ts.SyntaxKind.ReturnStatement]: (node, context) => {
@@ -1336,7 +1654,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
     },
     [ts.SyntaxKind.FunctionDeclaration]: (node) => {
       if (!ts.isFunctionDeclaration(node)) return undefined;
-      return handleFunctionDeclaration(node);
+      return handleFunctionDeclaration(node, checker);
     },
   };
   return visitors as tstl.Visitors;

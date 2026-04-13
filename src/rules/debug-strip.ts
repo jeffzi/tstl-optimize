@@ -1,31 +1,89 @@
 import ts from "typescript";
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
-import * as tstl from "typescript-to-lua";
+import type * as tstl from "typescript-to-lua";
 import { type RuleFactory, resolveDebugStripConfig } from "../config";
 
-function rootIdentifier(expr: tstl.Expression): tstl.Identifier | undefined {
-  if (tstl.isIdentifier(expr)) return expr;
-  if (tstl.isTableIndexExpression(expr)) return rootIdentifier(expr.table);
+function rootIdentifier(expr: ts.Expression): ts.Identifier | undefined {
+  if (ts.isIdentifier(expr)) return expr;
+  if (ts.isPropertyAccessExpression(expr)) return rootIdentifier(expr.expression);
+  if (
+    ts.isParenthesizedExpression(expr) ||
+    ts.isAsExpression(expr) ||
+    ts.isNonNullExpression(expr) ||
+    ts.isTypeAssertionExpression(expr)
+  ) {
+    return rootIdentifier(expr.expression);
+  }
   return undefined;
 }
 
-function isStrippedCall(
-  expr: tstl.Expression,
-  functions: ReadonlySet<string>,
-  namespaces: ReadonlySet<string>,
+function isAmbientTopLevelDeclaration(
+  node: ts.VariableStatement | ts.FunctionDeclaration | ts.ModuleDeclaration,
 ): boolean {
-  if (tstl.isCallExpression(expr)) {
-    const callee = expr.expression;
-    if (tstl.isIdentifier(callee)) {
-      return functions.has(callee.text);
+  return (
+    ts.isSourceFile(node.parent) &&
+    (node.getSourceFile().isDeclarationFile ||
+      node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) === true)
+  );
+}
+
+function isStripSafeGlobalDeclaration(declaration: ts.Declaration): boolean {
+  if (
+    ts.isVariableDeclaration(declaration) ||
+    ts.isBindingElement(declaration) ||
+    ts.isParameter(declaration)
+  ) {
+    if (!ts.isVariableDeclaration(declaration)) {
+      return false;
     }
-    const root = rootIdentifier(callee);
-    if (root) return namespaces.has(root.text);
+
+    const statement = declaration.parent.parent;
+    return ts.isVariableStatement(statement) && isAmbientTopLevelDeclaration(statement);
   }
+
+  if (ts.isFunctionDeclaration(declaration) || ts.isModuleDeclaration(declaration)) {
+    return isAmbientTopLevelDeclaration(declaration);
+  }
+
   return false;
 }
 
-export const createVisitors: RuleFactory = (_checker, config) => {
+function isConfiguredGlobalIdentifier(
+  identifier: ts.Identifier,
+  configuredNames: ReadonlySet<string>,
+  checker: ts.TypeChecker,
+): boolean {
+  if (!configuredNames.has(identifier.text)) {
+    return false;
+  }
+
+  const symbol = checker.getSymbolAtLocation(identifier);
+  if (symbol === undefined) {
+    return true;
+  }
+
+  return symbol.declarations?.every(isStripSafeGlobalDeclaration) ?? false;
+}
+
+function isStrippedCall(
+  expr: ts.Expression,
+  functions: ReadonlySet<string>,
+  namespaces: ReadonlySet<string>,
+  checker: ts.TypeChecker,
+): boolean {
+  if (!ts.isCallExpression(expr)) {
+    return false;
+  }
+
+  const callee = expr.expression;
+  if (ts.isIdentifier(callee)) {
+    return isConfiguredGlobalIdentifier(callee, functions, checker);
+  }
+
+  const root = rootIdentifier(callee);
+  return root !== undefined && isConfiguredGlobalIdentifier(root, namespaces, checker);
+}
+
+export const createVisitors: RuleFactory = (checker, config) => {
   const resolved = resolveDebugStripConfig(config.rules["debug-strip"]);
   if (resolved === false) return {};
 
@@ -37,12 +95,9 @@ export const createVisitors: RuleFactory = (_checker, config) => {
       node: ts.ExpressionStatement,
       context: tstl.TransformationContext,
     ) => {
-      const stmts = context.superTransformStatements(node);
-      return stmts.filter(
-        (stmt) =>
-          !tstl.isExpressionStatement(stmt) ||
-          !isStrippedCall(stmt.expression, functions, namespaces),
-      );
+      return isStrippedCall(node.expression, functions, namespaces, checker)
+        ? []
+        : context.superTransformStatements(node);
     },
   };
 };

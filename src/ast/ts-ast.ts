@@ -12,7 +12,7 @@ export const SideEffectOptions = {
  * Bitwise flag set for side effect assumptions.
  * Combine flags using bitwise OR: `SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure`
  */
-export type SideEffectOptions = number;
+export type SideEffectOptions = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 function queueTemplateSpans(templateNode: ts.TemplateExpression, queue: ts.Expression[]): void {
   for (const span of templateNode.templateSpans) queue.push(span.expression);
@@ -48,7 +48,6 @@ export function hasSideEffects(
       case ts.SyntaxKind.NonNullExpression:
       case ts.SyntaxKind.VoidExpression:
       case ts.SyntaxKind.TypeOfExpression:
-      case ts.SyntaxKind.PropertyAccessExpression:
       case ts.SyntaxKind.SpreadElement:
         current = (
           current as
@@ -58,10 +57,13 @@ export function hasSideEffects(
             | ts.NonNullExpression
             | ts.VoidExpression
             | ts.TypeOfExpression
-            | ts.PropertyAccessExpression
             | ts.SpreadElement
         ).expression;
         continue;
+
+      case ts.SyntaxKind.PropertyAccessExpression:
+        // Property reads can invoke getters, so duplicating them is not semantics-preserving.
+        return true;
 
       case ts.SyntaxKind.PrefixUnaryExpression:
         switch ((current as ts.PrefixUnaryExpression).operator) {
@@ -82,10 +84,7 @@ export function hasSideEffects(
       }
 
       case ts.SyntaxKind.ElementAccessExpression: {
-        const ea = current as ts.ElementAccessExpression;
-        queue.push(ea.argumentExpression);
-        current = ea.expression;
-        continue;
+        return true;
       }
 
       case ts.SyntaxKind.ConditionalExpression: {

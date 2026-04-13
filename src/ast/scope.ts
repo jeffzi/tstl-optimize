@@ -45,6 +45,11 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
       _replace: (n: tstl.Expression) => void,
       control: TraversalControl,
     ) => {
+      if (!shallow && tstl.isFunctionExpression(expr)) {
+        for (const param of expr.params ?? []) {
+          if (tstl.isIdentifier(param)) scopeDefs.add(param.text);
+        }
+      }
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
@@ -58,9 +63,19 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
     stmt: (stmt: tstl.Statement) => {
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
         for (const lhs of stmt.left) {
-          if (tstl.isIdentifier(lhs)) scopeDefs.add(lhs.text);
+          if (tstl.isIdentifier(lhs)) {
+            scopeDefs.add(lhs.text);
+          } else if (tstl.isTableIndexExpression(lhs)) {
+            const chain = luaPropertyChain(lhs);
+            if (chain !== undefined) {
+              scopeDefs.add(chain);
+            }
+          }
         }
-        if (tstl.isFunctionDefinition(stmt)) {
+        // Only collect function parameters at module scope (shallow=false).
+        // At function scope (shallow=true), nested function parameters should NOT
+        // prevent hoisting of outer scope chains.
+        if (!shallow && tstl.isFunctionDefinition(stmt)) {
           for (const p of stmt.right[0].params?.filter(tstl.isIdentifier) ?? []) {
             scopeDefs.add(p.text);
           }
@@ -135,7 +150,16 @@ export function collectArrayElementAccesses(
         control.skip();
       }
     },
-    stmt: (stmt: tstl.Statement) => {
+    stmt: (stmt: tstl.Statement, control: TraversalControl) => {
+      if (
+        (tstl.isForStatement(stmt) && loopVarNames.has(stmt.controlVariable.text)) ||
+        (tstl.isForInStatement(stmt) &&
+          stmt.names.some((name) => tstl.isIdentifier(name) && loopVarNames.has(name.text)))
+      ) {
+        control.skip();
+        return;
+      }
+
       if (tstl.isAssignmentStatement(stmt)) {
         for (const lhs of stmt.left) {
           if (
