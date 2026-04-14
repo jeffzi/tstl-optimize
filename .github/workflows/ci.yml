@@ -38,16 +38,10 @@ jobs:
         run: npm run check:unused
 
       - name: Build
-        run: |
-          if find src -name '*.ts' 2>/dev/null | grep -q .; then
-            npm run build
-          fi
+        run: npm run build
 
       - name: Test
-        run: |
-          if find test -name '*.test.ts' 2>/dev/null | grep -q .; then
-            npm run test -- --coverage
-          fi
+        run: npm run test:unit
 
       - name: Cache TSTL conformance clone
         uses: actions/cache@v4

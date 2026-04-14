@@ -1,0 +1,59 @@
+# TSTL bump coverage gate
+#
+# Runs unit tests + coverage whenever `package.json` or `package-lock.json` changes in a PR.
+# If the `typescript-to-lua` devDependency version is unchanged the job exits early (no cost).
+# When the version does change the 90 % branch threshold in vitest.config.ts acts as the gate:
+# if newly-reachable branches (accepted gaps that TSTL now emits) are not covered by tests the
+# run fails and the PR cannot merge.
+#
+# To enforce this as a required check, add "TSTL bump coverage gate" to the branch-protection
+# "Required status checks" list in the repository settings.
+
+name: TSTL bump coverage gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+
+jobs:
+  tstl-bump-coverage:
+    name: TSTL bump coverage gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Detect TSTL version change
+        id: detect
+        run: |
+          base_ver=$(git show "${{ github.event.pull_request.base.sha }}:package.json" \
+            | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).devDependencies['typescript-to-lua']??''))")
+          head_ver=$(node -e "const p=require('./package.json');console.log(p.devDependencies['typescript-to-lua']??'')")
+          echo "base=$base_ver"
+          echo "head=$head_ver"
+          if [ "$base_ver" = "$head_ver" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::TSTL version changed: $base_ver -> $head_ver — running coverage gate"
+          fi
+
+      - name: Setup Node.js
+        if: steps.detect.outputs.changed == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install dependencies
+        if: steps.detect.outputs.changed == 'true'
+        run: npm ci
+
+      - name: Run unit tests with coverage
+        if: steps.detect.outputs.changed == 'true'
+        run: npm run test:unit
