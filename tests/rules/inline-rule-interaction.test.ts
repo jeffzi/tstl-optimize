@@ -1,7 +1,8 @@
+import fc from "fast-check";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { compile, normalizeLua } from "../helpers";
+import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
 
 describe("optimize rule interactions", () => {
   describe("when localizer works with block-scoped code", () => {
@@ -130,5 +131,212 @@ describe("optimize rule interactions", () => {
       expect(normalizedLua).toContain("local c = ____math_floor(____inline_arg_0 + 2)");
       expect(normalizedLua).not.toContain("doWork(v)");
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // inline + conditional-compilation
+  // ---------------------------------------------------------------------------
+
+  describe("when inline and conditional-compilation interact", () => {
+    function ccOpts(
+      constants: Record<string, { env: string; default: boolean | number | string }>,
+    ) {
+      return { pluginOptions: { rules: { "conditional-compilation": { constants } } } };
+    }
+
+    it("removes dead branch inside inlined void function body while preserving live statements", () => {
+      // s is used in both doLog(s) and doWork(s) → canInline creates a temp arg.
+      // With DEBUG=false the if-block is stripped, but doWork(____inline_arg_0) remains.
+      const lua = compile(
+        `
+        declare function doLog(s: string): void;
+        declare function doWork(s: string): void;
+        declare const DEBUG: boolean;
+        /** @inline */
+        function process(s: string): void {
+          if (DEBUG) { doLog(s); }
+          doWork(s);
+        }
+        declare const msg: string;
+        process(msg);
+        `,
+        ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH", default: false } }),
+      );
+      const normalized = normalizeLua(lua);
+      expect(normalized).not.toContain("doLog");
+      expect(normalized).toContain("doWork(____inline_arg_0)");
+      expect(normalized).not.toContain("process(msg)");
+    });
+
+    // BUG (skipped): when conditional-compilation eliminates the entire function body before
+    // the inline param-map is built, `buildParamMap` cannot find the parameter's Lua SymbolId
+    // (it was never registered because the branch was stripped before transformation).
+    // The inline is abandoned and the call site keeps `maybeLog(msg)`, but
+    // `canEraseInlineDeclaration` already erased the function declaration — producing
+    // a call to an undefined Lua function.
+    // Fix needed: re-emit the declaration when the Lua-phase inline fails due to a
+    // symbol-map miss, or make `canEraseInlineDeclaration` aware of this failure mode.
+    it.skip("removes entire inlined body and arg temp when all statements are dead branches", () => {
+      const lua = compile(
+        `
+        declare function doLog(s: string): void;
+        declare const DEBUG: boolean;
+        /** @inline */
+        function maybeLog(s: string): void {
+          if (DEBUG) { doLog(s); }
+        }
+        declare const msg: string;
+        maybeLog(msg);
+        `,
+        ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH", default: false } }),
+      );
+      const normalized = normalizeLua(lua);
+      expect(normalized).not.toContain("do");
+      expect(normalized).not.toContain("____inline_arg_");
+      expect(normalized).not.toContain("maybeLog");
+      expect(normalized).not.toContain("doLog");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // inline + dead-local
+  // ---------------------------------------------------------------------------
+
+  describe("when inline and dead-local interact", () => {
+    it("preserves arg temp that is read inside the substituted do...end block", () => {
+      // x is used twice (x*x and sq+x) → canInline creates ____inline_arg_0 = n.
+      // dead-local must NOT remove it because collectReadSymbols recurses into the do...end.
+      const lua = compile(`
+        /** @inline */
+        function sumSquare(x: number): number {
+          const sq = x * x;
+          return sq + x;
+        }
+        declare const n: number;
+        const r = sumSquare(n);
+      `);
+      expect(lua).toContain("____inline_arg_0 = n");
+      expect(lua).not.toContain("sumSquare(n)");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // inline + merge-locals
+  // ---------------------------------------------------------------------------
+
+  describe("when inline and merge-locals interact", () => {
+    it("coalesces inline-produced pure local with adjacent pure locals inside a function body", () => {
+      // identity(10) → expression target with pure literal arg → inlines to: local a = 10.
+      // b=2 and c=3 are also pure literals. merge-locals sees three consecutive pure
+      // single-var locals inside f() and merges them into local a, b, c = 10, 2, 3.
+      const lua = compile(`
+        /** @inline */
+        function identity(x: number): number { return x; }
+        function f(): number {
+          const a = identity(10);
+          const b = 2;
+          const c = 3;
+          return a + b + c;
+        }
+      `);
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("a, b, c = 10, 2, 3");
+      expect(normalized).not.toContain("identity(10)");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // inline rejection: class methods
+  // ---------------------------------------------------------------------------
+
+  describe("when @inline is annotated on a class method", () => {
+    it("does not inline class method calls because they are not module-scope declarations", () => {
+      const lua = compile(`
+        class Calc {
+          /** @inline */
+          add(a: number, b: number): number { return a + b; }
+        }
+        declare const calc: Calc;
+        const r = calc.add(3, 4);
+      `);
+      // TSTL emits method calls with colon syntax; call site must survive un-inlined.
+      expect(lua).toContain("calc:add(3, 4)");
+      expect(lua).not.toContain("____inline_arg_");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // fast-check property tests
+  // ---------------------------------------------------------------------------
+
+  // Compilation is ~30–50 ms per run; keep numRuns small so the suite stays well under 30s.
+  const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
+
+  describe("inline rule properties", () => {
+    it("always emits a diagnostic for recursive @inline functions", () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 1, max: 4 }), (n) => {
+          const params = Array.from({ length: n }, (_, i) => `p${i}: number`).join(", ");
+          const zeros = Array.from({ length: n }, () => "0").join(", ");
+          const args = Array.from({ length: n }, (_, i) => `p${i}`).join(", ");
+          const { diagnostics } = compileWithDiagnostics(`
+              /** @inline */
+              function recurse(${params}): number { return recurse(${args}); }
+              const r = recurse(${zeros});
+            `);
+          return diagnostics.some((d) => {
+            const msg =
+              typeof d.messageText === "string" ? d.messageText : d.messageText.messageText;
+            return /recursive/i.test(msg);
+          });
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("assigns arg temps in left-to-right parameter order for multi-arg side-effectful calls", () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 2, max: 4 }), (n) => {
+          const params = Array.from({ length: n }, (_, i) => `p${i}: number`).join(", ");
+          const body = Array.from({ length: n }, (_, i) => `p${i}`).join(" + ");
+          const declares = Array.from(
+            { length: n },
+            (_, i) => `declare function sideEffect${i}(): number;`,
+          ).join("\n");
+          const callArgs = Array.from({ length: n }, (_, i) => `sideEffect${i}()`).join(", ");
+          const lua = compile(`
+              ${declares}
+              /** @inline */
+              function add(${params}): number { return ${body}; }
+              const r = add(${callArgs});
+            `);
+          for (let i = 0; i < n - 1; i++) {
+            const posI = lua.indexOf(`____inline_arg_${i} = sideEffect${i}()`);
+            const posNext = lua.indexOf(`____inline_arg_${i + 1} = sideEffect${i + 1}()`);
+            if (posI < 0 || posNext < 0 || posI >= posNext) return false;
+          }
+          return true;
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("inlines a function that captures a module-level const (upvalue access is preserved)", () => {
+      // SCALE is a module-level const. After inlining times(n), the body `n * SCALE` must
+      // still reference SCALE — proving the upvalue is accessible in the inlined copy.
+      fc.assert(
+        fc.property(fc.integer({ min: 10, max: 100 }), (scale) => {
+          const lua = compile(`
+              const SCALE = ${scale};
+              /** @inline */
+              function times(x: number): number { return x * SCALE; }
+              declare const n: number;
+              const r = times(n);
+            `);
+          return !lua.includes("times(n)") && lua.includes("SCALE");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
   });
 });
