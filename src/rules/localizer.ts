@@ -42,33 +42,52 @@ const INTERNAL_BLOCKLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Build a predicate that checks whether a given root identifier is allowed for hoisting.
- * Resolution formula: (STDLIB union include) \ exclude \ (BLOCKLIST \ include)
+ * Build two root predicates:
+ *  - strict (module scope):    (STDLIB ∪ include) \ exclude \ (BLOCKLIST \ include)
+ *  - lenient (non-module):     (any)              \ exclude \ (BLOCKLIST \ include)
+ *
+ * The strict form guards against snapshotting a mutable global once at file load.
+ * The lenient form is safe at loop/function scope because the caller also enforces
+ * "no intervening call" and "no prefix write" — which together prove loop-invariance.
  */
-function buildRootFilter(
+function buildRootFilters(
   include: readonly string[],
   exclude: readonly string[],
-): (root: string) => boolean {
+): {
+  isRootAllowedStrict: (root: string) => boolean;
+  isRootAllowedLenient: (root: string) => boolean;
+} {
   const hasWildcard = include.includes("*");
   const includeSet = new Set(include);
   const excludeSet = new Set(exclude);
 
+  const isRootAllowedLenient = (root: string): boolean => {
+    if (excludeSet.has(root)) return false;
+    if (INTERNAL_BLOCKLIST.has(root) && !includeSet.has(root)) return false;
+    return true;
+  };
+
   if (hasWildcard) {
-    return (root) => {
-      if (excludeSet.has(root)) return false;
-      if (INTERNAL_BLOCKLIST.has(root) && !includeSet.has(root)) return false;
-      return true;
-    };
+    return { isRootAllowedStrict: isRootAllowedLenient, isRootAllowedLenient };
   }
 
-  // Non-wildcard: pre-compute allowed set
   const allowed = new Set(STDLIB_ROOTS);
   for (const root of include) allowed.add(root);
   for (const root of exclude) allowed.delete(root);
   for (const root of INTERNAL_BLOCKLIST) {
     if (!includeSet.has(root)) allowed.delete(root);
   }
-  return (root) => allowed.has(root);
+  const isRootAllowedStrict = (root: string): boolean => allowed.has(root);
+  return { isRootAllowedStrict, isRootAllowedLenient };
+}
+
+/** True if any prefix of the dotted chain (root, intermediate, or exact) is in scopeDefs. */
+function isAnyPrefixBound(chain: string, scopeDefs: ReadonlySet<string>): boolean {
+  const parts = chain.split(".");
+  for (let i = 1; i <= parts.length; i++) {
+    if (scopeDefs.has(parts.slice(0, i).join("."))) return true;
+  }
+  return false;
 }
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
@@ -192,11 +211,14 @@ function hoistScope(
   context: tstl.TransformationContext,
   reservedNames?: ReadonlySet<string>,
   isRootAllowed?: (root: string) => boolean,
+  outDecls?: tstl.VariableDeclarationStatement[],
+  extraBoundNames?: ReadonlySet<string>,
 ): Set<string> {
   const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
   const unavailableNames = mergeNameSets(scopeDefs, reservedNames);
   const toHoist = new Map<string, tstl.Identifier>();
-  const decls: tstl.VariableDeclarationStatement[] = [];
+  const inBodyDecls: tstl.VariableDeclarationStatement[] = [];
+  const liftableDecls: tstl.VariableDeclarationStatement[] = [];
 
   // Sort entries by chain string for deterministic output
   const sorted = [...chainCounts.entries()].sort(([a], [b]) => a.localeCompare(b));
@@ -214,20 +236,29 @@ function hoistScope(
     }
     if (hasInterveningCallForChain(statements, chain, shallow)) continue;
     const hoistBaseName = `____${parts.join("_")}`;
-    if (scopeDefs.has(parts[0]) || scopeDefs.has(chain)) {
+    if (isAnyPrefixBound(chain, scopeDefs)) {
       continue;
     }
+    // Roots bound only outside this scope (e.g. for-loop control var) can still be
+    // cached inside the body, but must NOT be lifted to a pre-loop decl.
+    const rootIsExternal = extraBoundNames?.has(root) ?? false;
     const hoistName = allocateHoistName(hoistBaseName, unavailableNames);
     const ident = tstl.createIdentifier(hoistName, undefined, context.nextSymbolId());
     toHoist.set(chain, ident);
     scopeDefs.add(hoistName);
     unavailableNames.add(hoistName);
-    decls.push(tstl.createVariableDeclarationStatement(ident, buildChainExpression(chain)));
+    const decl = tstl.createVariableDeclarationStatement(ident, buildChainExpression(chain));
+    if (outDecls && !rootIsExternal) {
+      liftableDecls.push(decl);
+    } else {
+      inBodyDecls.push(decl);
+    }
   }
 
   if (toHoist.size > 0) {
     replaceChains(statements, toHoist);
-    statements.unshift(...decls);
+    if (inBodyDecls.length > 0) statements.unshift(...inBodyDecls);
+    if (outDecls) outDecls.push(...liftableDecls);
   }
 
   return new Set(toHoist.keys());
@@ -437,22 +468,31 @@ function processFile(
   file: tstl.File,
   config: LocalizerConfig,
   context: tstl.TransformationContext,
-  isRootAllowed: (root: string) => boolean,
+  isRootAllowedStrict: (root: string) => boolean,
+  isRootAllowedLenient: (root: string) => boolean,
 ): void {
   const { threshold, scope } = config;
 
   if (scope === "module") {
-    hoistScope(file.statements, threshold, false, new Set(), context, undefined, isRootAllowed);
+    hoistScope(
+      file.statements,
+      threshold,
+      false,
+      new Set(),
+      context,
+      undefined,
+      isRootAllowedStrict,
+    );
   } else if (scope === "function") {
     processFunctionBodies(file.statements, {
       threshold,
       alreadyHoisted: new Set(),
       context,
-      isRootAllowed,
+      isRootAllowed: isRootAllowedLenient,
       reservedNames: new Set(),
     });
   } else {
-    // "all": module pass first, then function pass for remaining chains
+    // "all": module pass first (strict), then function pass for remaining chains (lenient)
     const alreadyHoisted = hoistScope(
       file.statements,
       threshold,
@@ -460,13 +500,13 @@ function processFile(
       new Set(),
       context,
       undefined,
-      isRootAllowed,
+      isRootAllowedStrict,
     );
     processFunctionBodies(file.statements, {
       threshold,
       alreadyHoisted,
       context,
-      isRootAllowed,
+      isRootAllowed: isRootAllowedLenient,
       reservedNames: new Set(),
     });
   }
@@ -503,7 +543,8 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
     },
   });
 
-  for (const stmt of statements) {
+  for (let j = 0; j < statements.length; j++) {
+    const stmt = statements[j];
     if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
@@ -516,6 +557,9 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
         ? new Set(stmt.names.filter(tstl.isIdentifier).map((n) => n.text))
         : new Set([stmt.controlVariable.text]);
       const loopReservedNames = mergeNameSets(scopeReservedNames, loopNames);
+      // Collect chain decls for pre-loop (LICM) placement. The same safety gates that
+      // allow hoisting (no intervening call, no prefix write) prove loop-invariance.
+      const preLoopDecls: tstl.VariableDeclarationStatement[] = [];
       hoistScope(
         stmt.body.statements,
         threshold,
@@ -524,9 +568,16 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
         context,
         loopReservedNames,
         isRootAllowed,
+        preLoopDecls,
+        loopNames,
       );
+      // Array-element hoists depend on the loop variable -- they stay inside the body.
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context, loopReservedNames);
       processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: loopReservedNames });
+      if (preLoopDecls.length > 0) {
+        statements.splice(j, 0, ...preLoopDecls);
+        j += preLoopDecls.length;
+      }
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
       processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: scopeReservedNames });
     }
@@ -537,14 +588,17 @@ export const createVisitors: RuleFactory = (_checker, config) => {
   const resolved = resolveLocalizerConfig(config.rules.localizer);
   if (!resolved) return {};
 
-  const isRootAllowed = buildRootFilter(resolved.include, resolved.exclude);
+  const { isRootAllowedStrict, isRootAllowedLenient } = buildRootFilters(
+    resolved.include,
+    resolved.exclude,
+  );
 
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context: tstl.TransformationContext) => {
       const result = context.superTransformNode(node);
       const fileNode = Array.isArray(result) ? result[0] : result;
       if (fileNode && tstl.isFile(fileNode)) {
-        processFile(fileNode, resolved, context, isRootAllowed);
+        processFile(fileNode, resolved, context, isRootAllowedStrict, isRootAllowedLenient);
         return fileNode;
       }
       // Fallback: superTransformStatements still routes each statement through the
@@ -554,7 +608,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
         stmts.push(...context.superTransformStatements(s));
       }
       const file = tstl.createFile(stmts, context.usedLuaLibFeatures, "", node);
-      processFile(file, resolved, context, isRootAllowed);
+      processFile(file, resolved, context, isRootAllowedStrict, isRootAllowedLenient);
       return file;
     },
   };

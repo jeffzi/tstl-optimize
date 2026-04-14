@@ -1012,7 +1012,7 @@ describe("localizer", () => {
 
   describe("when root filtering interactions occur", () => {
     it("root filter applied in function scope mode", () => {
-      // Without include: non-stdlib config NOT hoisted
+      // Lenient non-module predicate: config IS hoisted without include
       const luaDefault = compile(
         [
           "function process() {",
@@ -1024,7 +1024,25 @@ describe("localizer", () => {
         ].join("\n"),
         FUNC_SCOPE,
       );
-      expect(luaDefault).not.toContain("local ____config_graphics_width");
+      expect(luaDefault).toContain("local ____config_graphics_width = config.graphics.width");
+
+      // Exclude rejects the root at non-module scope
+      const luaExclude = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "function process() {",
+          "  const a = config.graphics.width;",
+          "  const b = config.graphics.width;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, exclude: ["config"] } },
+          },
+        },
+      );
+      expect(luaExclude).not.toContain("local ____config_graphics_width");
 
       // With include: config IS hoisted in function scope
       const luaInclude = compile(
@@ -1124,8 +1142,104 @@ describe("localizer", () => {
 
       const lua = compile(src, ALL_SCOPE);
 
-      expect(lua).not.toContain("local ____config_physics_gravity");
+      expect(lua).toContain("local ____config_physics_gravity = config.physics.gravity");
       expect(lua).toContain("local ____velY = velY[i]");
+    });
+  });
+
+  describe("when scope-aware root filter + pre-loop LICM are active", () => {
+    it("lenient non-module: hoists non-stdlib chain pre-loop without include", () => {
+      const src = [
+        "declare const config: { x: { y: number } };",
+        "declare const out: number[];",
+        "declare const n: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  out[i] = config.x.y;",
+        "  out[i] = out[i] + config.x.y;",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local ____config_x_y = config.x.y");
+      // Decl appears before the for statement, not inside it
+      const declIdx = normalized.indexOf("local ____config_x_y = config.x.y");
+      const forIdx = normalized.indexOf("for i = 1, n do");
+      expect(declIdx).toBeGreaterThanOrEqual(0);
+      expect(forIdx).toBeGreaterThan(declIdx);
+    });
+
+    it("prefix-write rejection: no hoist when an intermediate prefix is reassigned", () => {
+      const src = [
+        "declare const config: { physics: { friction: number; gravity: number } };",
+        "declare const out: number[];",
+        "declare const n: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  out[i] = config.physics.friction;",
+        "  config.physics = { friction: 0.5, gravity: 9.8 };",
+        "  out[i] = out[i] + config.physics.friction;",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      expect(lua).not.toContain("local ____config_physics_friction");
+    });
+
+    it("module-scope stays strict: default config does not hoist non-stdlib chain at top level", () => {
+      const src = [
+        "declare const config: { x: { y: number } };",
+        "const a = config.x.y;",
+        "const b = config.x.y;",
+      ].join("\n");
+
+      const lua = compile(src, MODULE_SCOPE);
+      expect(lua).not.toContain("local ____config_x_y");
+    });
+
+    it("array-element hoist stays inside the loop body, not pre-loop", () => {
+      const src = [
+        "declare const velX: number[];",
+        "declare const n: number;",
+        "declare const dt: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  velX[i] = velX[i] + dt;",
+        "  velX[i] = velX[i] * 2;",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local ____velX = velX[i]");
+      const declIdx = normalized.indexOf("local ____velX = velX[i]");
+      const forIdx = normalized.indexOf("for i = 1, n do");
+      expect(forIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(forIdx);
+    });
+
+    it("nested loops: chain hoisted pre-outer-loop when reads span both bodies", () => {
+      const src = [
+        "declare const config: { x: { y: number } };",
+        "declare const grid: number[][];",
+        "declare const n: number;",
+        "declare const m: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  grid[i][0] = config.x.y;",
+        "  for (const j of $range(0, m - 1)) {",
+        "    grid[i][j] = grid[i][j] + config.x.y;",
+        "  }",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local ____config_x_y = config.x.y");
+      const declIdx = normalized.indexOf("local ____config_x_y = config.x.y");
+      const outerForIdx = normalized.indexOf("for i = 1, n do");
+      expect(declIdx).toBeGreaterThanOrEqual(0);
+      expect(outerForIdx).toBeGreaterThan(declIdx);
     });
   });
 

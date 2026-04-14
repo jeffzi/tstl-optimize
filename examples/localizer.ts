@@ -11,10 +11,6 @@ const velY = [0, 0];
 const count = 2;
 const dt = 0.5;
 
-// config.physics.friction (3×) and config.physics.gravity (2×) are hoisted to
-// loop-scope locals by the localizer rule. Requires "include": ["config"] in
-// localizer.opts.json — non-stdlib roots are opt-in to prevent unintended
-// snapshotting of mutable globals.
 for (const i of $range(0, count - 1)) {
   velX[i] = velX[i] * config.physics.friction;
   velY[i] = velY[i] + config.physics.gravity * dt;
