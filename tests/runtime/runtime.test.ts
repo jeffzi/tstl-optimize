@@ -11,18 +11,15 @@
 
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it } from "vitest";
-import { detectRuntimes, runtimeEqual } from "./helpers";
+import { describe, it } from "vitest";
+import { assertExpectedRuntimes, detectRuntimes, runtimeEqual } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Harness sanity: at least one runtime reachable when tests run via test:runtime
 // ---------------------------------------------------------------------------
 
-it("has at least one Lua runtime available", () => {
-  const runtimes = detectRuntimes();
-  // In test:unit this test is excluded; in test:runtime we want an explicit failure
-  // if the machine has no Lua at all rather than a silent no-op.
-  expect(runtimes.length).toBeGreaterThan(0);
+it("has expected Lua runtimes available", () => {
+  assertExpectedRuntimes(detectRuntimes());
 });
 
 // ---------------------------------------------------------------------------
