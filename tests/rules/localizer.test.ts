@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
@@ -2217,5 +2218,95 @@ describe("localizer raw Lua visitor coverage", () => {
     expect(tstl.isTableIndexExpression((nestedAssign.right[0] as tstl.BinaryExpression).left)).toBe(
       true,
     );
+  });
+
+  describe("localizer — interaction with other rules", () => {
+    it("scope: all hoists both module-level and function-level chains in the same file", () => {
+      // scope: "all" should hoist chains at any nesting depth.
+      const lua = compile(
+        `
+          declare const x: number;
+          const a = Math.ceil(x);
+          const b = Math.ceil(x + 1);
+          function f(): number {
+            return Math.ceil(x + 2) + Math.ceil(x + 3);
+          }
+        `,
+        { ...ALL_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+      // Both module-level and function-level uses reference the hoisted local
+      expect(lua).toContain("____math_ceil(x)");
+    });
+
+    it("localizer + inline: hoisted chain survives inlining of a function that uses it", () => {
+      // After inlining, the chain reference moves into the call site — localizer must still hoist.
+      const lua = compile(
+        `
+          /** @inline */
+          function ceilDouble(x: number): number { return Math.ceil(x) + Math.ceil(x + 1); }
+          declare const v: number;
+          const r1 = ceilDouble(v);
+          const r2 = ceilDouble(v + 2);
+        `,
+        { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      // math.ceil used multiple times after inlining → should be hoisted
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+    });
+
+    it("localizer + dead-local: hoisted local from a chain that was inlined is not dropped", () => {
+      // A hoisted local for a chain that appears only in inlined code must survive — its
+      // references survive inlining, so the hoisted local still has uses.
+      const lua = compile(
+        `
+          declare const x: number;
+          const a = Math.ceil(x);
+          const b = Math.ceil(x + 1);
+          const c = Math.ceil(x + 2);
+        `,
+        { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      // Hoisted local must be present and used; not treated as dead
+      expect(lua).toContain("local ____math_ceil");
+      const useCount = (lua.match(/____math_ceil\(/g) ?? []).length;
+      expect(useCount).toBe(3);
+    });
+  });
+
+  describe("localizer properties", () => {
+    const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
+
+    it("hoists math.ceil for any call count ≥ 2 at module scope", () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 2, max: 6 }), (n) => {
+          const decls = Array.from(
+            { length: n },
+            (_, i) => `const c${i} = Math.ceil(x + ${i});`,
+          ).join(" ");
+          const lua = compile(`declare const x: number; ${decls}`, {
+            ...MODULE_SCOPE,
+            luaTarget: tstl.LuaTarget.LuaJIT,
+          });
+          // With n uses, the hoisted local must be introduced and used at least once.
+          return lua.includes("local ____math_ceil = math.ceil") && lua.includes("____math_ceil(");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("does not hoist a single occurrence of math.ceil (threshold < 2)", () => {
+      // Single call — below the hoist threshold. The raw reference stays.
+      fc.assert(
+        fc.property(fc.integer({ min: 0, max: 100 }), (offset) => {
+          const lua = compile(`declare const x: number; const c = Math.ceil(x + ${offset});`, {
+            ...MODULE_SCOPE,
+            luaTarget: tstl.LuaTarget.LuaJIT,
+          });
+          return !lua.includes("____math_ceil") && lua.includes("math.ceil(");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
   });
 });

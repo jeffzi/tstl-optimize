@@ -311,6 +311,76 @@ describe("loop-rebase", () => {
 });
 
 // ---------------------------------------------------------------------------
+// conditional-compilation — 3 fixtures
+// ---------------------------------------------------------------------------
+
+describe("conditional-compilation", () => {
+  const ccOpts = (constants: Record<string, { env: string; default: boolean | number | string }>) =>
+    ({ pluginOptions: { rules: { "conditional-compilation": { constants } } } }) as const;
+
+  it("false branch is stripped and live branch runs normally", () => {
+    runtimeEqual(
+      `
+        ${PRINT_DECL}
+        declare const DEBUG: boolean;
+        let x = 0;
+        if (DEBUG) { x = 1; } else { x = 2; }
+        print(x);
+      `,
+      ccOpts({ DEBUG: { env: "TSTL_RT_CC_DEBUG", default: false } }),
+    );
+  });
+
+  // Runtime CC fixtures must use a falsy default: `declare const X` is nil at runtime
+  // in the baseline build, so only nil/false defaults keep baseline and optimized paths
+  // converged. Non-falsy defaults (strings, numbers) would make the optimized build take a
+  // different branch than the baseline — see tests/rules/conditional-compilation.test.ts
+  // for static coverage of non-falsy-default paths.
+
+  it("surviving branch executes side effects in the correct order", () => {
+    runtimeEqual(
+      `
+        ${PRINT_DECL}
+        declare const FEATURE: boolean;
+        let order = "";
+        order = order + "S";
+        if (FEATURE) {
+          order = order + "F";
+        } else {
+          order = order + "N";
+        }
+        order = order + "E";
+        print(order);
+      `,
+      ccOpts({ FEATURE: { env: "TSTL_RT_CC_FEATURE", default: false } }),
+    );
+  });
+
+  it("dead if/else-if chain leaves one live arm", () => {
+    runtimeEqual(
+      `
+        ${PRINT_DECL}
+        declare const A: boolean;
+        declare const B: boolean;
+        let label = "";
+        if (A) {
+          label = "a";
+        } else if (B) {
+          label = "b";
+        } else {
+          label = "none";
+        }
+        print(label);
+      `,
+      ccOpts({
+        A: { env: "TSTL_RT_CC_A", default: false },
+        B: { env: "TSTL_RT_CC_B", default: false },
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // cross-rule interaction — 1 fixture
 // ---------------------------------------------------------------------------
 

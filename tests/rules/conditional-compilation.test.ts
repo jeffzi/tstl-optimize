@@ -1647,3 +1647,144 @@ describe("conditional-compilation when property-based inputs vary", () => {
     TIMEOUT,
   );
 });
+
+// ---------------------------------------------------------------------------
+// Phase 3 — interaction and coverage-targeted tests
+// ---------------------------------------------------------------------------
+
+describe("conditional-compilation — switch with nested control flow", () => {
+  it("collapses a switch case whose body contains an if with no break in either arm", () => {
+    // Targets containsConditionalCaseBreak line 172 (continue after if-arm analysis
+    // finds no conditional break in either branch).
+    const lua = compile(
+      `
+        ${PRINT_DECL}
+        declare const MODE: number;
+        let x = 0;
+        switch (MODE) {
+          case 1:
+            if (x > 0) { x = 10; } else { x = 20; }
+            break;
+          default:
+            x = 99;
+        }
+        print(x);
+      `,
+      ccOpts({ MODE: { env: "CC_MODE", default: 1 } }),
+    );
+    // case 1 body survives; default is stripped
+    expect(lua).not.toContain("x = 99");
+    expect(lua).toContain("x = 20");
+  });
+
+  it("preserves switch when case body has a break inside an if (conditional break)", () => {
+    // containsConditionalCaseBreak returns true for a break inside an if-arm → unsafe to fold
+    const lua = compile(
+      `
+        ${PRINT_DECL}
+        declare const MODE: number;
+        let x = 0;
+        switch (MODE) {
+          case 1:
+            if (x > 0) { break; }
+            x = 10;
+            break;
+          default:
+            x = 99;
+        }
+        print(x);
+      `,
+      ccOpts({ MODE: { env: "CC_MODE", default: 1 } }),
+    );
+    // Conditional break inside if → rule must preserve the switch structure
+    expect(lua).toContain("x = 99");
+  });
+
+  it("collapses a switch case whose body has an if with multiple statements (no inner break)", () => {
+    // Additional coverage for the if-analysis walk when both arms are present and neither breaks.
+    const lua = compile(
+      `
+        ${PRINT_DECL}
+        declare const MODE: number;
+        let x = 0;
+        let y = 0;
+        switch (MODE) {
+          case 2:
+            if (x > 5) { y = 10; x = 1; } else { y = 20; x = 2; }
+            break;
+          default:
+            x = 99;
+        }
+        print(x);
+        print(y);
+      `,
+      ccOpts({ MODE: { env: "CC_MODE", default: 2 } }),
+    );
+    expect(lua).not.toContain("x = 99");
+    expect(lua).toContain("y = 20");
+  });
+});
+
+describe("conditional-compilation — interaction with other rules", () => {
+  it("cc + constant-folding: dead branch stripped before folding runs on live branch", () => {
+    // CC removes the debug branch; constant-folding simplifies 2 + 3 in the live branch.
+    const lua = compile(
+      `
+        ${PRINT_DECL}
+        declare const DEBUG: boolean;
+        let x = 0;
+        if (DEBUG) {
+          x = 100 + 200;
+        } else {
+          x = 2 + 3;
+        }
+        print(x);
+      `,
+      ccOpts({ DEBUG: { env: "CC_DEBUG", default: false } }),
+    );
+    // The else branch is kept; constant-folding should fold 2 + 3 → 5
+    expect(lua).not.toContain("100");
+    expect(lua).toContain("5");
+    expect(lua).not.toContain("2 + 3");
+  });
+
+  it("cc + remove-empty-branch: cc-collapsed empty block is then cleaned by remove-empty-branch", () => {
+    const lua = compile(
+      `
+        ${PRINT_DECL}
+        declare const DEBUG: boolean;
+        let x = 1;
+        if (DEBUG) {
+          // empty when stripped
+        }
+        print(x);
+      `,
+      ccOpts({ DEBUG: { env: "CC_DEBUG", default: false } }),
+    );
+    // Both CC and remove-empty-branch should eliminate the if entirely
+    expect(lua).not.toContain("if");
+    expect(lua).toContain("x = 1");
+  });
+
+  it("cc + inline: inlined function body survives cc stripping the surrounding branch", () => {
+    const lua = compile(
+      `
+        ${PRINT_DECL}
+        declare const DEBUG: boolean;
+        /** @inline */
+        function doubled(n: number): number { return n * 2; }
+        let result = 0;
+        if (!DEBUG) {
+          result = doubled(21);
+        }
+        print(result);
+      `,
+      ccOpts({ DEBUG: { env: "CC_DEBUG", default: false } }),
+    );
+    // !DEBUG is true → live branch kept; inline substitutes doubled(21), then constant-folding
+    // evaluates 21 * 2 → 42. The call site must be eliminated regardless.
+    expect(lua).not.toContain("doubled(");
+    // Result is either the inlined expression or its constant-folded form.
+    expect(lua.includes("21 * 2") || lua.includes("42")).toBe(true);
+  });
+});

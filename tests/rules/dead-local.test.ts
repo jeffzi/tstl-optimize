@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
@@ -616,6 +617,102 @@ describe("dead-local", () => {
       expect((stepDecl.left[0] as tstl.Identifier).text).toBe("step");
       // biome-ignore lint/style/noNonNullAssertion: node constructed with value
       expect(tstl.isNumericLiteral(stepDecl.right![0])).toBe(true);
+    });
+  });
+
+  describe("dead-local properties", () => {
+    const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
+
+    it("preserves side-effectful RHS even when the local is unused (any call count)", () => {
+      // Core invariant: dead-local must never drop a side-effectful initializer.
+      // We generate N unused locals each calling a side-effectful function and
+      // verify the calls survive in the emitted Lua.
+      fc.assert(
+        fc.property(fc.integer({ min: 1, max: 5 }), (n) => {
+          const unusedDecls = Array.from(
+            { length: n },
+            (_, i) => `        const unused${i} = sideEffect();`,
+          ).join("\n");
+          const lua = compile(`
+            declare function sideEffect(): number;
+            function f(): void {
+${unusedDecls}
+            }
+            f();
+          `);
+          // Each sideEffect() call must survive (either as a bare call statement or in a stripped-decl form).
+          const callCount = (lua.match(/sideEffect\(\)/g) ?? []).length;
+          return callCount === n;
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("drops any number of consecutive pure unused locals", () => {
+      // Pure literals with no read-sites are droppable; verify no ____unused name leaks.
+      fc.assert(
+        fc.property(fc.integer({ min: 1, max: 5 }), (n) => {
+          const pureDecls = Array.from(
+            { length: n },
+            (_, i) => `        const pure${i} = ${i + 1};`,
+          ).join("\n");
+          const lua = compile(`
+            declare function obs(): void;
+            function f(): void {
+${pureDecls}
+              obs();
+            }
+            f();
+          `);
+          for (let i = 0; i < n; i++) {
+            if (lua.includes(`pure${i}`)) return false;
+          }
+          return lua.includes("obs()");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+  });
+
+  describe("dead-local — interaction with other rules", () => {
+    it("inline arg temp is eliminated after inlining runs (dead-local + inline)", () => {
+      // inline introduces ____inline_arg_N temps; dead-local must remove them.
+      const lua = compile(`
+        /** @inline */
+        function add(a: number, b: number): number { return a + b; }
+        const r = add(10, 20);
+        declare function use(n: number): void;
+        use(r);
+      `);
+      expect(lua).not.toContain("____inline_arg_");
+      // The inlined result must survive (constant-folding may evaluate 10+20 to 30)
+      expect(lua.includes("10 + 20") || lua.includes("30")).toBe(true);
+    });
+
+    it("closure capturing an unused local still retains the captured ref (adversarial indirection)", () => {
+      // A local that is read only inside an immediately-returned closure must not be dropped.
+      const lua = compile(`
+        function makeGetter(n: number): () => number {
+          const captured = n + 1;
+          return () => captured;
+        }
+        declare function use(f: () => number): void;
+        use(makeGetter(5));
+      `);
+      expect(lua).toContain("captured");
+    });
+
+    it("impure RHS is preserved even when local is never read", () => {
+      // dead-local keeps impure declarations intact (local neverRead = sideEffect() survives);
+      // the call must not be silently discarded.
+      const lua = compile(`
+        declare function sideEffect(): number;
+        function f(): void {
+          const neverRead = sideEffect();
+        }
+        f();
+      `);
+      expect(lua).toContain("sideEffect()");
     });
   });
 });
