@@ -2912,9 +2912,14 @@ describe("inline uncovered branches", () => {
         context: tstl.TransformationContext,
       ) => unknown;
 
+      // Force the transformed body to be non-empty so the visitor reaches
+      // `buildParamMap`, which fails because the mocked `symbolIdMaps` has no
+      // entry for the parameter symbol.
       const result = Reflect.apply(visitor, undefined, [
         sourceFile.statements[1] as ts.ExpressionStatement,
-        createDirectContext(),
+        createDirectContext({
+          transformStatements: () => [tstl.createReturnStatement([])],
+        }),
       ]);
 
       expect(result).toBeUndefined();

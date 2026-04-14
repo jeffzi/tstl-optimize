@@ -821,6 +821,26 @@ function buildDoEndBlock(
   // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
 
+  // If a lower-priority rule (e.g. conditional-compilation) stripped the body
+  // to nothing, the params were never referenced and may lack Lua SymbolIds.
+  // Short-circuit: emit only the side-effectful arg evaluations. This keeps
+  // `canEraseInlineDeclaration` consistent with the Lua-phase outcome — the
+  // call site is fully inlined and the declaration can be erased.
+  if (luaBody.length === 0) {
+    const effectfulArgs: tstl.Statement[] = [];
+    for (const arg of callNode.arguments) {
+      if (hasSideEffects(arg)) {
+        effectfulArgs.push(
+          tstl.createVariableDeclarationStatement(
+            [tstl.createIdentifier("_")],
+            [context.transformExpression(arg)],
+          ),
+        );
+      }
+    }
+    return effectfulArgs;
+  }
+
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;

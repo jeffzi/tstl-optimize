@@ -381,6 +381,39 @@ describe("conditional-compilation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cross-rule: inline + conditional-compilation — 1 fixture
+// ---------------------------------------------------------------------------
+
+describe("cross-rule: inline + conditional-compilation", () => {
+  it("inlined body stripped by CC does not leave a dangling call", () => {
+    runtimeEqual(
+      `
+        ${PRINT_DECL}
+        declare const DEBUG: boolean;
+        let ran = 0;
+        function sideArg(): string { ran += 1; return "x"; }
+        /** @inline */
+        function maybeLog(s: string): void {
+          if (DEBUG) { print(s); }
+        }
+        maybeLog("pure-arg");
+        maybeLog(sideArg());
+        print(ran);
+      `,
+      {
+        pluginOptions: {
+          rules: {
+            "conditional-compilation": {
+              constants: { DEBUG: { env: "TSTL_RT_INLINE_CC", default: false } },
+            },
+          },
+        },
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // cross-rule interaction — 1 fixture
 // ---------------------------------------------------------------------------
 

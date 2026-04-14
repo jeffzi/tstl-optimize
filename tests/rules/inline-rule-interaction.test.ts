@@ -176,7 +176,7 @@ describe("optimize rule interactions", () => {
     // a call to an undefined Lua function.
     // Fix needed: re-emit the declaration when the Lua-phase inline fails due to a
     // symbol-map miss, or make `canEraseInlineDeclaration` aware of this failure mode.
-    it.skip("removes entire inlined body and arg temp when all statements are dead branches", () => {
+    it("removes entire inlined body and arg temp when all statements are dead branches", () => {
       const lua = compile(
         `
         declare function doLog(s: string): void;
@@ -193,6 +193,29 @@ describe("optimize rule interactions", () => {
       const normalized = normalizeLua(lua);
       expect(normalized).not.toContain("do");
       expect(normalized).not.toContain("____inline_arg_");
+      expect(normalized).not.toContain("maybeLog");
+      expect(normalized).not.toContain("doLog");
+    });
+
+    it("emits discard assignment for side-effectful args when inlined body is fully stripped", () => {
+      // Body becomes empty after CC strips `if (DEBUG)`, so buildDoEndBlock short-circuits.
+      // Pure args are dropped, but side-effectful args must still evaluate — emitted as
+      // `local _ = sideEffect()` to preserve ordering and side effects.
+      const lua = compile(
+        `
+        declare function doLog(s: string): void;
+        declare function sideEffect(): string;
+        declare const DEBUG: boolean;
+        /** @inline */
+        function maybeLog(s: string): void {
+          if (DEBUG) { doLog(s); }
+        }
+        maybeLog(sideEffect());
+        `,
+        ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH_SIDE", default: false } }),
+      );
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("local _ = sideEffect()");
       expect(normalized).not.toContain("maybeLog");
       expect(normalized).not.toContain("doLog");
     });
