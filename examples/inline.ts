@@ -28,8 +28,7 @@ const atkSquared = mul(stats.atk.base);
 /** @inline */
 function debugLog(prefix: string, value: number) {
   const msg = `${prefix}: ${value}`;
-  // biome-ignore lint/suspicious/noConsole: console.log maps to Lua print in TSTL
-  console.log(msg);
+  print(msg);
 }
 
 const playerHp = 75;
