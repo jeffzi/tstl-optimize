@@ -36,11 +36,11 @@ export interface LuaRuntime {
 const RUNTIME_CANDIDATES: Array<{ label: string; cmds: () => string[] }> = [
   {
     label: "lua5.1",
-    cmds: () => [process.env["LUA_51"] ?? "", "lua5.1", "lua51"].filter(Boolean),
+    cmds: () => [process.env.LUA_51 ?? "", "lua5.1", "lua51"].filter(Boolean),
   },
   {
     label: "luajit",
-    cmds: () => [process.env["LUA_JIT"] ?? "", "luajit", "lua"].filter(Boolean),
+    cmds: () => [process.env.LUA_JIT ?? "", "luajit", "lua"].filter(Boolean),
   },
 ];
 
@@ -176,7 +176,7 @@ export interface RuntimeEqualOptions extends CompileOptions {
 export function runtimeEqual(source: string, options?: RuntimeEqualOptions): void {
   let runtimes = detectRuntimes();
   if (options?.runtimes) {
-    runtimes = runtimes.filter((r) => options.runtimes!.includes(r.label));
+    runtimes = runtimes.filter((r) => options.runtimes?.includes(r.label));
   }
   if (runtimes.length === 0) return;
 
