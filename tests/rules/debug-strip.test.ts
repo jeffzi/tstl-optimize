@@ -377,6 +377,27 @@ describe("debug-strip", () => {
     });
   });
 
+  describe("when callee root has a non-global declaration kind", () => {
+    it("does not strip calls when the identifier is backed by a class declaration", () => {
+      // isStripSafeGlobalDeclaration reaches its catch-all return false (line 47) for
+      // ClassDeclaration — not a VariableDeclaration, BindingElement, Parameter,
+      // FunctionDeclaration, or ModuleDeclaration — so every() returns false and the
+      // call is NOT stripped.
+      const lua = compile(
+        [
+          "declare class debug { static traceback(): string; }",
+          "debug.traceback();",
+          "const x = 1;",
+        ].join("\n"),
+        { pluginOptions: { rules: { "debug-strip": { namespaces: ["debug"] } } } },
+      );
+
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("traceback");
+      expect(normalized).toContain("x = 1");
+    });
+  });
+
   describe("when callee is computed dynamically", () => {
     it("preserves call when callee root is a dynamic expression, not a static identifier", () => {
       // getLogger().log("msg") — rootIdentifier hits the base-case `return undefined` because

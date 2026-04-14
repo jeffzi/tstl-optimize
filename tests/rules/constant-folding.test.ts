@@ -349,6 +349,26 @@ describe("constant-folding", () => {
     });
   });
 
+  it("prunes two consecutive trailing empty elseif branches when all conditions are pure", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+        declare const x: boolean;
+        declare const a: boolean;
+        declare const b: boolean;
+        if (x) { const z = 1; } else if (a) {} else if (b) {}
+      `,
+        { pluginOptions: { rules: { "dead-local": false } } },
+      ),
+    );
+
+    // pruneFrom=the if(x) node; while loop iterates twice through else-if(a) and else-if(b)
+    // covering the toCheck = toCheck.elseBlock path (line 228) on each pass
+    expect(lua).not.toContain("elseif");
+    expect(lua).toContain("if x then");
+    expect(lua).toContain("local z");
+  });
+
   it("preserves if-statement when elseif condition has side effects", () => {
     const code = `
       declare function print(...args: any[]): void;

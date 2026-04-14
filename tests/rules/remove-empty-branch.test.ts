@@ -414,6 +414,39 @@ describe("remove-empty-branch rule", () => {
     });
   });
 
+  describe("interaction with conditional-compilation", () => {
+    it("removes an if-block whose inner body was emptied by conditional-compilation", () => {
+      // CC strips if(PROD){z=1} entirely (PROD=false, no else → returns undefined).
+      // The outer if(x) body becomes empty; remove-empty-branch then prunes the outer if.
+      const source = `
+        /** @define PROD */
+        declare const PROD: boolean;
+        declare const x: boolean;
+        if (x) {
+          if (PROD) { const z = 1; }
+        }
+        const y = 2;
+      `;
+
+      expect(
+        normalizeLua(
+          compile(source, {
+            pluginOptions: {
+              rules: {
+                "conditional-compilation": {
+                  constants: { PROD: { env: "__TSTL_TEST_UNUSED_VAR__", default: false } },
+                },
+                "remove-empty-branch": true,
+                "constant-folding": false,
+                "dead-local": false,
+              },
+            },
+          }),
+        ),
+      ).toBe("y = 2");
+    });
+  });
+
   describe("direct source-file visitor coverage", () => {
     it("removes raw Lua if-statements with parenthesized safe conditions", () => {
       const file = createLuaFile([

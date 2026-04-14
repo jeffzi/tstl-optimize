@@ -350,6 +350,13 @@ describe("math-intrinsics", () => {
       expect(lua).not.toContain("math.max");
     });
 
+    it("folds Math.min conditional with constant arguments", () => {
+      const lua = compile("const x = Math.min(3, 5);");
+
+      expect(lua).toContain("true and 3 or 5");
+      expect(lua).not.toContain("math.min");
+    });
+
     it("folds x ** 2 with constant base to literal", () => {
       const lua = compile("const x = 3 ** 2;");
 
