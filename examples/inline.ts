@@ -116,6 +116,7 @@ print(flipped);
 print(atkSquared);
 print(doubled);
 print(r);
+print(caller());
 print(x, y);
 print(lo, hi);
 print(s1, s2);

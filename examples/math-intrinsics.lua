@@ -16,10 +16,13 @@ absY = dy == 0 and 0 or (dy < 0 and -(dy) or dy)
 clamped = math.min(speed, maxSpeed)
 bounded = ____math_max(0, speed)
 cubed = x ^ 3
+maxLit = false and 2 or 3
+minLit = true and 1 or 2
 biggest = ____math_max(x, y, speed)
 print(dist)
 print(tileX, tileY)
 print(absX, absY)
 print(clamped, bounded)
+print(maxLit, minLit)
 print(cubed)
 print(biggest)

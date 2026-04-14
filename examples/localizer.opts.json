@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "localizer": {
+      "include": ["config"],
+      "scope": "function"
+    }
+  }
+}
