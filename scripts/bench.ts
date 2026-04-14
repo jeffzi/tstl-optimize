@@ -112,7 +112,10 @@ function runBenchmarks(
 
   if (files.length === 0) return { attempted: 0, succeeded: 0 };
 
-  const luaPath = `${luaRoot.replace(/\\/g, "/")}/?.lua;;`;
+  const existingLuaPath = env.LUA_PATH ?? "";
+  const luaPath = existingLuaPath
+    ? `${luaRoot.replace(/\\/g, "/")}/?.lua;${existingLuaPath}`
+    : `${luaRoot.replace(/\\/g, "/")}/?.lua;;`;
   let succeeded = 0;
   for (const f of files) {
     const result = spawnSync(cmd, [...args, join(benchDir, f)], {
@@ -149,6 +152,7 @@ function main(): void {
   const seen = new Set<string>();
   let ranAny = false;
   let foundAnyInterpreter = false;
+  let anyFailed = false;
 
   for (const label of labels) {
     const probe = PROBES[label];
@@ -181,7 +185,8 @@ function main(): void {
     } else {
       ranAny = true;
       if (succeeded < attempted) {
-        console.warn(`Warning: ${attempted - succeeded} of ${attempted} benchmarks failed.`);
+        anyFailed = true;
+        console.error(`Error: ${attempted - succeeded} of ${attempted} benchmarks failed.`);
       }
     }
     console.log();
@@ -195,6 +200,10 @@ function main(): void {
 
   if (!ranAny) {
     console.error("Error: no benchmark files were run for any interpreter.");
+    exit(1);
+  }
+
+  if (anyFailed) {
     exit(1);
   }
 }
