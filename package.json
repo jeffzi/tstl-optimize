@@ -44,7 +44,7 @@
     "luamark-types": "github:jeffzi/luamark#ts-types",
     "markdownlint-cli2": "^0.22.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.0",
+    "typescript": "^6.0.2",
     "typescript-to-lua": "1.34.0",
     "vitest": "^4.1.0"
   },
