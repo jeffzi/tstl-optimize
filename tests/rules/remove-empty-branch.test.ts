@@ -58,13 +58,17 @@ describe("remove-empty-branch rule", () => {
   describe("remove entirely-empty if-chains", () => {
     it.each([
       {
-        name: "removes an empty if statement with an identifier condition",
+        name: "removes an empty if statement with a function-local identifier condition",
         source: `
-          const x = true;
-          if (x) {}
+          function test() {
+            const x = true;
+            if (x) {}
+          }
         `,
         expected: `
-          x = true
+          function test()
+          local x = true
+          end
         `,
       },
       {
@@ -75,25 +79,32 @@ describe("remove-empty-branch rule", () => {
         expected: "",
       },
       {
-        name: "removes an entirely empty if-elseif-else chain",
+        name: "removes an entirely empty if-elseif-else chain with local identifiers",
         source: `
-          const x = true;
-          const y = false;
-          if (x) {} else if (y) {} else {}
+          function test() {
+            const x = true;
+            const y = false;
+            if (x) {} else if (y) {} else {}
+          }
         `,
         expected: `
-          x = true
-          y = false
+          function test()
+          local x, y = true, false
+          end
         `,
       },
       {
-        name: "removes an empty if statement with a negated pure condition",
+        name: "removes an empty if statement with a negated local condition",
         source: `
-          const x = true;
-          if (!x) {}
+          function test() {
+            const x = true;
+            if (!x) {}
+          }
         `,
         expected: `
-          x = true
+          function test()
+          local x = true
+          end
         `,
       },
     ])("$name", ({ source, expected }) => {
@@ -139,6 +150,18 @@ describe("remove-empty-branch rule", () => {
       `);
     });
 
+    it("preserves empty if statements whose condition reads a declared global", () => {
+      const source = `
+        declare const SHOULD_STAY: boolean;
+        if (SHOULD_STAY) {}
+      `;
+
+      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
+        "if SHOULD_STAY then
+        end"
+      `);
+    });
+
     it("handles nested empty if statements", () => {
       const source = `
         function test() {
@@ -146,8 +169,8 @@ describe("remove-empty-branch rule", () => {
           if (x) {}
         }
         const outer = true;
-        const inner = true;
         if (outer) {
+          const inner = true;
           const z = 1;
           if (inner) {}
         }
@@ -157,9 +180,8 @@ describe("remove-empty-branch rule", () => {
         local x = true
         end
         outer = true
-        inner = true
         if outer then
-        local z = 1
+        local inner, z = true, 1
         end"
       `);
     });
@@ -278,6 +300,19 @@ describe("remove-empty-branch rule", () => {
       `);
     });
 
+    it("wraps compound conditions when promoting else to preserve Lua precedence", () => {
+      const source = `
+        declare const a: boolean;
+        declare const b: boolean;
+        if (a && b) {} else { const z = 1; }
+      `;
+      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
+        "if not (a and b) then
+        local z = 1
+        end"
+      `);
+    });
+
     it("pure condition + elseif chain: leaves elseif chain untouched", () => {
       const source = `
         const x = true;
@@ -326,36 +361,43 @@ describe("remove-empty-branch rule", () => {
   describe("remove empty branches inside loop bodies", () => {
     it.each([
       {
-        name: "removes an empty if statement inside a while loop",
+        name: "removes an empty if statement inside a while loop with local conditions",
         source: `
-          const x = true;
-          while (x) {
-            if (x) {}
-            const z = 1;
+          function test() {
+            const x = true;
+            while (x) {
+              if (x) {}
+              const z = 1;
+            }
           }
         `,
         expected: `
-          x = true
+          function test()
+          local x = true
           while x do
           local z = 1
+          end
           end
         `,
       },
       {
-        name: "removes an empty if statement inside a counted while loop",
+        name: "removes an empty if statement inside a counted while loop with local conditions",
         source: `
-          const x = true;
-          let i = 0;
-          while (i < 3) {
-            if (x) {}
-            i++;
+          function test() {
+            const x = true;
+            let i = 0;
+            while (i < 3) {
+              if (x) {}
+              i++;
+            }
           }
         `,
         expected: `
-          x = true
-          i = 0
+          function test()
+          local x, i = true, 0
           while i < 3 do
           i = i + 1
+          end
           end
         `,
       },
@@ -421,11 +463,13 @@ describe("remove-empty-branch rule", () => {
       const source = `
         /** @define PROD */
         declare const PROD: boolean;
-        declare const x: boolean;
-        if (x) {
-          if (PROD) { const z = 1; }
+        function test() {
+          const x = true;
+          if (x) {
+            if (PROD) { const z = 1; }
+          }
+          const y = 2;
         }
-        const y = 2;
       `;
 
       expect(
@@ -443,12 +487,43 @@ describe("remove-empty-branch rule", () => {
             },
           }),
         ),
-      ).toBe("y = 2");
+      ).toBe("function test()\nlocal x = true\nlocal y = 2\nend");
     });
   });
 
   describe("direct source-file visitor coverage", () => {
-    it("removes raw Lua if-statements with parenthesized safe conditions", () => {
+    it("removes raw Lua if-statements with parenthesized local conditions", () => {
+      const localSymbolId = 1 as tstl.SymbolId;
+      const file = createLuaFile([
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("flag", undefined, localSymbolId)],
+          [tstl.createBooleanLiteral(true)],
+        ),
+        tstl.createIfStatement(
+          tstl.createParenthesizedExpression(
+            tstl.createIdentifier("flag", undefined, localSymbolId),
+          ),
+          tstl.createBlock([]),
+        ),
+      ]);
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => file,
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed.statements).toHaveLength(1);
+      expect(tstl.isVariableDeclarationStatement(transformed.statements[0])).toBe(true);
+    });
+
+    it("preserves raw Lua if-statements with parenthesized global identifier conditions", () => {
       const file = createLuaFile([
         tstl.createIfStatement(
           tstl.createParenthesizedExpression(tstl.createIdentifier("flag")),
@@ -468,7 +543,51 @@ describe("remove-empty-branch rule", () => {
         } as unknown as tstl.TransformationContext,
       ]);
 
-      expect(transformed.statements).toHaveLength(0);
+      expect(transformed.statements).toHaveLength(1);
+      expect(tstl.isIfStatement(transformed.statements[0])).toBe(true);
+    });
+
+    it("parenthesizes promoted compound conditions before negating them", () => {
+      const file = createLuaFile([
+        tstl.createIfStatement(
+          tstl.createBinaryExpression(
+            tstl.createIdentifier("a"),
+            tstl.createIdentifier("b"),
+            tstl.SyntaxKind.AndOperator,
+          ),
+          tstl.createBlock([]),
+          tstl.createBlock([tstl.createExpressionStatement(tstl.createNumericLiteral(1))]),
+        ),
+      ]);
+      const visitors = Reflect.apply(createVisitors, undefined, []);
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
+        node: ts.SourceFile,
+        context: tstl.TransformationContext,
+      ) => tstl.File;
+
+      const transformed = Reflect.apply(visitor, undefined, [
+        {} as ts.SourceFile,
+        {
+          superTransformNode: () => file,
+        } as unknown as tstl.TransformationContext,
+      ]);
+
+      expect(transformed.statements).toHaveLength(1);
+      const rewritten = transformed.statements[0];
+      expect(tstl.isIfStatement(rewritten)).toBe(true);
+      if (!tstl.isIfStatement(rewritten)) {
+        throw new Error("expected promoted statement to remain an if");
+      }
+      expect(tstl.isUnaryExpression(rewritten.condition)).toBe(true);
+      if (!tstl.isUnaryExpression(rewritten.condition)) {
+        throw new Error("expected promoted condition to be unary");
+      }
+      expect(rewritten.condition.operator).toBe(tstl.SyntaxKind.NotOperator);
+      expect(tstl.isParenthesizedExpression(rewritten.condition.operand)).toBe(true);
+      if (!tstl.isParenthesizedExpression(rewritten.condition.operand)) {
+        throw new Error("expected promoted compound operand to be parenthesized");
+      }
+      expect(tstl.isBinaryExpression(rewritten.condition.operand.expression)).toBe(true);
     });
 
     it("returns non-file transform results unchanged", () => {
