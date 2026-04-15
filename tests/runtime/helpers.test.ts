@@ -128,6 +128,85 @@ describe("detectRuntimes", () => {
       expect(labels).toContain(LABEL_LUAJIT_NOJIT);
     });
   });
+
+  describe("luajit identity checks", () => {
+    it("does not classify plain lua as luajit when only lua responds", () => {
+      stubAllRuntimeEnvsEmpty();
+      vi.mocked(spawnSync)
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "",
+          stderr: "",
+          status: null,
+          error: new Error("ENOENT"),
+        })
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "",
+          stderr: "",
+          status: null,
+          error: new Error("ENOENT"),
+        })
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "",
+          stderr: "",
+          status: null,
+          error: new Error("ENOENT"),
+        })
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "Lua 5.4.7",
+          stderr: "",
+          status: 0,
+          error: undefined,
+        });
+
+      const runtimes = detectRuntimes();
+
+      expect(findRuntimeByLabel(runtimes, "luajit")).toBeUndefined();
+    });
+
+    it("accepts a lua fallback when it identifies itself as LuaJIT", () => {
+      stubAllRuntimeEnvsEmpty();
+      vi.mocked(spawnSync)
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "",
+          stderr: "",
+          status: null,
+          error: new Error("ENOENT"),
+        })
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "",
+          stderr: "",
+          status: null,
+          error: new Error("ENOENT"),
+        })
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "",
+          stderr: "",
+          status: null,
+          error: new Error("ENOENT"),
+        })
+        .mockReturnValueOnce({
+          ...BASE_SPAWN_SYNC_RESULT,
+          stdout: "LuaJIT 2.1.0-beta3",
+          stderr: "",
+          status: 0,
+          error: undefined,
+        });
+
+      const runtimes = detectRuntimes();
+
+      expect(findRuntimeByLabel(runtimes, "luajit")).toStrictEqual({
+        label: "luajit",
+        cmd: "lua",
+      });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -35,7 +35,14 @@ export interface LuaRuntime {
  *   LUA_JIT_NOJIT  — path to a LuaJIT binary to run with JIT disabled (-joff);
  *                    no fallback binary names — only active when env var is set
  */
-const RUNTIME_CANDIDATES: Array<{ label: string; cmds: () => string[]; args?: string[] }> = [
+const LUAJIT_VERSION_PATTERN = /\bLuaJIT\b/;
+
+const RUNTIME_CANDIDATES: Array<{
+  label: string;
+  cmds: () => string[];
+  args?: string[];
+  versionPattern?: RegExp;
+}> = [
   {
     label: "lua5.1",
     cmds: () => [process.env.LUA_51 ?? "", "lua5.1", "lua51"].filter(Boolean),
@@ -43,23 +50,25 @@ const RUNTIME_CANDIDATES: Array<{ label: string; cmds: () => string[]; args?: st
   {
     label: "luajit",
     cmds: () => [process.env.LUA_JIT ?? "", "luajit", "lua"].filter(Boolean),
+    versionPattern: LUAJIT_VERSION_PATTERN,
   },
   {
     label: "luajit-nojit",
     cmds: () => (process.env.LUA_JIT_NOJIT ? [process.env.LUA_JIT_NOJIT] : []),
     args: ["-joff"],
+    versionPattern: LUAJIT_VERSION_PATTERN,
   },
 ];
 
-function probeBinary(cmd: string): boolean {
+function probeBinary(cmd: string): string | undefined {
   const r = spawnSync(cmd, ["-v"], {
     encoding: "utf8",
     timeout: 2000,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (r.error) return false;
+  if (r.error) return undefined;
   const out = String(r.stdout ?? "") + String(r.stderr ?? "");
-  return out.trim().length > 0;
+  return out.trim().length > 0 ? out : undefined;
 }
 
 let _cached: LuaRuntime[] | undefined;
@@ -80,16 +89,17 @@ export function detectRuntimes(): LuaRuntime[] {
   const seen = new Set<string>();
   const found: LuaRuntime[] = [];
 
-  for (const { label, cmds, args } of RUNTIME_CANDIDATES) {
+  for (const { label, cmds, args, versionPattern } of RUNTIME_CANDIDATES) {
     for (const cmd of cmds()) {
       if (!cmd) continue;
       const dedupKey = `${cmd}\0${getArgKey(args)}`;
       if (seen.has(dedupKey)) continue;
-      if (probeBinary(cmd)) {
-        seen.add(dedupKey);
-        found.push({ label, cmd, ...(args ? { args } : {}) });
-        break; // first hit wins for this label
-      }
+      const versionOutput = probeBinary(cmd);
+      if (!versionOutput) continue;
+      if (versionPattern && !versionPattern.test(versionOutput)) continue;
+      seen.add(dedupKey);
+      found.push({ label, cmd, ...(args ? { args } : {}) });
+      break; // first hit wins for this label
     }
   }
 

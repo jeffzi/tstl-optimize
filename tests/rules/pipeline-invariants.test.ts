@@ -12,9 +12,9 @@ type InvariantCase = {
   pluginOptions: Record<string, unknown>;
 };
 
-function ccConstants(name: string, env: string, defaultVal: boolean): Record<string, unknown> {
+function ccConstants(name: string, env: string, defaultValue: boolean): Record<string, unknown> {
   return {
-    rules: { "conditional-compilation": { constants: { [name]: { env, default: defaultVal } } } },
+    rules: { "conditional-compilation": { constants: { [name]: { env, default: defaultValue } } } },
   };
 }
 
@@ -87,9 +87,9 @@ function findViolations(lua: string): string[] {
   const violations: string[] = [];
 
   for (const { label, pattern } of FORBIDDEN) {
-    for (let i = 0; i < lines.length; i++) {
-      if (pattern.test(lines[i])) {
-        violations.push(`line ${i + 1} [${label}]: ${lines[i].trim()}`);
+    for (const [lineIndex, line] of lines.entries()) {
+      if (pattern.test(line)) {
+        violations.push(`line ${lineIndex + 1} [${label}]: ${line.trim()}`);
       }
     }
   }
@@ -97,9 +97,15 @@ function findViolations(lua: string): string[] {
   // Multiline empty do-end: "do" line immediately followed by "end" line
   // after stripping blank lines and trimming whitespace.
   const normalized = normalizeLua(lua).split("\n");
-  for (let i = 0; i + 1 < normalized.length; i++) {
-    if (normalized[i] === "do" && normalized[i + 1] === "end") {
-      violations.push(`normalized lines ${i + 1}–${i + 2}: empty multiline do-end block`);
+  for (const [lineIndex, line] of normalized.entries()) {
+    const nextLine = normalized[lineIndex + 1];
+    if (nextLine === undefined) {
+      break;
+    }
+    if (line === "do" && nextLine === "end") {
+      violations.push(
+        `normalized lines ${lineIndex + 1}–${lineIndex + 2}: empty multiline do-end block`,
+      );
     }
   }
 

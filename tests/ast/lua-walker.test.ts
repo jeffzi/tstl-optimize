@@ -86,9 +86,10 @@ describe("walkStatements", () => {
           ),
         ],
         assertVisited: (exprs: tstl.Expression[]) => {
-          expect(exprs.filter(tstl.isNumericLiteral).map((e) => e.value)).toEqual(
-            expect.arrayContaining([0, 10, 1]),
-          );
+          const numericValues = exprs.filter(tstl.isNumericLiteral).map((expr) => expr.value);
+          expect(numericValues).toContain(0);
+          expect(numericValues).toContain(10);
+          expect(numericValues).toContain(1);
           expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
         },
       },
@@ -103,7 +104,8 @@ describe("walkStatements", () => {
         ],
         assertVisited: (exprs: tstl.Expression[]) => {
           const identifiers = exprs.filter(tstl.isIdentifier).map((e) => e.text);
-          expect(identifiers).toEqual(expect.arrayContaining(["pairs", "t"]));
+          expect(identifiers).toContain("pairs");
+          expect(identifiers).toContain("t");
           expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
         },
       },

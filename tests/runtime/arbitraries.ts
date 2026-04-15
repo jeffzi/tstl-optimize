@@ -7,6 +7,7 @@
  */
 
 import fc from "fast-check";
+import ts from "typescript";
 
 // ---------------------------------------------------------------------------
 // Shared declaration and constants
@@ -19,28 +20,29 @@ export const PRINT_DECL = "declare function print(s: unknown): void;";
 // Safe identifiers
 // ---------------------------------------------------------------------------
 
+function isWordToken(token: string | undefined): token is string {
+  return token !== undefined && /^[a-z]+$/.test(token);
+}
+
+export function isValidDeclarationIdentifier(name: string): boolean {
+  const result = ts.transpileModule(`const ${name} = 1;`, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ESNext,
+    },
+    fileName: "identifier.ts",
+    reportDiagnostics: true,
+  });
+  return (result.diagnostics?.length ?? 0) === 0;
+}
+
 /** TypeScript keywords and reserved identifiers that must be avoided in source generation. */
-const RESERVED_KEYWORDS = new Set([
-  "if",
-  "else",
-  "for",
-  "let",
-  "const",
-  "return",
-  "while",
-  "do",
-  "function",
-  "class",
-  "new",
-  "this",
-  "true",
-  "false",
-  "null",
-  "void",
-  "type",
-  "in",
-  "of",
-]);
+const RESERVED_KEYWORDS = new Set(
+  Object.values(ts.SyntaxKind)
+    .filter((kind): kind is ts.SyntaxKind => typeof kind === "number")
+    .map((kind) => ts.tokenToString(kind))
+    .filter(isWordToken)
+    .filter((token) => !isValidDeclarationIdentifier(token)),
+);
 
 /** Lowercase letters used in identifier generation. */
 const LOWERCASE_LETTERS = "abcdefghijklmnopqrstuvwxyz".split("");

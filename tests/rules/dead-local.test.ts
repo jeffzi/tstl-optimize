@@ -6,6 +6,19 @@ import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../src/rules/dead-local";
 import { compile, normalizeLua } from "../helpers";
 
+function expectLuaSnippets(
+  lua: string,
+  { present, missing = [] }: { present: readonly string[]; missing?: readonly string[] },
+): void {
+  for (const snippet of present) {
+    expect(lua, `expected Lua to contain snippet: ${snippet}`).toContain(snippet);
+  }
+
+  for (const snippet of missing) {
+    expect(lua, `expected Lua to exclude snippet: ${snippet}`).not.toContain(snippet);
+  }
+}
+
 describe("dead-local", () => {
   function createLuaFile(statements: tstl.Statement[]): tstl.File {
     return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
@@ -396,14 +409,7 @@ describe("dead-local", () => {
       },
     ])("removes unused locals inside $name", ({ expectedMissing, expectedPresent, source }) => {
       const lua = compile(source);
-
-      for (const snippet of expectedPresent) {
-        expect(lua).toContain(snippet);
-      }
-
-      for (const snippet of expectedMissing) {
-        expect(lua).not.toContain(snippet);
-      }
+      expectLuaSnippets(lua, { present: expectedPresent, missing: expectedMissing });
     });
   });
 
