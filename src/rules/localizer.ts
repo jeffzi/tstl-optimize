@@ -91,8 +91,13 @@ function isAnyPrefixBound(chain: string, scopeDefs: ReadonlySet<string>): boolea
 }
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
-function replaceChains(statements: tstl.Statement[], hoisted: Map<string, tstl.Identifier>): void {
+function replaceChains(
+  statements: tstl.Statement[],
+  hoisted: Map<string, tstl.Identifier>,
+  shallow: boolean,
+): void {
   walkStatements(statements, {
+    shallow,
     expr: (expr, replace, control) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
@@ -155,6 +160,249 @@ function statementTouchesChain(
   return found;
 }
 
+function statementHasInterveningCallForChain(
+  statement: tstl.Statement,
+  chain: string,
+  shallow: boolean,
+): boolean {
+  let sawChainAccess = false;
+  let hasInterveningCall = false;
+
+  walkStatements([statement], {
+    shallow,
+    expr: (expr, _replace, control) => {
+      if (tstl.isCallExpression(expr) || tstl.isMethodCallExpression(expr)) {
+        if (sawChainAccess) {
+          hasInterveningCall = true;
+          control.stop();
+        }
+        return;
+      }
+
+      if (tstl.isTableIndexExpression(expr) && luaPropertyChain(expr) === chain) {
+        sawChainAccess = true;
+      }
+    },
+  });
+
+  return hasInterveningCall;
+}
+
+function statementHasUnsafeCallBeforeFirstChainAccess(
+  statement: tstl.Statement,
+  chain: string,
+  shallow: boolean,
+): boolean {
+  let sawUnsafeCall = false;
+  let foundUnsafePrefix = false;
+  let sawFirstChainAccess = false;
+
+  const shouldStopWalking = (): boolean => foundUnsafePrefix || sawFirstChainAccess;
+
+  const visitExpr = (expr: tstl.Expression): void => {
+    if (shouldStopWalking()) {
+      return;
+    }
+
+    if (tstl.isBinaryExpression(expr)) {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+      return;
+    }
+
+    if (tstl.isUnaryExpression(expr)) {
+      visitExpr(expr.operand);
+      return;
+    }
+
+    if (tstl.isCallExpression(expr)) {
+      visitExpr(expr.expression);
+      visitExpressionList(expr.params);
+      visitCall(isNonStdlibCall(expr.expression));
+      return;
+    }
+
+    if (tstl.isMethodCallExpression(expr)) {
+      visitExpr(expr.prefixExpression);
+      visitExpressionList(expr.params);
+      visitCall(true);
+      return;
+    }
+
+    if (tstl.isTableIndexExpression(expr)) {
+      visitExpr(expr.table);
+      visitExpr(expr.index);
+      visitChain(expr);
+      return;
+    }
+
+    if (tstl.isTableExpression(expr)) {
+      for (const field of expr.fields) {
+        if (field.key) {
+          visitExpr(field.key);
+        }
+        visitExpr(field.value);
+      }
+      return;
+    }
+
+    if (tstl.isParenthesizedExpression(expr)) {
+      visitExpr(expr.expression);
+      return;
+    }
+
+    if (tstl.isConditionalExpression(expr)) {
+      visitExpr(expr.condition);
+      visitExpr(expr.whenTrue);
+      visitExpr(expr.whenFalse);
+      return;
+    }
+
+    if (tstl.isFunctionExpression(expr) && !shallow) {
+      return;
+    }
+  };
+
+  const visitExpressionList = (expressions: readonly tstl.Expression[]): void => {
+    for (const expr of expressions) {
+      if (shouldStopWalking()) {
+        return;
+      }
+      visitExpr(expr);
+    }
+  };
+
+  const visitStatementList = (statements: readonly tstl.Statement[]): void => {
+    for (const stmt of statements) {
+      if (shouldStopWalking()) {
+        return;
+      }
+      visitStatement(stmt);
+    }
+  };
+
+  const visitChain = (expr: tstl.TableIndexExpression): void => {
+    if (sawFirstChainAccess || luaPropertyChain(expr) !== chain) {
+      return;
+    }
+    if (sawUnsafeCall) {
+      foundUnsafePrefix = true;
+    }
+    sawFirstChainAccess = true;
+  };
+
+  const visitCall = (unsafe: boolean): void => {
+    if (!unsafe || sawFirstChainAccess) {
+      return;
+    }
+    sawUnsafeCall = true;
+  };
+
+  const visitStatement = (stmt: tstl.Statement): void => {
+    if (tstl.isDoStatement(stmt)) {
+      visitStatementList(stmt.statements);
+      return;
+    }
+
+    if (tstl.isVariableDeclarationStatement(stmt)) {
+      visitExpressionList(stmt.right ?? []);
+      return;
+    }
+
+    if (tstl.isAssignmentStatement(stmt)) {
+      visitExpressionList(stmt.right);
+      return;
+    }
+
+    if (tstl.isIfStatement(stmt)) {
+      visitExpr(stmt.condition);
+      visitStatementList(stmt.ifBlock.statements);
+      if (stmt.elseBlock) {
+        visitStatementList(getElseStatements(stmt.elseBlock));
+      }
+      return;
+    }
+
+    if (tstl.isWhileStatement(stmt)) {
+      visitExpr(stmt.condition);
+      visitStatementList(stmt.body.statements);
+      return;
+    }
+
+    if (tstl.isRepeatStatement(stmt)) {
+      visitStatementList(stmt.body.statements);
+      visitExpr(stmt.condition);
+      return;
+    }
+
+    if (tstl.isForStatement(stmt)) {
+      visitExpressionList([stmt.controlVariableInitializer, stmt.limitExpression]);
+      if (stmt.stepExpression) {
+        visitExpr(stmt.stepExpression);
+      }
+      visitStatementList(stmt.body.statements);
+      return;
+    }
+
+    if (tstl.isForInStatement(stmt)) {
+      visitExpressionList(stmt.expressions);
+      visitStatementList(stmt.body.statements);
+      return;
+    }
+
+    if (tstl.isReturnStatement(stmt)) {
+      visitExpressionList(stmt.expressions);
+      return;
+    }
+
+    if (tstl.isExpressionStatement(stmt)) {
+      visitExpr(stmt.expression);
+    }
+  };
+
+  visitStatement(statement);
+  return foundUnsafePrefix;
+}
+
+/**
+ * Check if a call expression is to a non-stdlib function.
+ * Returns false if the callee is provably a stdlib root (e.g., math.ceil).
+ */
+function isNonStdlibCall(expr: tstl.Expression): boolean {
+  if (tstl.isTableIndexExpression(expr) && tstl.isIdentifier(expr.table)) {
+    return !STDLIB_ROOTS.has(expr.table.text);
+  }
+  if (tstl.isIdentifier(expr)) {
+    return !STDLIB_ROOTS.has(expr.text);
+  }
+  // Any other callee form (not directly identifiable) — conservative: assume unsafe
+  return true;
+}
+
+/**
+ * Check if statements contain a call to a non-stdlib function.
+ * Calls to stdlib functions (math.ceil, etc.) are known to be safe and don't mutate globals.
+ */
+function hasNonStdlibCall(statements: tstl.Statement[]): boolean {
+  let found = false;
+  walkStatements(statements, {
+    shallow: true,
+    expr: (expr, _replace, control) => {
+      if (tstl.isCallExpression(expr)) {
+        if (isNonStdlibCall(expr.expression)) {
+          found = true;
+          control.stop();
+        }
+      } else if (tstl.isMethodCallExpression(expr)) {
+        // Method calls like obj:method() — always unsafe (could mutate obj)
+        found = true;
+        control.stop();
+      }
+    },
+  });
+  return found;
+}
+
 function hasInterveningCallForChain(
   statements: tstl.Statement[],
   chain: string,
@@ -172,6 +420,14 @@ function hasInterveningCallForChain(
       continue;
     }
 
+    if (statementHasUnsafeCallBeforeFirstChainAccess(statement, chain, shallow)) {
+      return true;
+    }
+
+    if (statementHasInterveningCallForChain(statement, chain, shallow)) {
+      return true;
+    }
+
     if (firstAccessIndex === undefined) {
       firstAccessIndex = index;
     }
@@ -184,6 +440,13 @@ function hasInterveningCallForChain(
     firstAccessIndex >= lastAccessIndex
   ) {
     return false;
+  }
+
+  // Check for non-stdlib calls before the first access — hoisting via unshift() would place
+  // the hoisted local above any pre-access call, capturing a potentially stale snapshot if
+  // the call mutates the root. Calls to stdlib functions are known to be safe.
+  if (hasNonStdlibCall(statements.slice(0, firstAccessIndex))) {
+    return true;
   }
 
   for (let index = firstAccessIndex + 1; index < lastAccessIndex; index += 1) {
@@ -256,7 +519,7 @@ function hoistScope(
   }
 
   if (toHoist.size > 0) {
-    replaceChains(statements, toHoist);
+    replaceChains(statements, toHoist, shallow);
     if (inBodyDecls.length > 0) statements.unshift(...inBodyDecls);
     if (outDecls) outDecls.push(...liftableDecls);
   }

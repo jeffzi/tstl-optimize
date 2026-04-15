@@ -273,6 +273,22 @@ describe("localizer", () => {
       expect(lua).not.toContain("local ____obj_name = obj.name");
     });
 
+    it("does not hoist chain when a call appears before the first access", () => {
+      // Calls before first access might mutate the object.
+      // Hoisting would capture a pre-call snapshot, breaking the logic.
+      const lua = compile(
+        [
+          "declare const obj: { a: number };",
+          "declare function touch(): void;",
+          "touch();",
+          "const x = obj.a;",
+          "const y = obj.a;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["obj"] } } } },
+      );
+      expect(lua).not.toContain("local ____obj_a = obj.a");
+    });
+
     it("does nothing when rule is disabled", () => {
       const lua = compile(
         "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x + 1);",
@@ -605,6 +621,52 @@ describe("localizer", () => {
       expect(lua).toContain("touch(obj)");
       expect(lua).toContain("local a = obj.x");
       expect(lua).toContain("local b = obj.x");
+    });
+
+    it("does not hoist property chains across intervening calls within the same statement", () => {
+      const lua = normalizeLua(
+        compile(
+          [
+            "declare const obj: { x: number };",
+            "declare function print(...args: unknown[]): void;",
+            "declare function touch(): void;",
+            "function f() {",
+            "  print(obj.x, touch(), obj.x);",
+            "}",
+          ].join("\n"),
+          {
+            pluginOptions: {
+              rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+            },
+          },
+        ),
+      );
+
+      expect(lua).not.toContain("local ____obj_x");
+      expect(lua).toMatch(/print\(\nobj\.x,\ntouch\(\),\nobj\.x\n\)/);
+    });
+
+    it("does not hoist property chains when a call comes before the first access in the same statement", () => {
+      const lua = normalizeLua(
+        compile(
+          [
+            "declare const obj: { x: number };",
+            "declare function print(...args: unknown[]): void;",
+            "declare function touch(): void;",
+            "function f() {",
+            "  print(touch(), obj.x, obj.x);",
+            "}",
+          ].join("\n"),
+          {
+            pluginOptions: {
+              rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+            },
+          },
+        ),
+      );
+
+      expect(lua).not.toContain("local ____obj_x");
+      expect(lua).toMatch(/print\(\ntouch\(\),\nobj\.x,\nobj\.x\n\)/);
     });
 
     it("scope: all does not hoist included non-stdlib chains to module scope across an intervening call", () => {
@@ -1589,6 +1651,35 @@ describe("localizer safety around writes and shadowing", () => {
 
     expect(lua).not.toContain("local ____config_physics_gravity");
     expect(lua).toContain("config.physics.gravity = 2");
+  });
+
+  it("does not rewrite nested closures that outlive the hoist scope", () => {
+    const lua = normalizeLua(
+      compile(
+        [
+          "function makeReader(obj: { x: number }): () => number {",
+          "  const a = obj.x;",
+          "  const b = obj.x;",
+          "  return function() {",
+          "    return obj.x;",
+          "  };",
+          "}",
+          "const obj = { x: 1 };",
+          "const read = makeReader(obj);",
+          "obj.x = 2;",
+          "const result = read();",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+          },
+        },
+      ),
+    );
+
+    expect(lua).toContain("local ____obj_x = obj.x");
+    expect(lua).toContain("return obj.x");
+    expect(lua).not.toContain("return ____obj_x");
   });
 
   it("does not hoist array element localization through nested loops that shadow the index name", () => {
