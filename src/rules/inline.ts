@@ -741,6 +741,23 @@ interface ParamMapResult {
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }
 
+/**
+ * Create a discard temp variable with collision-safe name for an unused inline result.
+ * If expr is provided, assigns it; otherwise returns a bare decl for further use.
+ */
+function createDiscardTemp(
+  context: tstl.TransformationContext,
+  expr?: tstl.Expression,
+): tstl.VariableDeclarationStatement {
+  const discardSymId = context.nextSymbolId();
+  const discardIdent = tstl.createIdentifier(
+    `____inline_result_${discardSymId}`,
+    undefined,
+    discardSymId,
+  );
+  return tstl.createVariableDeclarationStatement([discardIdent], expr ? [expr] : undefined);
+}
+
 function needsEagerArgumentTemps(
   target: ExpressionInlineTarget,
   callNode: ts.CallExpression,
@@ -820,6 +837,21 @@ function buildDoEndBlock(
 
   // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
   const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+
+  // If a lower-priority rule (e.g. conditional-compilation) stripped the body
+  // to nothing, the params were never referenced and may lack Lua SymbolIds.
+  // Short-circuit: emit only the side-effectful arg evaluations. This keeps
+  // `canEraseInlineDeclaration` consistent with the Lua-phase outcome — the
+  // call site is fully inlined and the declaration can be erased.
+  if (luaBody.length === 0) {
+    const effectfulArgs: tstl.Statement[] = [];
+    for (const arg of callNode.arguments) {
+      if (hasSideEffects(arg)) {
+        effectfulArgs.push(createDiscardTemp(context, context.transformExpression(arg)));
+      }
+    }
+    return effectfulArgs;
+  }
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
@@ -1325,6 +1357,7 @@ function buildReturnSiteInline(
   const { bodyStmts, params, declaration } = target;
   const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
   let luaReturnStmts: tstl.Statement[] | undefined;
+  let luaReturnExpr: tstl.Expression | undefined;
 
   // Transform body and return expression first so ALL param symbols are registered
   // in context.symbolIdMaps before buildParamMap looks them up. A param that only
@@ -1335,6 +1368,8 @@ function buildReturnSiteInline(
     context.pushScope(FUNCTION_SCOPE, declaration);
     luaReturnStmts = context.transformStatements(returnStmt);
     context.popScope();
+  } else {
+    luaReturnExpr = context.transformExpression(target.returnExpr);
   }
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
@@ -1354,7 +1389,7 @@ function buildReturnSiteInline(
     return [...tempDecls, ...substitutedBody, tstl.createReturnStatement(substitutedReturns)];
   }
 
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
+  if (!luaReturnExpr) return undefined;
   const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
 
   // Flat emission: arg temps + body statements + return (no do...end wrapper needed).
@@ -1531,9 +1566,9 @@ function handleExpressionStatement(
     if (isPureAtVoidSite(target.bodyExpr, callNode.arguments)) {
       return [];
     }
-    // For side-effectful expressions, use local _ = <expr> pattern, which is always
-    // valid Lua regardless of the expression type (call, arithmetic, function, etc.)
-    return [tstl.createVariableDeclarationStatement([tstl.createIdentifier("_")], [inlined])];
+    // For side-effectful expressions, discard through a fresh temp so we preserve
+    // evaluation without introducing a user-visible `_` binding.
+    return [createDiscardTemp(context, inlined)];
   }
 
   if (target.kind === "statementsWithReturn") {

@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
@@ -270,6 +271,22 @@ describe("localizer", () => {
       // obj.name is inside `obj and obj.name` — conditionally evaluated.
       // Hoisting would make it unconditional, crashing when obj is nil.
       expect(lua).not.toContain("local ____obj_name = obj.name");
+    });
+
+    it("does not hoist chain when a call appears before the first access", () => {
+      // Calls before first access might mutate the object.
+      // Hoisting would capture a pre-call snapshot, breaking the logic.
+      const lua = compile(
+        [
+          "declare const obj: { a: number };",
+          "declare function touch(): void;",
+          "touch();",
+          "const x = obj.a;",
+          "const y = obj.a;",
+        ].join("\n"),
+        { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["obj"] } } } },
+      );
+      expect(lua).not.toContain("local ____obj_a = obj.a");
     });
 
     it("does nothing when rule is disabled", () => {
@@ -604,6 +621,52 @@ describe("localizer", () => {
       expect(lua).toContain("touch(obj)");
       expect(lua).toContain("local a = obj.x");
       expect(lua).toContain("local b = obj.x");
+    });
+
+    it("does not hoist property chains across intervening calls within the same statement", () => {
+      const lua = normalizeLua(
+        compile(
+          [
+            "declare const obj: { x: number };",
+            "declare function print(...args: unknown[]): void;",
+            "declare function touch(): void;",
+            "function f() {",
+            "  print(obj.x, touch(), obj.x);",
+            "}",
+          ].join("\n"),
+          {
+            pluginOptions: {
+              rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+            },
+          },
+        ),
+      );
+
+      expect(lua).not.toContain("local ____obj_x");
+      expect(lua).toMatch(/print\(\nobj\.x,\ntouch\(\),\nobj\.x\n\)/);
+    });
+
+    it("does not hoist property chains when a call comes before the first access in the same statement", () => {
+      const lua = normalizeLua(
+        compile(
+          [
+            "declare const obj: { x: number };",
+            "declare function print(...args: unknown[]): void;",
+            "declare function touch(): void;",
+            "function f() {",
+            "  print(touch(), obj.x, obj.x);",
+            "}",
+          ].join("\n"),
+          {
+            pluginOptions: {
+              rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+            },
+          },
+        ),
+      );
+
+      expect(lua).not.toContain("local ____obj_x");
+      expect(lua).toMatch(/print\(\ntouch\(\),\nobj\.x,\nobj\.x\n\)/);
     });
 
     it("scope: all does not hoist included non-stdlib chains to module scope across an intervening call", () => {
@@ -1011,7 +1074,7 @@ describe("localizer", () => {
 
   describe("when root filtering interactions occur", () => {
     it("root filter applied in function scope mode", () => {
-      // Without include: non-stdlib config NOT hoisted
+      // Lenient non-module predicate: config IS hoisted without include
       const luaDefault = compile(
         [
           "function process() {",
@@ -1023,7 +1086,25 @@ describe("localizer", () => {
         ].join("\n"),
         FUNC_SCOPE,
       );
-      expect(luaDefault).not.toContain("local ____config_graphics_width");
+      expect(luaDefault).toContain("local ____config_graphics_width = config.graphics.width");
+
+      // Exclude rejects the root at non-module scope
+      const luaExclude = compile(
+        [
+          "declare const config: { graphics: { width: number } };",
+          "function process() {",
+          "  const a = config.graphics.width;",
+          "  const b = config.graphics.width;",
+          "  return a + b;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, exclude: ["config"] } },
+          },
+        },
+      );
+      expect(luaExclude).not.toContain("local ____config_graphics_width");
 
       // With include: config IS hoisted in function scope
       const luaInclude = compile(
@@ -1123,8 +1204,104 @@ describe("localizer", () => {
 
       const lua = compile(src, ALL_SCOPE);
 
-      expect(lua).not.toContain("local ____config_physics_gravity");
+      expect(lua).toContain("local ____config_physics_gravity = config.physics.gravity");
       expect(lua).toContain("local ____velY = velY[i]");
+    });
+  });
+
+  describe("when scope-aware root filter + pre-loop LICM are active", () => {
+    it("lenient non-module: hoists non-stdlib chain pre-loop without include", () => {
+      const src = [
+        "declare const config: { x: { y: number } };",
+        "declare const out: number[];",
+        "declare const n: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  out[i] = config.x.y;",
+        "  out[i] = out[i] + config.x.y;",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local ____config_x_y = config.x.y");
+      // Decl appears before the for statement, not inside it
+      const declIdx = normalized.indexOf("local ____config_x_y = config.x.y");
+      const forIdx = normalized.indexOf("for i = 1, n do");
+      expect(declIdx).toBeGreaterThanOrEqual(0);
+      expect(forIdx).toBeGreaterThan(declIdx);
+    });
+
+    it("prefix-write rejection: no hoist when an intermediate prefix is reassigned", () => {
+      const src = [
+        "declare const config: { physics: { friction: number; gravity: number } };",
+        "declare const out: number[];",
+        "declare const n: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  out[i] = config.physics.friction;",
+        "  config.physics = { friction: 0.5, gravity: 9.8 };",
+        "  out[i] = out[i] + config.physics.friction;",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      expect(lua).not.toContain("local ____config_physics_friction");
+    });
+
+    it("module-scope stays strict: default config does not hoist non-stdlib chain at top level", () => {
+      const src = [
+        "declare const config: { x: { y: number } };",
+        "const a = config.x.y;",
+        "const b = config.x.y;",
+      ].join("\n");
+
+      const lua = compile(src, MODULE_SCOPE);
+      expect(lua).not.toContain("local ____config_x_y");
+    });
+
+    it("array-element hoist stays inside the loop body, not pre-loop", () => {
+      const src = [
+        "declare const velX: number[];",
+        "declare const n: number;",
+        "declare const dt: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  velX[i] = velX[i] + dt;",
+        "  velX[i] = velX[i] * 2;",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local ____velX = velX[i]");
+      const declIdx = normalized.indexOf("local ____velX = velX[i]");
+      const forIdx = normalized.indexOf("for i = 1, n do");
+      expect(forIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(forIdx);
+    });
+
+    it("nested loops: chain hoisted pre-outer-loop when reads span both bodies", () => {
+      const src = [
+        "declare const config: { x: { y: number } };",
+        "declare const grid: number[][];",
+        "declare const n: number;",
+        "declare const m: number;",
+        "for (const i of $range(0, n - 1)) {",
+        "  grid[i][0] = config.x.y;",
+        "  for (const j of $range(0, m - 1)) {",
+        "    grid[i][j] = grid[i][j] + config.x.y;",
+        "  }",
+        "}",
+      ].join("\n");
+
+      const lua = compile(src, FUNC_SCOPE);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain("local ____config_x_y = config.x.y");
+      const declIdx = normalized.indexOf("local ____config_x_y = config.x.y");
+      const outerForIdx = normalized.indexOf("for i = 1, n do");
+      expect(declIdx).toBeGreaterThanOrEqual(0);
+      expect(outerForIdx).toBeGreaterThan(declIdx);
     });
   });
 
@@ -1474,6 +1651,35 @@ describe("localizer safety around writes and shadowing", () => {
 
     expect(lua).not.toContain("local ____config_physics_gravity");
     expect(lua).toContain("config.physics.gravity = 2");
+  });
+
+  it("does not rewrite nested closures that outlive the hoist scope", () => {
+    const lua = normalizeLua(
+      compile(
+        [
+          "function makeReader(obj: { x: number }): () => number {",
+          "  const a = obj.x;",
+          "  const b = obj.x;",
+          "  return function() {",
+          "    return obj.x;",
+          "  };",
+          "}",
+          "const obj = { x: 1 };",
+          "const read = makeReader(obj);",
+          "obj.x = 2;",
+          "const result = read();",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+          },
+        },
+      ),
+    );
+
+    expect(lua).toContain("local ____obj_x = obj.x");
+    expect(lua).toContain("return obj.x");
+    expect(lua).not.toContain("return ____obj_x");
   });
 
   it("does not hoist array element localization through nested loops that shadow the index name", () => {
@@ -2217,5 +2423,95 @@ describe("localizer raw Lua visitor coverage", () => {
     expect(tstl.isTableIndexExpression((nestedAssign.right[0] as tstl.BinaryExpression).left)).toBe(
       true,
     );
+  });
+
+  describe("localizer — interaction with other rules", () => {
+    it("scope: all hoists both module-level and function-level chains in the same file", () => {
+      // scope: "all" should hoist chains at any nesting depth.
+      const lua = compile(
+        `
+          declare const x: number;
+          const a = Math.ceil(x);
+          const b = Math.ceil(x + 1);
+          function f(): number {
+            return Math.ceil(x + 2) + Math.ceil(x + 3);
+          }
+        `,
+        { ...ALL_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+      // Both module-level and function-level uses reference the hoisted local
+      expect(lua).toContain("____math_ceil(x)");
+    });
+
+    it("localizer + inline: hoisted chain survives inlining of a function that uses it", () => {
+      // After inlining, the chain reference moves into the call site — localizer must still hoist.
+      const lua = compile(
+        `
+          /** @inline */
+          function ceilDouble(x: number): number { return Math.ceil(x) + Math.ceil(x + 1); }
+          declare const v: number;
+          const r1 = ceilDouble(v);
+          const r2 = ceilDouble(v + 2);
+        `,
+        { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      // math.ceil used multiple times after inlining → should be hoisted
+      expect(lua).toContain("local ____math_ceil = math.ceil");
+    });
+
+    it("localizer + dead-local: hoisted local from a chain that was inlined is not dropped", () => {
+      // A hoisted local for a chain that appears only in inlined code must survive — its
+      // references survive inlining, so the hoisted local still has uses.
+      const lua = compile(
+        `
+          declare const x: number;
+          const a = Math.ceil(x);
+          const b = Math.ceil(x + 1);
+          const c = Math.ceil(x + 2);
+        `,
+        { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
+      );
+      // Hoisted local must be present and used; not treated as dead
+      expect(lua).toContain("local ____math_ceil");
+      const useCount = (lua.match(/____math_ceil\(/g) ?? []).length;
+      expect(useCount).toBe(3);
+    });
+  });
+
+  describe("localizer properties", () => {
+    const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
+
+    it("hoists math.ceil for any call count ≥ 2 at module scope", () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 2, max: 6 }), (n) => {
+          const decls = Array.from(
+            { length: n },
+            (_, i) => `const c${i} = Math.ceil(x + ${i});`,
+          ).join(" ");
+          const lua = compile(`declare const x: number; ${decls}`, {
+            ...MODULE_SCOPE,
+            luaTarget: tstl.LuaTarget.LuaJIT,
+          });
+          // With n uses, the hoisted local must be introduced and used at least once.
+          return lua.includes("local ____math_ceil = math.ceil") && lua.includes("____math_ceil(");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("does not hoist a single occurrence of math.ceil (threshold < 2)", () => {
+      // Single call — below the hoist threshold. The raw reference stays.
+      fc.assert(
+        fc.property(fc.integer({ min: 0, max: 100 }), (offset) => {
+          const lua = compile(`declare const x: number; const c = Math.ceil(x + ${offset});`, {
+            ...MODULE_SCOPE,
+            luaTarget: tstl.LuaTarget.LuaJIT,
+          });
+          return !lua.includes("____math_ceil") && lua.includes("math.ceil(");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
   });
 });

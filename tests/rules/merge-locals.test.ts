@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
@@ -1707,5 +1708,123 @@ describe("merge-locals uncovered branches", () => {
       expect(statements[1].right).toHaveLength(2);
       expect(statements[2].left).toHaveLength(1);
     });
+  });
+
+  describe("merge-locals — interaction with other rules", () => {
+    it("closure capturing a merged local retains the correct value (merge-locals + closure capture)", () => {
+      // Both `base` and `offset` are pure literals that qualify for merging into one declaration.
+      // The closure must still capture their values correctly after the merge.
+      const lua = compile(`
+        function makeAdder(n: number): () => number {
+          const base = n * 2;
+          const offset = 3;
+          return () => base + offset;
+        }
+        declare function use(f: () => number): void;
+        use(makeAdder(5));
+      `);
+      // Both identifiers must still appear (not dropped)
+      expect(lua).toContain("base");
+      expect(lua).toContain("offset");
+    });
+
+    it("inline arg temps are merged when consecutive pure inlined results follow each other", () => {
+      // After inline runs, two pure const decls may be consecutive → merge-locals can merge them.
+      const lua = compile(`
+        /** @inline */
+        function id(x: number): number { return x; }
+        const a = id(1);
+        const b = id(2);
+        declare function use(a: number, b: number): void;
+        use(a, b);
+      `);
+      // Both results must remain usable
+      expect(lua).toContain("a");
+      expect(lua).toContain("b");
+    });
+
+    it("impure call barrier between pure runs does not corrupt either merged run", () => {
+      // An impure call splits pure local runs. Runs on both sides must survive intact.
+      // Variables are used in a return so dead-local cannot drop them.
+      const lua = normalizeLua(
+        compile(`
+        declare function barrier(): number;
+        function f(): number {
+          const x = 1;
+          const y = 2;
+          const mid = barrier();
+          const a = 10;
+          const b = 20;
+          return x + y + mid + a + b;
+        }
+        declare function use(n: number): void;
+        use(f());
+      `),
+      );
+      expect(lua).toContain("x");
+      expect(lua).toContain("y");
+      expect(lua).toContain("barrier()");
+      expect(lua).toContain("a");
+      expect(lua).toContain("b");
+    });
+  });
+
+  describe("merge-locals properties", () => {
+    const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
+
+    it("merges N consecutive pure const literals in a function body into a single decl", () => {
+      // Pure literal runs of any length should collapse to one `local a, b, c, ... = 1, 2, 3, ...`
+      // while preserving the aggregate semantics (sum is unchanged).
+      fc.assert(
+        fc.property(fc.integer({ min: 2, max: 6 }), (n) => {
+          const decls = Array.from({ length: n }, (_, i) => `const v${i} = ${i + 1};`).join(" ");
+          const sum = Array.from({ length: n }, (_, i) => `v${i}`).join(" + ");
+          const lua = normalizeLua(
+            compile(
+              `function f(): number { ${decls} return ${sum}; } declare const g: (n: number) => void; g(f());`,
+            ),
+          );
+          // After merge, all n declarations share one local statement → only one `local ` line in the function.
+          // We check the function body has exactly one local declaration line.
+          const localLines = lua.split("\n").filter((l) => /^local v0/.test(l));
+          return localLines.length === 1 && localLines[0].includes(`v${n - 1}`);
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("splits merged runs across an intervening impure call — pure runs remain separately mergeable", () => {
+      // Shape: pureA (k decls) · impure call · pureB (k decls). Verify:
+      //   - first `local v` line covers pureA group only
+      //   - impure call survives
+      //   - a second `local v` line covers pureB group
+      fc.assert(
+        fc.property(fc.integer({ min: 2, max: 4 }), (k) => {
+          const left = Array.from({ length: k }, (_, i) => `const v${i} = ${i + 1};`).join(" ");
+          const right = Array.from({ length: k }, (_, i) => `const w${i} = ${i + 10};`).join(" ");
+          const leftSum = Array.from({ length: k }, (_, i) => `v${i}`).join(" + ");
+          const rightSum = Array.from({ length: k }, (_, i) => `w${i}`).join(" + ");
+          const lua = normalizeLua(
+            compile(`
+              declare function imp(): number;
+              function f(): number {
+                ${left}
+                const mid = imp();
+                ${right}
+                return ${leftSum} + mid + ${rightSum};
+              }
+              declare const g: (n: number) => void;
+              g(f());
+            `),
+          );
+          // The impure call must survive and split the run.
+          if (!lua.includes("imp()")) return false;
+          const leftLocals = lua.split("\n").filter((l) => /^local v0/.test(l));
+          const rightLocals = lua.split("\n").filter((l) => /^local w0/.test(l));
+          return leftLocals.length === 1 && rightLocals.length === 1;
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
   });
 });

@@ -99,6 +99,13 @@ describe("math-intrinsics", () => {
       expect(lua).toContain("myMath:floor(1.2)");
       expect(lua).not.toContain("math.floor");
     });
+
+    it("keeps aliased builtin Math calls as table calls", () => {
+      const lua = compile("const M = Math; const y = M.floor(1.2);");
+
+      expect(lua).toContain("M.floor(1.2)");
+      expect(lua).not.toContain("M:floor(1.2)");
+    });
   });
 
   describe("Math.sqrt", () => {
@@ -348,6 +355,13 @@ describe("math-intrinsics", () => {
 
       expect(lua).toContain("true and 5 or 3");
       expect(lua).not.toContain("math.max");
+    });
+
+    it("folds Math.min conditional with constant arguments", () => {
+      const lua = compile("const x = Math.min(3, 5);");
+
+      expect(lua).toContain("true and 3 or 5");
+      expect(lua).not.toContain("math.min");
     });
 
     it("folds x ** 2 with constant base to literal", () => {

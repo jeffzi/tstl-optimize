@@ -277,6 +277,40 @@ describe("collectScopeInfo", () => {
     expect(scopeDefs).toStrictEqual(new Set(["module.run", "config", "state.value", "key", "i"]));
   });
 
+  it("ignores TableIndexExpression LHS when property chain is non-string-keyed", () => {
+    // t[1] = 0 — numeric index → luaPropertyChain returns undefined → not added to scopeDefs
+    const numericLhs = tstl.createTableIndexExpression(
+      tstl.createIdentifier("t"),
+      tstl.createNumericLiteral(1),
+    );
+    const stmt = tstl.createAssignmentStatement(numericLhs, tstl.createNumericLiteral(0));
+
+    const { scopeDefs } = collectScopeInfo([stmt], false);
+    expect(scopeDefs.size).toBe(0);
+  });
+
+  it("does not collect function-definition params when shallow=true", () => {
+    // shallow=true: !shallow is false → function-definition params skipped (line 79)
+    const fnDef = tstl.createAssignmentStatement(
+      makeAccess("module", "fn"),
+      tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("param")]),
+    );
+
+    const { scopeDefs } = collectScopeInfo([fnDef], true);
+    // Only the LHS chain is collected; "param" must not appear
+    expect(scopeDefs).toStrictEqual(new Set(["module.fn"]));
+  });
+
+  it("handles function-definition whose params are undefined (no params list)", () => {
+    // FunctionExpression with params=undefined triggers the `?.` short-circuit in line 79
+    const funcExpr = tstl.createFunctionExpression(tstl.createBlock([]));
+    Reflect.set(funcExpr, "params", undefined);
+    const fnDef = tstl.createAssignmentStatement(makeAccess("module", "fn"), funcExpr);
+
+    const { scopeDefs } = collectScopeInfo([fnDef], false);
+    expect(scopeDefs).toStrictEqual(new Set(["module.fn"]));
+  });
+
   it("ignores non-identifier function and loop parameters", () => {
     const variadicExpr = tstl.createFunctionExpression(tstl.createBlock([]), [
       tstl.createIdentifier("arg"),

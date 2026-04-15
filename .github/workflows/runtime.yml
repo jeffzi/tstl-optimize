@@ -1,0 +1,60 @@
+name: Runtime Matrix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  runtime:
+    name: Runtime (${{ matrix.name }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: puc-5.1
+            luaVersion: "5.1"
+            luaEnvVar: LUA_51
+            luaBin: lua
+            luaExpect: lua5.1
+          - name: luajit-on
+            luaVersion: luajit
+            luaEnvVar: LUA_JIT
+            luaBin: luajit
+            luaExpect: luajit
+          - name: luajit-off
+            luaVersion: luajit
+            luaEnvVar: LUA_JIT_NOJIT
+            luaBin: luajit
+            luaExpect: luajit-nojit
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Lua
+        uses: leafo/gh-actions-lua@v12
+        with:
+          luaVersion: ${{ matrix.luaVersion }}
+
+      - name: Configure Lua runtime env
+        run: echo "${{ matrix.luaEnvVar }}=${{ matrix.luaBin }}" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: npm run build
+
+      - name: Runtime tests
+        run: npm run test:runtime
+        env:
+          LUA_EXPECT: ${{ matrix.luaExpect }}

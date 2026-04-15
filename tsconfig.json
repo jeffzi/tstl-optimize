@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./tsconfig.plugin.json" },
+    { "path": "./tsconfig.tests.json" },
     { "path": "./tsconfig.benchmark.json" },
     { "path": "./tsconfig.benchmark-jit.json" },
     { "path": "./tsconfig.scripts.json" }

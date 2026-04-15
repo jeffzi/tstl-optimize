@@ -28,12 +28,19 @@ const bounded = Math.max(0, speed);
 // through to Lua's ^ operator since the expansion grows combinatorially
 const cubed = x ** 3;
 
-// Math.max/min replaced with (a > b) and a or b, which only works for 2 args
+// Math.max/min is rewritten to (a > b) and a or b only when both args are
+// numeric literals. Non-literal operands are left as-is: Lua __le/__lt
+// metamethods could have side effects, making the short-circuit rewrite unsafe.
+const maxLit = Math.max(2, 3);
+const minLit = Math.min(1, 2);
+
+// Non-literal or 3-arg calls fall through to math.max/math.min
 const biggest = Math.max(x, y, speed);
 
 print(dist); // 201.24611797498
 print(tileX, tileY); // 0  0
 print(absX, absY); // 90  180
 print(clamped, bounded); // 5  5
+print(maxLit, minLit); // 3  1
 print(cubed); // 1000
 print(biggest); // 20

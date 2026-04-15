@@ -70,6 +70,32 @@ function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
+// Patterns that indicate pipeline bugs committed into .lua output files.
+// /\bdo\s+end\b/ matches both same-line ("do end") and multiline ("do\n    end")
+// because \s matches \n in JS — so empty do-blocks in any formatting are caught.
+const FORBIDDEN_LUA_PATTERNS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
+  { label: "empty do-end block", pattern: /\bdo\s+end\b/g },
+  { label: "unfolded if-true branch", pattern: /\bif\s+true\s+then\b/g },
+  { label: "unfolded if-false branch", pattern: /\bif\s+false\s+then\b/g },
+];
+
+/**
+ * Scans committed Lua content for structural patterns that indicate an
+ * optimization rule left broken output. Reports each violation to stderr
+ * as "file:line: forbidden pattern: <label>" and returns true if any found.
+ */
+function lintCommittedLua(luaName: string, content: string): boolean {
+  let failed = false;
+  for (const { label, pattern } of FORBIDDEN_LUA_PATTERNS) {
+    for (const match of content.matchAll(pattern)) {
+      const lineNo = content.slice(0, match.index).split("\n").length;
+      console.error(`${luaName}:${lineNo}: forbidden pattern: ${label}`);
+      failed = true;
+    }
+  }
+  return failed;
+}
+
 async function main(): Promise<void> {
   const check = argv.includes("--check");
   const projectRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -87,6 +113,7 @@ async function main(): Promise<void> {
 
   const tsFiles = readdirSync(examplesDir).filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"));
   let stale = false;
+  let lintFailed = false;
 
   for (const name of tsFiles) {
     const luaName = name.replace(/\.ts$/, ".lua");
@@ -125,6 +152,9 @@ async function main(): Promise<void> {
         console.error(`Out of date: ${luaName}`);
         stale = true;
       }
+      if (existing && lintCommittedLua(luaName, existing)) {
+        lintFailed = true;
+      }
     } else {
       writeFileSync(luaPath, lua);
       console.log(`${name} -> ${luaName}`);
@@ -133,6 +163,8 @@ async function main(): Promise<void> {
 
   if (check && stale) {
     console.error('Example .lua files are out of date. Run "npm run examples" to regenerate.');
+  }
+  if (check && (stale || lintFailed)) {
     exit(1);
   }
 }

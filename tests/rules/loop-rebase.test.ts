@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { compile } from "../helpers";
 
@@ -213,6 +214,21 @@ describe("loop-rebase", () => {
       expect(lua).toContain("for i = 0, n - 1, 2 do");
     });
 
+    it("rebases when step is explicitly 1 (numeric literal, not absent)", () => {
+      // Covers the `value === 1` branch in loop-rebase.ts — step expression is present
+      // but equals the identity step, so rebase should still apply.
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "let sum = 0;",
+          "for (const i of $range(0, n - 1, 1)) { sum += arr[i]; }",
+        ].join("\n"),
+      );
+      expect(lua).toContain("for i = 1, n, 1 do");
+      expect(lua).not.toContain("i + 1");
+    });
+
     it("rebases when closure param shadows control variable", () => {
       const lua = compile(
         [
@@ -311,5 +327,37 @@ describe("loop-rebase", () => {
       const lua = compile(src);
       expectLuaSnippets(lua, { contains, notContains });
     });
+  });
+
+  describe("loop-rebase properties", () => {
+    const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
+
+    it("rebases $range(0, N) for any literal N ≥ 0 → for i = 1, N+1 do, no +1 indexing", () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 0, max: 50 }), (n) => {
+          const lua = compile(
+            `declare const arr: number[]; let sum = 0; for (const i of $range(0, ${n})) { sum += arr[i]; }`,
+          );
+          return lua.includes(`for i = 1, ${n + 1} do`) && !lua.includes("i + 1");
+        }),
+        FC_OPTS,
+      );
+    }, 20_000);
+
+    it("does not rebase when step is any literal ≠ 1", () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 2, max: 10 }),
+          fc.integer({ min: 5, max: 20 }),
+          (step, limit) => {
+            const lua = compile(
+              `declare const arr: number[]; let sum = 0; for (const i of $range(0, ${limit}, ${step})) { sum += arr[i]; }`,
+            );
+            return lua.includes(`for i = 0, ${limit}, ${step} do`);
+          },
+        ),
+        FC_OPTS,
+      );
+    }, 20_000);
   });
 });

@@ -30,32 +30,57 @@ export interface LuaRuntime {
  * responds to `-v` wins.
  *
  * Override any entry via environment variables before the fallback list:
- *   LUA_51  — path to a Lua 5.1 binary
- *   LUA_JIT — path to a LuaJIT binary
+ *   LUA_51         — path to a Lua 5.1 binary
+ *   LUA_JIT        — path to a LuaJIT binary
+ *   LUA_JIT_NOJIT  — path to a LuaJIT binary to run with JIT disabled (-joff);
+ *                    no fallback binary names — only active when env var is set
  */
-const RUNTIME_CANDIDATES: Array<{ label: string; cmds: () => string[] }> = [
+const LUAJIT_VERSION_PATTERN = /\bLuaJIT\b/;
+
+const RUNTIME_CANDIDATES: Array<{
+  label: string;
+  cmds: () => string[];
+  args?: string[];
+  versionPattern?: RegExp;
+}> = [
   {
     label: "lua5.1",
-    cmds: () => [process.env["LUA_51"] ?? "", "lua5.1", "lua51"].filter(Boolean),
+    cmds: () => [process.env.LUA_51 ?? "", "lua5.1", "lua51"].filter(Boolean),
   },
   {
     label: "luajit",
-    cmds: () => [process.env["LUA_JIT"] ?? "", "luajit", "lua"].filter(Boolean),
+    cmds: () => [process.env.LUA_JIT ?? "", "luajit", "lua"].filter(Boolean),
+    versionPattern: LUAJIT_VERSION_PATTERN,
+  },
+  {
+    label: "luajit-nojit",
+    cmds: () => (process.env.LUA_JIT_NOJIT ? [process.env.LUA_JIT_NOJIT] : []),
+    args: ["-joff"],
+    versionPattern: LUAJIT_VERSION_PATTERN,
   },
 ];
 
-function probeBinary(cmd: string): boolean {
+function probeBinary(cmd: string): string | undefined {
   const r = spawnSync(cmd, ["-v"], {
     encoding: "utf8",
     timeout: 2000,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (r.error) return false;
+  if (r.error) return undefined;
   const out = String(r.stdout ?? "") + String(r.stderr ?? "");
-  return out.trim().length > 0;
+  return out.trim().length > 0 ? out : undefined;
 }
 
 let _cached: LuaRuntime[] | undefined;
+
+/** Resets the memoized runtime cache. Intended for use in tests only. */
+export function _resetRuntimeCache(): void {
+  _cached = undefined;
+}
+
+function getArgKey(args: string[] | undefined): string {
+  return (args ?? []).join("\0");
+}
 
 /** Returns all Lua runtimes that are reachable on the current machine. */
 export function detectRuntimes(): LuaRuntime[] {
@@ -64,19 +89,53 @@ export function detectRuntimes(): LuaRuntime[] {
   const seen = new Set<string>();
   const found: LuaRuntime[] = [];
 
-  for (const { label, cmds } of RUNTIME_CANDIDATES) {
+  for (const { label, cmds, args, versionPattern } of RUNTIME_CANDIDATES) {
     for (const cmd of cmds()) {
-      if (!cmd || seen.has(cmd)) continue;
-      if (probeBinary(cmd)) {
-        seen.add(cmd);
-        found.push({ label, cmd });
-        break; // first hit wins for this label
-      }
+      if (!cmd) continue;
+      const dedupKey = `${cmd}\0${getArgKey(args)}`;
+      if (seen.has(dedupKey)) continue;
+      const versionOutput = probeBinary(cmd);
+      if (!versionOutput) continue;
+      if (versionPattern && !versionPattern.test(versionOutput)) continue;
+      seen.add(dedupKey);
+      found.push({ label, cmd, ...(args ? { args } : {}) });
+      break; // first hit wins for this label
     }
   }
 
   _cached = found;
   return found;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime assertions
+// ---------------------------------------------------------------------------
+
+/**
+ * Asserts that the detected runtimes satisfy the `LUA_EXPECT` environment variable.
+ *
+ * - If `LUA_EXPECT` is set (comma-separated labels), every listed label must be present.
+ * - If `LUA_EXPECT` is unset, at least one runtime must be present.
+ */
+export function assertExpectedRuntimes(runtimes: LuaRuntime[]): void {
+  const raw = process.env.LUA_EXPECT;
+
+  if (raw) {
+    const expected = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const presentLabels = new Set(runtimes.map((r) => r.label));
+    const missing = expected.filter((label) => !presentLabels.has(label));
+    if (missing.length > 0) {
+      throw new Error(`Missing Lua runtimes: ${missing.join(", ")}`);
+    }
+    return;
+  }
+
+  if (runtimes.length === 0) {
+    throw new Error("No Lua runtimes detected.");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +235,7 @@ export interface RuntimeEqualOptions extends CompileOptions {
 export function runtimeEqual(source: string, options?: RuntimeEqualOptions): void {
   let runtimes = detectRuntimes();
   if (options?.runtimes) {
-    runtimes = runtimes.filter((r) => options.runtimes!.includes(r.label));
+    runtimes = runtimes.filter((r) => options.runtimes?.includes(r.label));
   }
   if (runtimes.length === 0) return;
 

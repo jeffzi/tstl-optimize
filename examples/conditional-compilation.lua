@@ -3,10 +3,9 @@ initDesktopRenderer()
 setupDesktop()
 speed = baseSpeed
 label = "Desktop"
-safeHp = hp
-x = hp + 1
-offline = true
-ok = true
+do
+    local x = hp + 1
+end
 setupDesktop()
 if isAlive then
     print("alive")
@@ -15,9 +14,9 @@ if true and connected then
     print("desktop + connected")
 end
 repeat
-    local ____switch4 = mode
-    local ____cond4 = ____switch4 == 1
-    if ____cond4 then
+    local ____switch8 = mode
+    local ____cond8 = ____switch8 == 1
+    if ____cond8 then
         print("one")
         break
     end

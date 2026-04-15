@@ -86,9 +86,10 @@ describe("walkStatements", () => {
           ),
         ],
         assertVisited: (exprs: tstl.Expression[]) => {
-          expect(exprs.filter(tstl.isNumericLiteral).map((e) => e.value)).toEqual(
-            expect.arrayContaining([0, 10, 1]),
-          );
+          const numericValues = exprs.filter(tstl.isNumericLiteral).map((expr) => expr.value);
+          expect(numericValues).toContain(0);
+          expect(numericValues).toContain(10);
+          expect(numericValues).toContain(1);
           expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
         },
       },
@@ -103,7 +104,8 @@ describe("walkStatements", () => {
         ],
         assertVisited: (exprs: tstl.Expression[]) => {
           const identifiers = exprs.filter(tstl.isIdentifier).map((e) => e.text);
-          expect(identifiers).toEqual(expect.arrayContaining(["pairs", "t"]));
+          expect(identifiers).toContain("pairs");
+          expect(identifiers).toContain("t");
           expect(exprs.filter(tstl.isStringLiteral).map((e) => e.value)).toContain("body");
         },
       },
@@ -666,6 +668,22 @@ describe("walkStatements", () => {
       expect(hooks.guardDepth).toBe(0);
     });
 
+    it("restores guardDepth after full conditional expression traversal", () => {
+      // ConditionalExpression fully traversed (no stop): guardDepth++ before whenTrue,
+      // guardDepth-- (line 129) after whenFalse. Verify depth is back to 0.
+      const hooks = {
+        guardDepth: 0,
+        expr: (_expr: tstl.Expression) => {},
+      };
+      const stmt = tstl.createExpressionStatement(
+        tstl.createConditionalExpression(id("c"), num(1), num(2)),
+      );
+
+      walkStatements([stmt], hooks);
+
+      expect(hooks.guardDepth).toBe(0);
+    });
+
     it("restores guardDepth when stop() fires inside an if block", () => {
       const hooks = {
         guardDepth: 0,
@@ -933,6 +951,103 @@ describe("walkStatements", () => {
       expect(visited).toStrictEqual([1]);
     });
 
+    it("stop() in first TableIndexExpression LHS table halts before second LHS", () => {
+      // Multi-target assignment: arr["a"], tab["b"] = 1, 2
+      // stop() fires when visiting "arr" (first lhs.table) → returns at line 158
+      const lhs1 = tstl.createTableIndexExpression(id("arr"), str("a"));
+      const lhs2 = tstl.createTableIndexExpression(id("tab"), str("b"));
+      const stmt = tstl.createAssignmentStatement([lhs1, lhs2], [num(1), num(2)]);
+      const visited: string[] = [];
+      walkStatements([stmt], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isIdentifier(expr)) {
+            visited.push(expr.text);
+            control.stop();
+          }
+        },
+      });
+      expect(visited).toStrictEqual(["arr"]);
+    });
+
+    it("stop() in first LHS index visit halts before second LHS (line 153)", () => {
+      // Two TableIndexExpression LHS: arr["a"], tab["b"]
+      // stop() fires in "a" (first lhs.index) → second LHS iteration hits stopped guard (line 153)
+      const lhs1 = tstl.createTableIndexExpression(id("arr"), str("a"));
+      const lhs2 = tstl.createTableIndexExpression(id("tab"), str("b"));
+      const stmt = tstl.createAssignmentStatement([lhs1, lhs2], [num(1), num(2)]);
+      const visited: string[] = [];
+      walkStatements([stmt], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isStringLiteral(expr)) {
+            visited.push(expr.value);
+            control.stop();
+          } else if (tstl.isIdentifier(expr)) {
+            visited.push(expr.text);
+          }
+        },
+      });
+      // arr (lhs1.table), then "a" (lhs1.index, stop fires); lhs2 never reached
+      expect(visited).toStrictEqual(["arr", "a"]);
+    });
+
+    it("stop() in TableExpression field key halts before field value (line 100)", () => {
+      // Table with a key: { [key] = value } — stop() on key → value skipped (line 100 guard)
+      const field = tstl.createTableFieldExpression(str("value"), id("key"));
+      const tbl = tstl.createTableExpression([field]);
+      const visited: string[] = [];
+      walkStatements([tstl.createExpressionStatement(tbl)], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isIdentifier(expr) && expr.text === "key") {
+            visited.push("key");
+            control.stop();
+          } else if (tstl.isStringLiteral(expr)) {
+            visited.push(expr.value);
+          }
+        },
+      });
+      expect(visited).toStrictEqual(["key"]);
+    });
+
+    it("stop() in first TableExpression field value halts before second field (line 94)", () => {
+      // Table with two fields: { [k1]=v1, [k2]=v2 } — stop() on v1 → second field's line 94 fires
+      const field1 = tstl.createTableFieldExpression(str("v1"), id("k1"));
+      const field2 = tstl.createTableFieldExpression(str("v2"), id("k2"));
+      const tbl = tstl.createTableExpression([field1, field2]);
+      const visited: string[] = [];
+      walkStatements([tstl.createExpressionStatement(tbl)], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isStringLiteral(expr) && expr.value === "v1") {
+            visited.push("v1");
+            control.stop();
+          } else if (tstl.isIdentifier(expr)) {
+            visited.push(expr.text);
+          } else if (tstl.isStringLiteral(expr)) {
+            visited.push(expr.value);
+          }
+        },
+      });
+      // k1 (field1.key), then v1 (field1.value, stop); k2/v2 never reached
+      expect(visited).toStrictEqual(["k1", "v1"]);
+    });
+
+    it("stop() in TableIndexExpression LHS table visit halts before index", () => {
+      // arr["key"] = 1 — stop() on "arr" (lhs.table) → "key" (lhs.index) not visited (line 158)
+      const lhs = tstl.createTableIndexExpression(id("arr"), str("key"));
+      const stmt = tstl.createAssignmentStatement(lhs, num(1));
+      const visited: string[] = [];
+      walkStatements([stmt], {
+        expr: (expr, _replace, control) => {
+          if (tstl.isIdentifier(expr) && expr.text === "arr") {
+            visited.push("arr");
+            control.stop();
+          } else if (tstl.isStringLiteral(expr) && expr.value === "key") {
+            visited.push("key");
+          }
+        },
+      });
+      expect(visited).toStrictEqual(["arr"]);
+    });
+
     it("stop() inside assignment RHS halts before remaining values", () => {
       const stmt = tstl.createAssignmentStatement(id("x"), num(1));
       const stmts: tstl.Statement[] = [stmt, tstl.createExpressionStatement(num(99))];
@@ -1000,6 +1115,10 @@ describe("isLuaRhsPure", () => {
 
   it("returns true for identifiers", () => {
     expect(isLuaRhsPure(id("a"))).toBe(true);
+  });
+
+  it("returns true for nil literal", () => {
+    expect(isLuaRhsPure(tstl.createNilLiteral())).toBe(true);
   });
 
   it.each<{ name: string; isPure: boolean; field: tstl.TableFieldExpression }>([
