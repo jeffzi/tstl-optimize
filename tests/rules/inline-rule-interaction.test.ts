@@ -197,10 +197,35 @@ describe("optimize rule interactions", () => {
       expect(normalized).not.toContain("doLog");
     });
 
+    it("fully inlines return sites whose body is stripped before param mapping", () => {
+      const lua = compile(
+        `
+        declare const DEBUG: boolean;
+        /** @inline */
+        function identityAfterCc(value: number): number {
+          if (DEBUG) {
+            const logged = value;
+          }
+          return value;
+        }
+
+        function run(input: number): number {
+          return identityAfterCc(input);
+        }
+        `,
+        ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH_RETURN", default: false } }),
+      );
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain("local ____inline_arg_0 = input");
+      expect(normalized).toContain("return ____inline_arg_0");
+      expect(normalized).not.toContain("identityAfterCc(input)");
+      expect(normalized).not.toContain("function identityAfterCc");
+    });
+
     it("emits discard assignment for side-effectful args when inlined body is fully stripped", () => {
-      // Body becomes empty after CC strips `if (DEBUG)`, so buildDoEndBlock short-circuits.
-      // Pure args are dropped, but side-effectful args must still evaluate — emitted as
-      // `local _ = sideEffect()` to preserve ordering and side effects.
+      // When CC strips the entire body, side-effectful args must still evaluate.
+      // Use a collision-safe discard temp (____inline_result_N) instead of bare `_`
+      // to avoid shadowing any user-defined underscore local.
       const lua = compile(
         `
         declare function doLog(s: string): void;
@@ -215,7 +240,8 @@ describe("optimize rule interactions", () => {
         ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH_SIDE", default: false } }),
       );
       const normalized = normalizeLua(lua);
-      expect(normalized).toContain("local _ = sideEffect()");
+      expect(normalized).toMatch(/local ____inline_result_\d+ = sideEffect\(\)/);
+      expect(normalized).not.toContain("local _ =");
       expect(normalized).not.toContain("maybeLog");
       expect(normalized).not.toContain("doLog");
     });

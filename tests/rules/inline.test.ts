@@ -976,7 +976,7 @@ describe("inline uncovered branches", () => {
       expect(lua).not.toContain("(x + y)");
     });
 
-    // Side-effectful expression-body calls preserve side effects with local _ =
+    // Side-effectful expression-body calls preserve side effects without introducing local _.
     it.each([
       {
         name: "side-effectful body",
@@ -1040,8 +1040,72 @@ describe("inline uncovered branches", () => {
       // The inline wrapper should not appear
       expect(lua).not.toContain(`${wrapperName}(`);
 
-      // Should use local _ = pattern to preserve side effect
-      expect(lua).toContain("local _ =");
+      // Preserve the side effect without introducing a user-visible `_` binding.
+      expect(lua).not.toContain("local _ =");
+      expect(lua).toMatch(/local ____inline_result_\d+ =/);
+    });
+
+    it("uses a collision-safe discard temp instead of shadowing an existing underscore local", () => {
+      const lua = normalizeLua(
+        compile(`
+          let _ = 0;
+          declare function effect(): number;
+
+          /** @inline */
+          function run(): number {
+            return effect();
+          }
+
+          run();
+          const result = _;
+        `),
+      );
+
+      expect(lua).not.toContain("run()");
+      expect(lua).toContain("effect()");
+      expect(lua).toContain("result = _");
+      expect(lua).not.toContain("local _ =");
+      expect(lua).toMatch(/local ____inline_result_\d+ = effect\(\)/);
+    });
+
+    it("uses collision-safe discard temp for empty-body inline at void site with side-effectful arg", () => {
+      // When conditional-compilation strips the entire body, side-effectful args
+      // must still evaluate using a discard temp (____inline_result_N) to avoid
+      // shadowing any user-defined underscore local.
+      const lua = normalizeLua(
+        compile(
+          `
+            const _ = 42;
+            declare const STRIP: boolean;
+            declare function sideEffect(): number;
+
+            /** @inline */
+            function run(arg: number): void {
+              if (!STRIP) {
+                const x = arg;
+              }
+            }
+
+            run(sideEffect());
+            const result = _;
+          `,
+          {
+            pluginOptions: {
+              rules: {
+                "conditional-compilation": {
+                  constants: { STRIP: { env: "TSTL_OPT_TEST_STRIP", default: true } },
+                },
+              },
+            },
+          },
+        ),
+      );
+
+      expect(lua).not.toContain("run(");
+      expect(lua).toContain("sideEffect()");
+      expect(lua).toContain("result = _");
+      expect(lua).not.toContain("local _ =");
+      expect(lua).toMatch(/local ____inline_result_\d+/);
     });
   });
 
