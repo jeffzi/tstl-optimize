@@ -7,7 +7,52 @@ import type { RuleFactory } from "../config";
 
 interface MathMethodCallInfo {
   method: string;
-  isBuiltinMath: boolean;
+  receiverKind: "builtin-direct" | "builtin-alias" | "typed-math";
+}
+
+function unwrapAliasExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isBuiltinMathAlias(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seenSymbols = new Set<ts.Symbol>(),
+): boolean {
+  const target = unwrapAliasExpression(expression);
+  if (ts.isIdentifier(target) && target.text === "Math") {
+    const symbol = checker.getSymbolAtLocation(target);
+    return symbol?.getName() === "Math";
+  }
+
+  if (!ts.isIdentifier(target)) return false;
+
+  const symbol = checker.getSymbolAtLocation(target);
+  if (!symbol || seenSymbols.has(symbol)) return false;
+  seenSymbols.add(symbol);
+
+  const declaration = symbol.valueDeclaration;
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    !declaration.initializer ||
+    !ts.isVariableDeclarationList(declaration.parent) ||
+    !ts.isVariableStatement(declaration.parent.parent) ||
+    (declaration.parent.flags & ts.NodeFlags.Const) === 0
+  ) {
+    return false;
+  }
+
+  return isBuiltinMathAlias(declaration.initializer, checker, seenSymbols);
 }
 
 function getMathMethodCallInfo(
@@ -26,7 +71,12 @@ function getMathMethodCallInfo(
 
   return {
     method: expr.name.text,
-    isBuiltinMath: ts.isIdentifier(expr.expression) && expr.expression.text === "Math",
+    receiverKind:
+      ts.isIdentifier(expr.expression) && expr.expression.text === "Math"
+        ? "builtin-direct"
+        : isBuiltinMathAlias(expr.expression, checker)
+          ? "builtin-alias"
+          : "typed-math",
   };
 }
 
@@ -147,10 +197,20 @@ function handleCallExpression(
   const expr = node.expression;
   if (!ts.isPropertyAccessExpression(expr)) return undefined;
 
-  if (!mathCall.isBuiltinMath) {
+  if (mathCall.receiverKind === "typed-math") {
     return tstl.createMethodCallExpression(
       context.transformExpression(expr.expression),
       tstl.createIdentifier(expr.name.text),
+      node.arguments.map((arg) => context.transformExpression(arg)),
+    );
+  }
+
+  if (mathCall.receiverKind === "builtin-alias") {
+    return tstl.createCallExpression(
+      tstl.createTableIndexExpression(
+        context.transformExpression(expr.expression),
+        tstl.createStringLiteral(expr.name.text),
+      ),
       node.arguments.map((arg) => context.transformExpression(arg)),
     );
   }

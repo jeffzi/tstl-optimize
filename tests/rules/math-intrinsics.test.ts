@@ -99,6 +99,13 @@ describe("math-intrinsics", () => {
       expect(lua).toContain("myMath:floor(1.2)");
       expect(lua).not.toContain("math.floor");
     });
+
+    it("keeps aliased builtin Math calls as table calls", () => {
+      const lua = compile("const M = Math; const y = M.floor(1.2);");
+
+      expect(lua).toContain("M.floor(1.2)");
+      expect(lua).not.toContain("M:floor(1.2)");
+    });
   });
 
   describe("Math.sqrt", () => {
