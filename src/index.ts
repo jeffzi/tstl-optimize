@@ -71,6 +71,101 @@ const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
   ts.SyntaxKind.FunctionDeclaration,
 ]);
 
+type VisitorTransform = (node: ts.Node, context: tstl.TransformationContext) => unknown;
+type NormalizedVisitor = { priority?: number; transform: VisitorTransform };
+type RegisteredVisitor = VisitorTransform | NormalizedVisitor;
+type MergedVisitors = Record<number, RegisteredVisitor>;
+type SourceFileFallbackContext = tstl.TransformationContext & {
+  superTransformNode(node: ts.Node): unknown;
+  superTransformStatements(node: ts.Statement): tstl.Statement[];
+};
+
+function normalizeVisitor(visitor: RegisteredVisitor | undefined): NormalizedVisitor | undefined {
+  if (visitor === undefined) {
+    return undefined;
+  }
+  return typeof visitor === "function" ? { transform: visitor } : visitor;
+}
+
+function resolveMergedPriority(
+  existing: NormalizedVisitor | undefined,
+  visitor: NormalizedVisitor,
+): number | undefined {
+  if (existing?.priority !== undefined && visitor.priority !== undefined) {
+    return Math.max(existing.priority, visitor.priority);
+  }
+  return existing?.priority ?? visitor.priority;
+}
+
+function createSourceFileFallbackContext(
+  context: tstl.TransformationContext,
+  existing: NormalizedVisitor | undefined,
+): SourceFileFallbackContext {
+  const sourceFileContext: SourceFileFallbackContext = Object.create(context);
+  sourceFileContext.superTransformNode = (node: ts.Node) => {
+    if (existing === undefined) {
+      return context.superTransformNode(node);
+    }
+
+    const existingResult = existing.transform(node, context);
+    return Array.isArray(existingResult) ? existingResult : [existingResult];
+  };
+  return sourceFileContext;
+}
+
+function createSourceFileComposedTransform(
+  visitor: NormalizedVisitor,
+  existing: NormalizedVisitor | undefined,
+): VisitorTransform {
+  return (node, context) =>
+    visitor.transform(node, createSourceFileFallbackContext(context, existing));
+}
+
+function createFallbackComposedTransform(
+  kind: number,
+  visitor: NormalizedVisitor,
+  existing: NormalizedVisitor | undefined,
+): VisitorTransform {
+  const isExpression = EXPRESSION_KINDS.has(kind);
+  const isStatementFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
+
+  return (node, context) => {
+    const result = visitor.transform(node, context) ?? existing?.transform(node, context);
+    if (result !== undefined) {
+      return result;
+    }
+    if (isExpression) {
+      return context.superTransformExpression(node as ts.Expression);
+    }
+    if (isStatementFallback) {
+      return context.superTransformStatements(node as ts.Statement);
+    }
+    return undefined;
+  };
+}
+
+function mergeVisitor(
+  kind: number,
+  existing: RegisteredVisitor | undefined,
+  visitor: NormalizedVisitor,
+): RegisteredVisitor {
+  const normalizedExisting = normalizeVisitor(existing);
+  const priority = resolveMergedPriority(normalizedExisting, visitor);
+  const transform =
+    kind === ts.SyntaxKind.SourceFile
+      ? createSourceFileComposedTransform(visitor, normalizedExisting)
+      : createFallbackComposedTransform(kind, visitor, normalizedExisting);
+
+  if (priority === undefined) {
+    return transform;
+  }
+
+  return {
+    priority,
+    transform,
+  };
+}
+
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;
   private config: PluginConfig;
@@ -91,77 +186,29 @@ class OptimizePlugin implements tstl.Plugin {
   }
 
   private buildVisitors(): void {
-    type AnyVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
-    type ObjectVisitor = { priority?: number; transform: AnyVisitor };
-    type MergedVisitor = AnyVisitor | ObjectVisitor;
-    const merged: Record<number, MergedVisitor> = {};
-
-    const unwrapVisitor = (visitor: MergedVisitor | undefined): ObjectVisitor | undefined => {
-      if (visitor === undefined) {
-        return undefined;
-      }
-      return typeof visitor === "function" ? { transform: visitor } : visitor;
-    };
+    const mergedVisitors: MergedVisitors = {};
 
     // Flatten phases in order
     for (const [, phaseRules] of PHASE_ENTRIES) {
       for (const [ruleName, factory] of phaseRules) {
-        if (!isRuleEnabled(this.config.rules, ruleName)) continue;
+        if (!isRuleEnabled(this.config.rules, ruleName)) {
+          continue;
+        }
 
         const ruleVisitors = factory(this.checker, this.config);
         for (const [kindStr, rawVisitor] of Object.entries(ruleVisitors)) {
           const kind = Number(kindStr);
-          const visitor = unwrapVisitor(rawVisitor as MergedVisitor);
+          const visitor = normalizeVisitor(rawVisitor as RegisteredVisitor | undefined);
           if (visitor === undefined) {
             continue;
           }
 
-          const existing = unwrapVisitor(merged[kind]);
-          const isExpr = EXPRESSION_KINDS.has(kind);
-          const isStmtFallback = STATEMENT_KINDS_WITH_FALLBACK.has(kind);
-
-          // Use max priority if both visitors have one, otherwise use whichever exists
-          const mergedPriority =
-            existing?.priority !== undefined && visitor.priority !== undefined
-              ? Math.max(existing.priority, visitor.priority)
-              : (existing?.priority ?? visitor.priority);
-
-          const composed: AnyVisitor = (node, context) => {
-            if (kind === ts.SyntaxKind.SourceFile) {
-              const mockedContext = Object.create(context);
-              mockedContext.superTransformNode = (n: ts.Node) => {
-                if (existing) {
-                  const existingRes = existing.transform(n, context);
-                  return Array.isArray(existingRes) ? existingRes : [existingRes];
-                }
-                return context.superTransformNode(n);
-              };
-              mockedContext.superTransformStatements = (n: ts.Statement) => {
-                return context.superTransformStatements(n);
-              };
-              return visitor.transform(node, mockedContext);
-            }
-
-            const res = visitor.transform(node, context) ?? existing?.transform(node, context);
-            if (res !== undefined) return res;
-
-            if (isExpr) return context.superTransformExpression(node as ts.Expression);
-            if (isStmtFallback) return context.superTransformStatements(node as ts.Statement);
-            return undefined;
-          };
-
-          merged[kind] =
-            mergedPriority === undefined
-              ? composed
-              : {
-                  priority: mergedPriority,
-                  transform: composed,
-                };
+          mergedVisitors[kind] = mergeVisitor(kind, mergedVisitors[kind], visitor);
         }
       }
     }
 
-    this.visitors = merged;
+    this.visitors = mergedVisitors;
   }
 
   // Strip JSDoc artifact — TSTL converts all JSDoc tags to Lua comments,
