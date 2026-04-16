@@ -206,9 +206,6 @@ function isDeclarationNameReference(
   node: ts.Identifier,
   declaration: ts.FunctionDeclaration | ts.VariableDeclaration,
 ): boolean {
-  if (ts.isFunctionDeclaration(declaration)) {
-    return declaration.name === node;
-  }
   return declaration.name === node;
 }
 
