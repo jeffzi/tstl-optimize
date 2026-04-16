@@ -186,10 +186,7 @@ export function forEachAccess(
     }
 
     if (tstl.isExpressionStatement(stmt)) {
-      if (walkExpression(stmt.expression, inFunctionBody)) {
-        return true;
-      }
-      return false;
+      return walkExpression(stmt.expression, inFunctionBody);
     }
 
     if (tstl.isIfStatement(stmt)) {
@@ -204,14 +201,9 @@ export function forEachAccess(
       // Else blocks (can be Block or another IfStatement)
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
-          if (walkStatement(stmt.elseBlock, inFunctionBody)) {
-            return true;
-          }
-        } else {
-          if (walkStatements(stmt.elseBlock.statements, inFunctionBody)) {
-            return true;
-          }
+          return walkStatement(stmt.elseBlock, inFunctionBody);
         }
+        return walkStatements(stmt.elseBlock.statements, inFunctionBody);
       }
       return false;
     }
@@ -220,20 +212,14 @@ export function forEachAccess(
       if (walkExpression(stmt.condition, inFunctionBody)) {
         return true;
       }
-      if (walkStatements(stmt.body.statements, inFunctionBody)) {
-        return true;
-      }
-      return false;
+      return walkStatements(stmt.body.statements, inFunctionBody);
     }
 
     if (tstl.isRepeatStatement(stmt)) {
       if (walkStatements(stmt.body.statements, inFunctionBody)) {
         return true;
       }
-      if (walkExpression(stmt.condition, inFunctionBody)) {
-        return true;
-      }
-      return false;
+      return walkExpression(stmt.condition, inFunctionBody);
     }
 
     if (tstl.isForStatement(stmt)) {
@@ -247,11 +233,7 @@ export function forEachAccess(
       if (stmt.stepExpression && walkExpression(stmt.stepExpression, inFunctionBody)) {
         return true;
       }
-      // Body
-      if (walkStatements(stmt.body.statements, inFunctionBody)) {
-        return true;
-      }
-      return false;
+      return walkStatements(stmt.body.statements, inFunctionBody);
     }
 
     if (tstl.isForInStatement(stmt)) {
@@ -261,18 +243,11 @@ export function forEachAccess(
           return true;
         }
       }
-      // Body
-      if (walkStatements(stmt.body.statements, inFunctionBody)) {
-        return true;
-      }
-      return false;
+      return walkStatements(stmt.body.statements, inFunctionBody);
     }
 
     if (tstl.isDoStatement(stmt)) {
-      if (walkStatements(stmt.statements, inFunctionBody)) {
-        return true;
-      }
-      return false;
+      return walkStatements(stmt.statements, inFunctionBody);
     }
 
     // For other statement types, no identifier accesses
