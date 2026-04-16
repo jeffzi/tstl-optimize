@@ -44,7 +44,7 @@ export function forEachAccess(
     }
 
     if (tstl.isFunctionExpression(expr)) {
-      return walkStatements(expr.body.statements, true, visit);
+      return walkStatements(expr.body.statements, true);
     }
 
     if (tstl.isTableIndexExpression(expr)) {
@@ -108,24 +108,16 @@ export function forEachAccess(
     return false;
   };
 
-  const walkStatements = (
-    statements: tstl.Statement[],
-    inFunctionBody: boolean,
-    visitor: (entry: AccessEntry) => boolean | undefined,
-  ): boolean => {
+  const walkStatements = (statements: tstl.Statement[], inFunctionBody: boolean): boolean => {
     for (const stmt of statements) {
-      if (walkStatement(stmt, inFunctionBody, visitor)) {
+      if (walkStatement(stmt, inFunctionBody)) {
         return true;
       }
     }
     return false;
   };
 
-  const walkStatement = (
-    stmt: tstl.Statement,
-    inFunctionBody: boolean,
-    visitor: (entry: AccessEntry) => boolean | undefined,
-  ): boolean => {
+  const walkStatement = (stmt: tstl.Statement, inFunctionBody: boolean): boolean => {
     if (tstl.isAssignmentStatement(stmt)) {
       // Special handling for AssignmentStatement
       const deferredWrites: tstl.Identifier[] = [];
@@ -155,7 +147,7 @@ export function forEachAccess(
 
       // Step 3: Emit deferred writes in source order
       for (const write of deferredWrites) {
-        if (visitor({ identifier: write, kind: "write", inFunctionBody })) {
+        if (visit({ identifier: write, kind: "write", inFunctionBody })) {
           return true;
         }
       }
@@ -166,7 +158,7 @@ export function forEachAccess(
     if (tstl.isVariableDeclarationStatement(stmt)) {
       // LHS identifiers are writes, RHS are reads
       for (const lhs of stmt.left) {
-        if (visitor({ identifier: lhs, kind: "write", inFunctionBody })) {
+        if (visit({ identifier: lhs, kind: "write", inFunctionBody })) {
           return true;
         }
       }
@@ -206,17 +198,17 @@ export function forEachAccess(
         return true;
       }
       // If block
-      if (walkStatements(stmt.ifBlock.statements, inFunctionBody, visitor)) {
+      if (walkStatements(stmt.ifBlock.statements, inFunctionBody)) {
         return true;
       }
       // Else blocks (can be Block or another IfStatement)
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
-          if (walkStatement(stmt.elseBlock, inFunctionBody, visitor)) {
+          if (walkStatement(stmt.elseBlock, inFunctionBody)) {
             return true;
           }
         } else {
-          if (walkStatements(stmt.elseBlock.statements, inFunctionBody, visitor)) {
+          if (walkStatements(stmt.elseBlock.statements, inFunctionBody)) {
             return true;
           }
         }
@@ -228,14 +220,14 @@ export function forEachAccess(
       if (walkExpression(stmt.condition, inFunctionBody)) {
         return true;
       }
-      if (walkStatements(stmt.body.statements, inFunctionBody, visitor)) {
+      if (walkStatements(stmt.body.statements, inFunctionBody)) {
         return true;
       }
       return false;
     }
 
     if (tstl.isRepeatStatement(stmt)) {
-      if (walkStatements(stmt.body.statements, inFunctionBody, visitor)) {
+      if (walkStatements(stmt.body.statements, inFunctionBody)) {
         return true;
       }
       if (walkExpression(stmt.condition, inFunctionBody)) {
@@ -256,7 +248,7 @@ export function forEachAccess(
         return true;
       }
       // Body
-      if (walkStatements(stmt.body.statements, inFunctionBody, visitor)) {
+      if (walkStatements(stmt.body.statements, inFunctionBody)) {
         return true;
       }
       return false;
@@ -270,14 +262,14 @@ export function forEachAccess(
         }
       }
       // Body
-      if (walkStatements(stmt.body.statements, inFunctionBody, visitor)) {
+      if (walkStatements(stmt.body.statements, inFunctionBody)) {
         return true;
       }
       return false;
     }
 
     if (tstl.isDoStatement(stmt)) {
-      if (walkStatements(stmt.statements, inFunctionBody, visitor)) {
+      if (walkStatements(stmt.statements, inFunctionBody)) {
         return true;
       }
       return false;
@@ -287,7 +279,7 @@ export function forEachAccess(
     return false;
   };
 
-  walkStatement(statement, false, visit);
+  walkStatement(statement, false);
 }
 
 /**
