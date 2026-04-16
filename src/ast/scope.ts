@@ -9,15 +9,15 @@ export function luaPropertyChain(node: tstl.TableIndexExpression): string | unde
   let current: tstl.Expression = node;
   while (tstl.isTableIndexExpression(current)) {
     if (tstl.isStringLiteral(current.index)) {
-      parts.unshift(current.index.value);
+      parts.push(current.index.value);
     } else {
       return undefined; // non-string index — can't represent as dotted chain
     }
     current = current.table;
   }
   if (tstl.isIdentifier(current)) {
-    parts.unshift(current.text);
-    return parts.join(".");
+    parts.push(current.text);
+    return parts.reverse().join(".");
   }
   return undefined;
 }
