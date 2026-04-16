@@ -327,7 +327,11 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
     } else if (tstl.isIfStatement(stmt)) {
       mergeConsecutiveLocals(stmt.ifBlock.statements);
       if (stmt.elseBlock) {
-        mergeConsecutiveLocals([...getElseBranchStatements(stmt.elseBlock)]);
+        if (tstl.isBlock(stmt.elseBlock)) {
+          mergeConsecutiveLocals(stmt.elseBlock.statements);
+        } else {
+          recurseIntoFunctionBodies([stmt.elseBlock]);
+        }
       }
     } else if (tstl.isWhileStatement(stmt)) {
       mergeConsecutiveLocals(stmt.body.statements);
