@@ -18,17 +18,16 @@ export function forEachNestedStatementList(
     if (statement.elseBlock !== undefined) {
       if (tstl.isIfStatement(statement.elseBlock)) {
         forEachNestedStatementList(statement.elseBlock, visitor);
-      } else {
-        if (visitor(statement.elseBlock.statements)) return;
+      } else if (visitor(statement.elseBlock.statements)) {
+        return;
       }
     }
-  } else if (tstl.isWhileStatement(statement)) {
-    if (visitor(statement.body.statements)) return;
-  } else if (tstl.isRepeatStatement(statement)) {
-    if (visitor(statement.body.statements)) return;
-  } else if (tstl.isForStatement(statement)) {
-    if (visitor(statement.body.statements)) return;
-  } else if (tstl.isForInStatement(statement)) {
+  } else if (
+    tstl.isWhileStatement(statement) ||
+    tstl.isRepeatStatement(statement) ||
+    tstl.isForStatement(statement) ||
+    tstl.isForInStatement(statement)
+  ) {
     if (visitor(statement.body.statements)) return;
   }
 }
