@@ -1,9 +1,50 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { isLuaRhsPure } from "../ast/lua-ast";
+import { getElseBranchStatements, isLuaRhsPure } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
+
+type AccessKind = "read" | "write";
+
+type DeadLocalDeclaration = {
+  index: number;
+  stmt: tstl.VariableDeclarationStatement;
+  rhs: tstl.Expression;
+};
+
+function canDropInitializer(
+  rhs: tstl.Expression,
+  preserveFunctionExpressionDecls: boolean,
+): boolean {
+  return isLuaRhsPure(rhs) && !(preserveFunctionExpressionDecls && tstl.isFunctionExpression(rhs));
+}
+
+function collectReadSymbolsFromExpressions(
+  expressions: readonly tstl.Expression[],
+  reads: Set<number>,
+): void {
+  for (const expr of expressions) {
+    collectReadSymbolsFromExpression(expr, reads);
+  }
+}
+
+function getNestedScopeStatements(stmt: tstl.Statement): tstl.Statement[] | undefined {
+  if (tstl.isDoStatement(stmt)) {
+    return stmt.statements;
+  }
+
+  if (
+    tstl.isWhileStatement(stmt) ||
+    tstl.isRepeatStatement(stmt) ||
+    tstl.isForStatement(stmt) ||
+    tstl.isForInStatement(stmt)
+  ) {
+    return stmt.body.statements;
+  }
+
+  return undefined;
+}
 
 /**
  * Two-pass dead-local elimination on a single function body's statement list.
@@ -18,10 +59,7 @@ function eliminateDeadLocals(
   statements: tstl.Statement[],
   preserveFunctionExpressionDecls = false,
 ): void {
-  const declsBySymbol = new Map<
-    number,
-    { index: number; stmt: tstl.VariableDeclarationStatement; rhs: tstl.Expression }
-  >();
+  const declsBySymbol = new Map<number, DeadLocalDeclaration>();
 
   for (const [index, stmt] of statements.entries()) {
     if (
@@ -44,22 +82,17 @@ function eliminateDeadLocals(
     const toRemove = new Set<tstl.Statement>();
     for (const [symbolId, { index, stmt, rhs }] of declsBySymbol) {
       const firstAccess = findFirstAccessKind(statements.slice(index + 1), symbolId);
-      if (
-        !reads.has(symbolId) &&
-        isLuaRhsPure(rhs) &&
-        !(preserveFunctionExpressionDecls && tstl.isFunctionExpression(rhs))
-      ) {
-        if (firstAccess === "write") {
-          stmt.right = undefined;
-        } else {
-          toRemove.add(stmt);
-        }
-      } else if (
-        firstAccess === "write" &&
-        isLuaRhsPure(rhs) &&
-        !(preserveFunctionExpressionDecls && tstl.isFunctionExpression(rhs))
-      ) {
+      if (!canDropInitializer(rhs, preserveFunctionExpressionDecls)) {
+        continue;
+      }
+
+      if (firstAccess === "write") {
         stmt.right = undefined;
+        continue;
+      }
+
+      if (!reads.has(symbolId)) {
+        toRemove.add(stmt);
       }
       // Impure RHS must execute even when the variable is never read — keep it.
     }
@@ -87,11 +120,7 @@ function collectReadSymbolsFromStatement(stmt: tstl.Statement, reads: Set<number
   }
 
   if (tstl.isVariableDeclarationStatement(stmt)) {
-    if (stmt.right) {
-      for (const expr of stmt.right) {
-        collectReadSymbolsFromExpression(expr, reads);
-      }
-    }
+    if (stmt.right) collectReadSymbolsFromExpressions(stmt.right, reads);
     return;
   }
 
@@ -112,10 +141,7 @@ function collectReadSymbolsFromStatement(stmt: tstl.Statement, reads: Set<number
     collectReadSymbolsFromExpression(stmt.condition, reads);
     collectReadSymbols(stmt.ifBlock.statements, reads);
     if (stmt.elseBlock) {
-      collectReadSymbols(
-        tstl.isIfStatement(stmt.elseBlock) ? [stmt.elseBlock] : stmt.elseBlock.statements,
-        reads,
-      );
+      collectReadSymbols(getElseBranchStatements(stmt.elseBlock), reads);
     }
     return;
   }
@@ -143,17 +169,13 @@ function collectReadSymbolsFromStatement(stmt: tstl.Statement, reads: Set<number
   }
 
   if (tstl.isForInStatement(stmt)) {
-    for (const expr of stmt.expressions) {
-      collectReadSymbolsFromExpression(expr, reads);
-    }
+    collectReadSymbolsFromExpressions(stmt.expressions, reads);
     collectReadSymbols(stmt.body.statements, reads);
     return;
   }
 
   if (tstl.isReturnStatement(stmt)) {
-    for (const expr of stmt.expressions) {
-      collectReadSymbolsFromExpression(expr, reads);
-    }
+    collectReadSymbolsFromExpressions(stmt.expressions, reads);
     return;
   }
 
@@ -231,7 +253,7 @@ function collectReadSymbolsFromExpression(expr: tstl.Expression, reads: Set<numb
 function findFirstAccessKind(
   statements: readonly tstl.Statement[],
   symbolId: number,
-): "read" | "write" | undefined {
+): AccessKind | undefined {
   for (const stmt of statements) {
     const access = findFirstAccessKindInStatement(stmt, symbolId);
     if (access !== undefined) return access;
@@ -242,7 +264,7 @@ function findFirstAccessKind(
 function findFirstAccessKindInStatement(
   stmt: tstl.Statement,
   symbolId: number,
-): "read" | "write" | undefined {
+): AccessKind | undefined {
   if (tstl.isDoStatement(stmt)) {
     return findFirstAccessKind(stmt.statements, symbolId);
   }
@@ -277,10 +299,7 @@ function findFirstAccessKindInStatement(
       findFirstAccessKindInExpression(stmt.condition, symbolId) ??
       findFirstAccessKind(stmt.ifBlock.statements, symbolId) ??
       (stmt.elseBlock
-        ? findFirstAccessKind(
-            tstl.isIfStatement(stmt.elseBlock) ? [stmt.elseBlock] : stmt.elseBlock.statements,
-            symbolId,
-          )
+        ? findFirstAccessKind(getElseBranchStatements(stmt.elseBlock), symbolId)
         : undefined)
     );
   }
@@ -331,7 +350,7 @@ function findFirstAccessKindInStatement(
 function findFirstAccessKindInExpressions(
   expressions: readonly tstl.Expression[],
   symbolId: number,
-): "read" | "write" | undefined {
+): AccessKind | undefined {
   for (const expr of expressions) {
     const access = findFirstAccessKindInExpression(expr, symbolId);
     if (access !== undefined) return access;
@@ -342,7 +361,7 @@ function findFirstAccessKindInExpressions(
 function findFirstAccessKindInExpression(
   expr: tstl.Expression,
   symbolId: number,
-): "read" | "write" | undefined {
+): AccessKind | undefined {
   if (tstl.isIdentifier(expr)) {
     return expr.symbolId === symbolId ? "read" : undefined;
   }
@@ -427,25 +446,21 @@ function recurseIntoNestedScopes(statements: tstl.Statement[]): void {
   });
 
   for (const stmt of statements) {
-    if (tstl.isDoStatement(stmt)) {
-      eliminateDeadLocals(stmt.statements, true);
-    } else if (tstl.isIfStatement(stmt)) {
+    if (tstl.isIfStatement(stmt)) {
       eliminateDeadLocals(stmt.ifBlock.statements, true);
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
           recurseIntoNestedScopes([stmt.elseBlock]);
         } else {
-          eliminateDeadLocals(stmt.elseBlock.statements, true);
+          eliminateDeadLocals(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], true);
         }
       }
-    } else if (tstl.isWhileStatement(stmt)) {
-      eliminateDeadLocals(stmt.body.statements, true);
-    } else if (tstl.isRepeatStatement(stmt)) {
-      eliminateDeadLocals(stmt.body.statements, true);
-    } else if (tstl.isForStatement(stmt)) {
-      eliminateDeadLocals(stmt.body.statements, true);
-    } else if (tstl.isForInStatement(stmt)) {
-      eliminateDeadLocals(stmt.body.statements, true);
+      continue;
+    }
+
+    const nestedStatements = getNestedScopeStatements(stmt);
+    if (nestedStatements) {
+      eliminateDeadLocals(nestedStatements, true);
     }
   }
 }
