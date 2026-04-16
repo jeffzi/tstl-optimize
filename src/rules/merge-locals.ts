@@ -1,17 +1,38 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { isLuaRhsPure } from "../ast/lua-ast";
+import { getElseBranchStatements, isLuaRhsPure } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
-/**
- * Returns true if `expr` references any name in `names`.
- * Special case: calls expressionReferencesAnyOf but handles function body upvalue
- * capture detection (functions evaluated before binding in multi-assignment).
- */
-function referencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boolean {
-  return expressionReferencesAnyOf(expr, names);
+function expressionsReferenceAnyOf(
+  expressions: readonly tstl.Expression[] | undefined,
+  names: ReadonlySet<string>,
+): boolean {
+  return expressions?.some((expression) => expressionReferencesAnyOf(expression, names)) ?? false;
+}
+
+function withoutShadowedNames<T>(
+  names: ReadonlySet<string>,
+  nodes: Iterable<T>,
+  getName: (node: T) => string | undefined,
+): ReadonlySet<string> {
+  let nextNames: Set<string> | undefined;
+
+  for (const node of nodes) {
+    const shadowedName = getName(node);
+    if (shadowedName === undefined || !names.has(shadowedName)) {
+      continue;
+    }
+
+    nextNames ??= new Set(names);
+    nextNames.delete(shadowedName);
+    if (nextNames.size === 0) {
+      return nextNames;
+    }
+  }
+
+  return nextNames ?? names;
 }
 
 /**
@@ -19,28 +40,32 @@ function referencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boo
  * Used to detect upvalue captures in function bodies.
  */
 function functionBodyReferencesAnyOf(
-  statements: tstl.Statement[],
+  statements: readonly tstl.Statement[],
   names: ReadonlySet<string>,
 ): boolean {
+  if (names.size === 0) {
+    return false;
+  }
+
   let activeNames = names;
 
   for (const stmt of statements) {
-    if (statementReferencesAnyOf(stmt, activeNames)) return true;
+    if (statementReferencesAnyOf(stmt, activeNames)) {
+      return true;
+    }
 
-    if (tstl.isVariableDeclarationStatement(stmt)) {
-      let nextNames: Set<string> | undefined;
-      for (const lhs of stmt.left) {
-        if (tstl.isIdentifier(lhs) && activeNames.has(lhs.text)) {
-          if (!nextNames) nextNames = new Set(activeNames);
-          nextNames.delete(lhs.text);
-        }
-      }
-      if (nextNames) {
-        if (nextNames.size === 0) return false;
-        activeNames = nextNames;
-      }
+    if (!tstl.isVariableDeclarationStatement(stmt)) {
+      continue;
+    }
+
+    activeNames = withoutShadowedNames(activeNames, stmt.left, (lhs) =>
+      tstl.isIdentifier(lhs) ? lhs.text : undefined,
+    );
+    if (activeNames.size === 0) {
+      return false;
     }
   }
+
   return false;
 }
 
@@ -48,71 +73,75 @@ function functionBodyReferencesAnyOf(
  * Check if a statement contains any identifier reference matching `names`.
  */
 function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<string>): boolean {
+  if (names.size === 0) {
+    return false;
+  }
+
   // For variable and assignment statements, check RHS expressions.
   if (tstl.isVariableDeclarationStatement(stmt)) {
-    const rhs = stmt.right;
-    return rhs?.some((expr) => expressionReferencesAnyOf(expr, names)) ?? false;
+    return expressionsReferenceAnyOf(stmt.right, names);
   }
 
   if (tstl.isAssignmentStatement(stmt)) {
     return (
-      stmt.left.some((lhs) => expressionReferencesAnyOf(lhs, names)) ||
-      stmt.right.some((rhs) => expressionReferencesAnyOf(rhs, names))
+      expressionsReferenceAnyOf(stmt.left, names) || expressionsReferenceAnyOf(stmt.right, names)
     );
   }
 
   // For control-flow statements, recurse into their bodies.
   if (tstl.isReturnStatement(stmt)) {
-    return stmt.expressions?.some((expr) => expressionReferencesAnyOf(expr, names)) ?? false;
+    return expressionsReferenceAnyOf(stmt.expressions, names);
   }
 
   if (tstl.isIfStatement(stmt)) {
-    if (expressionReferencesAnyOf(stmt.condition, names)) return true;
-    if (functionBodyReferencesAnyOf(stmt.ifBlock.statements, names)) return true;
+    if (
+      expressionReferencesAnyOf(stmt.condition, names) ||
+      functionBodyReferencesAnyOf(stmt.ifBlock.statements, names)
+    ) {
+      return true;
+    }
     if (stmt.elseBlock) {
-      const elseStmts = tstl.isIfStatement(stmt.elseBlock)
-        ? [stmt.elseBlock]
-        : stmt.elseBlock.statements;
-      if (functionBodyReferencesAnyOf(elseStmts, names)) return true;
+      if (functionBodyReferencesAnyOf(getElseBranchStatements(stmt.elseBlock), names)) {
+        return true;
+      }
     }
     return false;
   }
 
   if (tstl.isWhileStatement(stmt)) {
-    if (expressionReferencesAnyOf(stmt.condition, names)) return true;
-    if (functionBodyReferencesAnyOf(stmt.body.statements, names)) return true;
-    return false;
+    return (
+      expressionReferencesAnyOf(stmt.condition, names) ||
+      functionBodyReferencesAnyOf(stmt.body.statements, names)
+    );
   }
 
   if (tstl.isRepeatStatement(stmt)) {
-    if (expressionReferencesAnyOf(stmt.condition, names)) return true;
-    if (functionBodyReferencesAnyOf(stmt.body.statements, names)) return true;
-    return false;
+    return (
+      expressionReferencesAnyOf(stmt.condition, names) ||
+      functionBodyReferencesAnyOf(stmt.body.statements, names)
+    );
   }
 
   if (tstl.isForStatement(stmt)) {
-    if (expressionReferencesAnyOf(stmt.controlVariableInitializer, names)) return true;
-    if (expressionReferencesAnyOf(stmt.limitExpression, names)) return true;
-    if (stmt.stepExpression && expressionReferencesAnyOf(stmt.stepExpression, names)) return true;
-    // The control variable shadows the outer name inside the loop body.
-    const forBodyNames = names.has(stmt.controlVariable.text)
-      ? new Set([...names].filter((n) => n !== stmt.controlVariable.text))
-      : names;
-    if (forBodyNames.size > 0 && functionBodyReferencesAnyOf(stmt.body.statements, forBodyNames))
-      return true;
-    return false;
+    const forBodyNames = withoutShadowedNames(
+      names,
+      [stmt.controlVariable],
+      (controlVariable) => controlVariable.text,
+    );
+    return (
+      expressionReferencesAnyOf(stmt.controlVariableInitializer, names) ||
+      expressionReferencesAnyOf(stmt.limitExpression, names) ||
+      (stmt.stepExpression !== undefined &&
+        expressionReferencesAnyOf(stmt.stepExpression, names)) ||
+      functionBodyReferencesAnyOf(stmt.body.statements, forBodyNames)
+    );
   }
 
   if (tstl.isForInStatement(stmt)) {
-    if (stmt.expressions.some((expr) => expressionReferencesAnyOf(expr, names))) return true;
-    // Control variables shadow outer names inside the loop body.
-    const shadowedByLoop = stmt.names.filter((id) => names.has(id.text)).map((id) => id.text);
-    const forInBodyNames =
-      shadowedByLoop.length > 0
-        ? new Set([...names].filter((n) => !shadowedByLoop.includes(n)))
-        : names;
+    const forInBodyNames = withoutShadowedNames(names, stmt.names, (name) => name.text);
     return (
-      forInBodyNames.size > 0 && functionBodyReferencesAnyOf(stmt.body.statements, forInBodyNames)
+      expressionsReferenceAnyOf(stmt.expressions, names) ||
+      functionBodyReferencesAnyOf(stmt.body.statements, forInBodyNames)
     );
   }
 
@@ -131,6 +160,10 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
  * Recursively scan an expression tree for identifier references matching `names`.
  */
 function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boolean {
+  if (names.size === 0) {
+    return false;
+  }
+
   if (tstl.isIdentifier(expr)) return names.has(expr.text);
 
   if (tstl.isTableExpression(expr)) {
@@ -142,19 +175,17 @@ function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<str
   }
 
   if (tstl.isCallExpression(expr)) {
-    if (expressionReferencesAnyOf(expr.expression, names)) return true;
-    for (const arg of expr.params) {
-      if (expressionReferencesAnyOf(arg, names)) return true;
-    }
-    return false;
+    return (
+      expressionReferencesAnyOf(expr.expression, names) ||
+      expressionsReferenceAnyOf(expr.params, names)
+    );
   }
 
   if (tstl.isMethodCallExpression(expr)) {
-    if (expressionReferencesAnyOf(expr.prefixExpression, names)) return true;
-    for (const arg of expr.params) {
-      if (expressionReferencesAnyOf(arg, names)) return true;
-    }
-    return false;
+    return (
+      expressionReferencesAnyOf(expr.prefixExpression, names) ||
+      expressionsReferenceAnyOf(expr.params, names)
+    );
   }
 
   if (tstl.isBinaryExpression(expr)) {
@@ -168,9 +199,9 @@ function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<str
   }
 
   if (tstl.isTableIndexExpression(expr)) {
-    if (expressionReferencesAnyOf(expr.table, names)) return true;
-    if (expressionReferencesAnyOf(expr.index, names)) return true;
-    return false;
+    return (
+      expressionReferencesAnyOf(expr.table, names) || expressionReferencesAnyOf(expr.index, names)
+    );
   }
 
   if (tstl.isParenthesizedExpression(expr)) {
@@ -186,20 +217,13 @@ function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<str
   }
 
   if (tstl.isFunctionExpression(expr)) {
-    let activeNames = names;
-    if (expr.params) {
-      let nextNames: Set<string> | undefined;
-      for (const param of expr.params) {
-        if (tstl.isIdentifier(param) && activeNames.has(param.text)) {
-          if (!nextNames) nextNames = new Set(activeNames);
-          nextNames.delete(param.text);
-        }
-      }
-      if (nextNames) {
-        if (nextNames.size === 0) return false;
-        activeNames = nextNames;
-      }
+    const activeNames = withoutShadowedNames(names, expr.params ?? [], (param) =>
+      tstl.isIdentifier(param) ? param.text : undefined,
+    );
+    if (activeNames.size === 0) {
+      return false;
     }
+
     return functionBodyReferencesAnyOf(expr.body.statements, activeNames);
   }
 
@@ -254,7 +278,7 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
   for (const stmt of statements) {
     if (isMergeable(stmt)) {
       const rhs = stmt.right?.[0];
-      if (rhs !== undefined && referencesAnyOf(rhs, declaredNames)) {
+      if (rhs !== undefined && expressionReferencesAnyOf(rhs, declaredNames)) {
         flushRun();
       }
       declaredNames.add(stmt.left[0].text);
@@ -303,11 +327,7 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
     } else if (tstl.isIfStatement(stmt)) {
       mergeConsecutiveLocals(stmt.ifBlock.statements);
       if (stmt.elseBlock) {
-        if (tstl.isIfStatement(stmt.elseBlock)) {
-          recurseIntoFunctionBodies([stmt.elseBlock]);
-        } else {
-          mergeConsecutiveLocals(stmt.elseBlock.statements);
-        }
+        mergeConsecutiveLocals([...getElseBranchStatements(stmt.elseBlock)]);
       }
     } else if (tstl.isWhileStatement(stmt)) {
       mergeConsecutiveLocals(stmt.body.statements);
