@@ -42,3 +42,14 @@ export function isLuaExprPure(expr: tstl.Expression): boolean {
   }
   return false;
 }
+
+/**
+ * Extract statements from an else branch (either a Block or IfStatement).
+ * If elseBlock is an IfStatement, returns it wrapped in an array.
+ * If elseBlock is a Block, returns its statements array.
+ */
+export function getElseBranchStatements(
+  elseBlock: tstl.Block | tstl.IfStatement,
+): readonly tstl.Statement[] {
+  return tstl.isIfStatement(elseBlock) ? [elseBlock] : elseBlock.statements;
+}
