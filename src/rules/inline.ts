@@ -741,6 +741,12 @@ interface ParamMapResult {
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }
 
+interface PreparedReturnValueInline {
+  tempDecls: tstl.VariableDeclarationStatement[];
+  substitutedBody: tstl.Statement[];
+  substitutedReturn: tstl.Expression;
+}
+
 /**
  * Create a discard temp variable with collision-safe name for an unused inline result.
  * If expr is provided, assigns it; otherwise returns a bare decl for further use.
@@ -816,7 +822,29 @@ function transformBodyStatements(
   return luaBody;
 }
 
-function getInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement {
+interface TransformedInlineFunction {
+  luaBody: tstl.Statement[];
+  luaReturn: tstl.ReturnStatement;
+}
+
+function transformInlineBodyAndReturn(
+  bodyStmts: readonly ts.Statement[],
+  returnExpr: ts.Expression,
+  declaration: ts.Node,
+  context: tstl.TransformationContext,
+): TransformedInlineFunction | undefined {
+  const returnStmt = createInlineReturnStatement(returnExpr);
+  context.pushScope(FUNCTION_SCOPE, declaration);
+  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+  const luaReturnStmts = context.transformStatements(returnStmt);
+  context.popScope();
+  const luaReturn = luaReturnStmts.find(
+    (stmt): stmt is tstl.ReturnStatement => stmt.kind === tstl.SyntaxKind.ReturnStatement,
+  );
+  return luaReturn ? { luaBody, luaReturn } : undefined;
+}
+
+function createInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement {
   const parent = returnExpr.parent;
   if (ts.isReturnStatement(parent) && parent.expression === returnExpr) {
     return parent;
@@ -825,6 +853,31 @@ function getInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement
   const syntheticReturn = ts.factory.createReturnStatement(returnExpr);
   ts.setOriginalNode(syntheticReturn, returnExpr);
   return ts.setTextRange(syntheticReturn, returnExpr);
+}
+
+function prepareReturnValueInline(
+  target: ReturnValueInlineTarget,
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+): PreparedReturnValueInline | undefined {
+  const { bodyStmts, params, declaration, returnExpr } = target;
+
+  // Transform body and return expression first so ALL param symbols are registered
+  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
+  // appears in the return expression (not in body statements) would be missing otherwise.
+  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+  const luaReturnExpr = context.transformExpression(returnExpr);
+
+  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  if (!mapped) return undefined;
+  const { tempDecls, paramMap } = mapped;
+
+  return {
+    tempDecls,
+    substitutedBody: substituteParamsInStatements(luaBody, paramMap),
+    substitutedReturn: substituteParams(luaReturnExpr, paramMap),
+  };
 }
 
 function buildDoEndBlock(
@@ -1021,7 +1074,7 @@ function buildVarDeclInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
 ): tstl.Statement[] | undefined {
-  const { bodyStmts, params, declaration } = target;
+  const { bodyStmts } = target;
 
   // Allocate a fresh Lua symbolId for the result variable. We cannot use
   // context.symbolIdMaps.get() here because TSTL hasn't transformed this
@@ -1037,17 +1090,9 @@ function buildVarDeclInline(
   const resultIdent = tstl.createIdentifier(resultName, undefined, resultSymId);
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  // Transform body and return expression first so ALL param symbols are registered
-  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
-  // appears in the return expression (not in body statements) would be missing otherwise.
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
-
-  const mapped = buildParamMap(params, callNode.arguments, checker, context);
-  if (!mapped) return undefined;
-  const { tempDecls, paramMap } = mapped;
-  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const prepared = prepareReturnValueInline(target, callNode, checker, context);
+  if (!prepared) return undefined;
+  const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
   // Assign the return expression to the result variable inside do...end.
   const assignResult = tstl.createAssignmentStatement(
@@ -1105,8 +1150,6 @@ function buildDestructureShared(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
 ): DestructureShared | undefined {
-  const { bodyStmts, params, declaration } = target;
-
   // Generate fresh result identifier: ____inline_result_N
   const resultSymId = context.nextSymbolId();
   const resultIdent = tstl.createIdentifier(
@@ -1116,18 +1159,9 @@ function buildDestructureShared(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  // Transform body and return expression first so ALL param symbols are registered
-  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
-  // appears in the return expression (not in body statements) would be missing otherwise.
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
-  const luaReturnExpr = context.transformExpression(target.returnExpr);
-
-  const mapped = buildParamMap(params, callNode.arguments, checker, context);
-  if (!mapped) return undefined;
-  const { tempDecls, paramMap } = mapped;
-
-  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const prepared = prepareReturnValueInline(target, callNode, checker, context);
+  if (!prepared) return undefined;
+  const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
   const assignResult = tstl.createAssignmentStatement(
     [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
@@ -1231,15 +1265,14 @@ function buildArrayDestructureInline(
     // Transform body AND the return statement inside a function scope so TSTL
     // handles $multi correctly ($multi must appear in return-statement context)
     // and all param symbols get registered in context.symbolIdMaps.
-    const returnStmt = getInlineReturnStatement(target.returnExpr);
-    context.pushScope(FUNCTION_SCOPE, declaration);
-    const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-    const luaReturnStmts = context.transformStatements(returnStmt);
-    context.popScope();
-    const luaReturn = luaReturnStmts.find(
-      (s): s is tstl.ReturnStatement => s.kind === tstl.SyntaxKind.ReturnStatement,
+    const transformed = transformInlineBodyAndReturn(
+      bodyStmts,
+      target.returnExpr,
+      declaration,
+      context,
     );
-    if (!luaReturn) return undefined;
+    if (!transformed) return undefined;
+    const { luaBody, luaReturn } = transformed;
     const luaReturnExprs = luaReturn.expressions;
 
     const mapped = buildParamMap(params, callNode.arguments, checker, context);
@@ -1356,32 +1389,20 @@ function buildReturnSiteInline(
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
   const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
-  let luaReturnStmts: tstl.Statement[] | undefined;
-  let luaReturnExpr: tstl.Expression | undefined;
-
-  // Transform body and return expression first so ALL param symbols are registered
-  // in context.symbolIdMaps before buildParamMap looks them up. A param that only
-  // appears in the return expression (not in body statements) would be missing otherwise.
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
   if (isMultiReturn) {
-    const returnStmt = getInlineReturnStatement(target.returnExpr);
-    context.pushScope(FUNCTION_SCOPE, declaration);
-    luaReturnStmts = context.transformStatements(returnStmt);
-    context.popScope();
-  } else {
-    luaReturnExpr = context.transformExpression(target.returnExpr);
-  }
-
-  const mapped = buildParamMap(params, callNode.arguments, checker, context);
-  if (!mapped) return undefined;
-  const { tempDecls, paramMap } = mapped;
-  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
-
-  if (isMultiReturn) {
-    const luaReturn = luaReturnStmts?.find(
-      (stmt): stmt is tstl.ReturnStatement => stmt.kind === tstl.SyntaxKind.ReturnStatement,
+    const transformed = transformInlineBodyAndReturn(
+      bodyStmts,
+      target.returnExpr,
+      declaration,
+      context,
     );
-    if (!luaReturn) return undefined;
+    if (!transformed) return undefined;
+    const { luaBody, luaReturn } = transformed;
+
+    const mapped = buildParamMap(params, callNode.arguments, checker, context);
+    if (!mapped) return undefined;
+    const { tempDecls, paramMap } = mapped;
+    const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
 
     const substitutedReturns = luaReturn.expressions.map((expr) =>
       substituteParams(expr, paramMap),
@@ -1389,8 +1410,9 @@ function buildReturnSiteInline(
     return [...tempDecls, ...substitutedBody, tstl.createReturnStatement(substitutedReturns)];
   }
 
-  if (!luaReturnExpr) return undefined;
-  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+  const prepared = prepareReturnValueInline(target, callNode, checker, context);
+  if (!prepared) return undefined;
+  const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
   // Flat emission: arg temps + body statements + return (no do...end wrapper needed).
   return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
