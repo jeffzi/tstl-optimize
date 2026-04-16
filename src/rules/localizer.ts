@@ -1,6 +1,7 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { getElseBranchStatements } from "../ast/lua-ast";
 import { walkStatements } from "../ast/lua-walker";
 import {
   buildChainExpression,
@@ -318,7 +319,7 @@ function statementHasUnsafeCallBeforeFirstChainAccess(
       visitExpr(stmt.condition);
       visitStatementList(stmt.ifBlock.statements);
       if (stmt.elseBlock) {
-        visitStatementList(getElseStatements(stmt.elseBlock));
+        visitStatementList(getElseBranchStatements(stmt.elseBlock));
       }
       return;
     }
@@ -527,59 +528,48 @@ function hoistScope(
   return new Set(toHoist.keys());
 }
 
-function getElseStatements(elseBlock: tstl.Block | tstl.IfStatement): tstl.Statement[] {
-  return tstl.isIfStatement(elseBlock) ? [elseBlock] : elseBlock.statements;
-}
-
-/** Check for return/goto inside nested loops — these exit the function, not just the loop. */
-function hasNestedFunctionExit(statements: tstl.Statement[]): boolean {
+/**
+ * Detect control-flow exits that escape the current scope. Nested loops only propagate
+ * return/goto because break is scoped to the inner loop.
+ */
+function hasScopeExit(statements: tstl.Statement[], includeBreak: boolean): boolean {
   for (const stmt of statements) {
     if (tstl.isReturnStatement(stmt) || tstl.isGotoStatement(stmt)) return true;
+    if (includeBreak && tstl.isBreakStatement(stmt)) return true;
+
     if (tstl.isIfStatement(stmt)) {
-      if (hasNestedFunctionExit(stmt.ifBlock.statements)) return true;
-      if (stmt.elseBlock) {
-        if (hasNestedFunctionExit(getElseStatements(stmt.elseBlock))) return true;
+      if (hasScopeExit(stmt.ifBlock.statements, includeBreak)) return true;
+      if (
+        stmt.elseBlock &&
+        hasScopeExit(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], includeBreak)
+      ) {
+        return true;
       }
+      continue;
     }
+
     if (tstl.isDoStatement(stmt)) {
-      if (hasNestedFunctionExit(stmt.statements)) return true;
+      if (hasScopeExit(stmt.statements, includeBreak)) return true;
+      continue;
     }
-    // Recurse into nested loops — return/goto there still exits the enclosing function
-    if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
-      if (hasNestedFunctionExit(stmt.body.statements)) return true;
+
+    if (
+      (tstl.isWhileStatement(stmt) ||
+        tstl.isRepeatStatement(stmt) ||
+        tstl.isForStatement(stmt) ||
+        tstl.isForInStatement(stmt)) &&
+      hasScopeExit(stmt.body.statements, false)
+    ) {
+      return true;
     }
-    if (tstl.isForStatement(stmt) || tstl.isForInStatement(stmt)) {
-      if (hasNestedFunctionExit(stmt.body.statements)) return true;
-    }
-    // Don't recurse into function expressions — return there exits the nested function
   }
+
   return false;
 }
 
 /** Check for top-level return/break that would prevent write-back from executing. */
 function hasEarlyExit(statements: tstl.Statement[]): boolean {
-  for (const stmt of statements) {
-    if (tstl.isReturnStatement(stmt) || tstl.isBreakStatement(stmt) || tstl.isGotoStatement(stmt))
-      return true;
-    // Recurse into if/do blocks — break/return there still exits our scope
-    if (tstl.isIfStatement(stmt)) {
-      if (hasEarlyExit(stmt.ifBlock.statements)) return true;
-      if (stmt.elseBlock) {
-        if (hasEarlyExit(getElseStatements(stmt.elseBlock))) return true;
-      }
-    }
-    if (tstl.isDoStatement(stmt)) {
-      if (hasEarlyExit(stmt.statements)) return true;
-    }
-    // Recurse into nested loops for return/goto only (break is scoped to the inner loop)
-    if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {
-      if (hasNestedFunctionExit(stmt.body.statements)) return true;
-    }
-    if (tstl.isForStatement(stmt) || tstl.isForInStatement(stmt)) {
-      if (hasNestedFunctionExit(stmt.body.statements)) return true;
-    }
-  }
-  return false;
+  return hasScopeExit(statements, true);
 }
 
 /** Check if any call expression exists in the loop body (not inside nested function bodies). */
@@ -597,6 +587,22 @@ function hasCallExpression(statements: tstl.Statement[]): boolean {
   return found;
 }
 
+function getLocalizedArrayBaseName(
+  expr: tstl.Expression,
+  loopVarNames: ReadonlySet<string>,
+): string | undefined {
+  if (
+    !tstl.isTableIndexExpression(expr) ||
+    !tstl.isIdentifier(expr.table) ||
+    !tstl.isIdentifier(expr.index) ||
+    !loopVarNames.has(expr.index.text)
+  ) {
+    return undefined;
+  }
+
+  return expr.table.text;
+}
+
 /** Replace matching `base[loopVar]` expressions with cloned temp identifiers. */
 function replaceArrayElements(
   statements: tstl.Statement[],
@@ -606,17 +612,13 @@ function replaceArrayElements(
   walkStatements(statements, {
     shallow: true,
     expr: (expr, replace, control) => {
-      if (
-        tstl.isTableIndexExpression(expr) &&
-        tstl.isIdentifier(expr.table) &&
-        tstl.isIdentifier(expr.index) &&
-        loopVarNames.has(expr.index.text)
-      ) {
-        const ident = hoisted.get(expr.table.text);
-        if (ident) {
-          replace(tstl.cloneIdentifier(ident));
-          control.skip();
-        }
+      const baseName = getLocalizedArrayBaseName(expr, loopVarNames);
+      if (!baseName) return;
+
+      const ident = hoisted.get(baseName);
+      if (ident) {
+        replace(tstl.cloneIdentifier(ident));
+        control.skip();
       }
     },
     stmt: (stmt, control) => {
@@ -632,16 +634,12 @@ function replaceArrayElements(
       if (tstl.isAssignmentStatement(stmt)) {
         for (let i = 0; i < stmt.left.length; i++) {
           const lhs = stmt.left[i];
-          if (
-            tstl.isTableIndexExpression(lhs) &&
-            tstl.isIdentifier(lhs.table) &&
-            tstl.isIdentifier(lhs.index) &&
-            loopVarNames.has(lhs.index.text)
-          ) {
-            const ident = hoisted.get(lhs.table.text);
-            if (ident) {
-              stmt.left[i] = tstl.cloneIdentifier(ident);
-            }
+          const baseName = lhs && getLocalizedArrayBaseName(lhs, loopVarNames);
+          if (!baseName) continue;
+
+          const ident = hoisted.get(baseName);
+          if (ident) {
+            stmt.left[i] = tstl.cloneIdentifier(ident);
           }
         }
       }
@@ -735,43 +733,42 @@ function processFile(
   isRootAllowedLenient: (root: string) => boolean,
 ): void {
   const { threshold, scope } = config;
-
-  if (scope === "module") {
+  const runModulePass = (): Set<string> =>
     hoistScope(
       file.statements,
       threshold,
       false,
-      new Set(),
+      new Set<string>(),
       context,
       undefined,
       isRootAllowedStrict,
     );
-  } else if (scope === "function") {
-    processFunctionBodies(file.statements, {
-      threshold,
-      alreadyHoisted: new Set(),
-      context,
-      isRootAllowed: isRootAllowedLenient,
-      reservedNames: new Set(),
-    });
-  } else {
-    // "all": module pass first (strict), then function pass for remaining chains (lenient)
-    const alreadyHoisted = hoistScope(
-      file.statements,
-      threshold,
-      false,
-      new Set(),
-      context,
-      undefined,
-      isRootAllowedStrict,
-    );
-    processFunctionBodies(file.statements, {
-      threshold,
-      alreadyHoisted,
-      context,
-      isRootAllowed: isRootAllowedLenient,
-      reservedNames: new Set(),
-    });
+  const functionContext = {
+    threshold,
+    context,
+    isRootAllowed: isRootAllowedLenient,
+    reservedNames: new Set<string>(),
+  };
+
+  switch (scope) {
+    case "module":
+      runModulePass();
+      return;
+    case "function":
+      processFunctionBodies(file.statements, {
+        ...functionContext,
+        alreadyHoisted: new Set<string>(),
+      });
+      return;
+    case "all": {
+      // Module pass runs first, then function bodies only hoist the remaining chains.
+      const alreadyHoisted = runModulePass();
+      processFunctionBodies(file.statements, {
+        ...functionContext,
+        alreadyHoisted,
+      });
+      return;
+    }
   }
 }
 
@@ -813,7 +810,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
     } else if (tstl.isIfStatement(stmt)) {
       processFunctionBodies(stmt.ifBlock.statements, ctx);
       if (stmt.elseBlock) {
-        processFunctionBodies(getElseStatements(stmt.elseBlock), ctx);
+        processFunctionBodies(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)
