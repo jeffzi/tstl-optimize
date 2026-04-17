@@ -1,6 +1,5 @@
 import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import type * as tstl from "typescript-to-lua";
 import { hasSideEffects, SideEffectOptions } from "../../ast/ts-ast";
 import { createInlineWarning } from "./diagnostics";
