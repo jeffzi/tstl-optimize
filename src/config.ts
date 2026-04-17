@@ -243,93 +243,101 @@ function coerceConstantDefs(value: unknown): Record<string, ConstantDef> {
   return constants;
 }
 
+function parseBooleanOrObjectRuleConfig<T>(
+  value: unknown,
+  parseObjectConfig: (ruleConfig: Record<string, unknown>) => T,
+): boolean | T | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return parseObjectConfig(value);
+}
+
 function parseConditionalCompilationRuleConfig(
   value: unknown,
 ): ConditionalCompilationRuleConfig | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const parsed: Partial<ConditionalCompilationConfig> = {};
-  if (typeof value.enabled === "boolean") {
-    parsed.enabled = value.enabled;
-  }
-  if (typeof value.strict === "boolean") {
-    parsed.strict = value.strict;
-  }
-  if (value.constants === undefined || isRecord(value.constants)) {
-    parsed.constants = coerceConstantDefs(value.constants);
-  }
-  return parsed;
+  return parseBooleanOrObjectRuleConfig(value, (ruleConfig) => {
+    const parsed: Partial<ConditionalCompilationConfig> = {};
+    if (typeof ruleConfig.enabled === "boolean") {
+      parsed.enabled = ruleConfig.enabled;
+    }
+    if (typeof ruleConfig.strict === "boolean") {
+      parsed.strict = ruleConfig.strict;
+    }
+    if (ruleConfig.constants === undefined || isRecord(ruleConfig.constants)) {
+      parsed.constants = coerceConstantDefs(ruleConfig.constants);
+    }
+    return parsed;
+  });
 }
 
 function parseInlineRuleConfig(value: unknown): boolean | InlineConfig | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const parsed: InlineConfig = {};
-  if (typeof value.enabled === "boolean") {
-    parsed.enabled = value.enabled;
-  }
-  if (typeof value.strict === "boolean") {
-    parsed.strict = value.strict;
-  }
-  return parsed;
+  return parseBooleanOrObjectRuleConfig(value, (ruleConfig) => {
+    const parsed: InlineConfig = {};
+    if (typeof ruleConfig.enabled === "boolean") {
+      parsed.enabled = ruleConfig.enabled;
+    }
+    if (typeof ruleConfig.strict === "boolean") {
+      parsed.strict = ruleConfig.strict;
+    }
+    return parsed;
+  });
 }
 
 function parseLocalizerRuleConfig(value: unknown): LocalizerRuleConfig | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const parsed: Partial<LocalizerConfig> = {};
-  if (typeof value.enabled === "boolean") {
-    parsed.enabled = value.enabled;
-  }
-  if (typeof value.threshold === "number" && Number.isFinite(value.threshold)) {
-    parsed.threshold = value.threshold;
-  }
-  if (isLocalizerScope(value.scope)) {
-    parsed.scope = value.scope;
-  }
-  if (Array.isArray(value.include)) {
-    parsed.include = coerceStringArray(value.include, []);
-  }
-  if (Array.isArray(value.exclude)) {
-    parsed.exclude = coerceStringArray(value.exclude, []);
-  }
-  return parsed;
+  return parseBooleanOrObjectRuleConfig(value, (ruleConfig) => {
+    const parsed: Partial<LocalizerConfig> = {};
+    if (typeof ruleConfig.enabled === "boolean") {
+      parsed.enabled = ruleConfig.enabled;
+    }
+    if (typeof ruleConfig.threshold === "number" && Number.isFinite(ruleConfig.threshold)) {
+      parsed.threshold = ruleConfig.threshold;
+    }
+    if (isLocalizerScope(ruleConfig.scope)) {
+      parsed.scope = ruleConfig.scope;
+    }
+    if (Array.isArray(ruleConfig.include)) {
+      parsed.include = coerceStringArray(ruleConfig.include, []);
+    }
+    if (Array.isArray(ruleConfig.exclude)) {
+      parsed.exclude = coerceStringArray(ruleConfig.exclude, []);
+    }
+    return parsed;
+  });
 }
 
 function parseDebugStripRuleConfig(value: unknown): DebugStripRuleConfig | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
+  return parseBooleanOrObjectRuleConfig(value, (ruleConfig) => {
+    const parsed: Partial<DebugStripConfig> = {};
+    if (typeof ruleConfig.enabled === "boolean") {
+      parsed.enabled = ruleConfig.enabled;
+    }
+    if (Array.isArray(ruleConfig.functions)) {
+      parsed.functions = coerceStringArray(ruleConfig.functions, []);
+    }
+    if (Array.isArray(ruleConfig.namespaces)) {
+      parsed.namespaces = coerceStringArray(ruleConfig.namespaces, []);
+    }
+    return parsed;
+  });
+}
 
-  const parsed: Partial<DebugStripConfig> = {};
-  if (typeof value.enabled === "boolean") {
-    parsed.enabled = value.enabled;
-  }
-  if (Array.isArray(value.functions)) {
-    parsed.functions = coerceStringArray(value.functions, []);
-  }
-  if (Array.isArray(value.namespaces)) {
-    parsed.namespaces = coerceStringArray(value.namespaces, []);
-  }
-  return parsed;
+const STRUCTURED_RULE_PARSERS = {
+  "conditional-compilation": parseConditionalCompilationRuleConfig,
+  inline: parseInlineRuleConfig,
+  localizer: parseLocalizerRuleConfig,
+  "debug-strip": parseDebugStripRuleConfig,
+} satisfies {
+  [K in keyof RulesConfig]?: (value: unknown) => RulesConfig[K] | undefined;
+};
+
+function isStructuredRuleKey(
+  rule: keyof RulesConfig,
+): rule is keyof typeof STRUCTURED_RULE_PARSERS {
+  return rule in STRUCTURED_RULE_PARSERS;
 }
 
 export function parseConfig(options?: Record<string, unknown>): PluginConfig {
@@ -340,39 +348,16 @@ export function parseConfig(options?: Record<string, unknown>): PluginConfig {
     const val = rawRules[key];
     if (val === undefined) continue;
 
-    switch (key) {
-      case "conditional-compilation": {
-        const parsed = parseConditionalCompilationRuleConfig(val);
-        if (parsed !== undefined) {
-          rules["conditional-compilation"] = parsed;
-        }
-        break;
+    if (isStructuredRuleKey(key)) {
+      const parsed = STRUCTURED_RULE_PARSERS[key](val);
+      if (parsed !== undefined) {
+        rules[key] = parsed;
       }
-      case "inline": {
-        const parsed = parseInlineRuleConfig(val);
-        if (parsed !== undefined) {
-          rules.inline = parsed;
-        }
-        break;
-      }
-      case "localizer": {
-        const parsed = parseLocalizerRuleConfig(val);
-        if (parsed !== undefined) {
-          rules.localizer = parsed;
-        }
-        break;
-      }
-      case "debug-strip": {
-        const parsed = parseDebugStripRuleConfig(val);
-        if (parsed !== undefined) {
-          rules["debug-strip"] = parsed;
-        }
-        break;
-      }
-      default:
-        if (typeof val === "boolean") {
-          rules[key] = val;
-        }
+      continue;
+    }
+
+    if (typeof val === "boolean") {
+      rules[key] = val;
     }
   }
 

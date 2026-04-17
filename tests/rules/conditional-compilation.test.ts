@@ -1456,6 +1456,24 @@ ${body}
       expect(tstl.isBooleanLiteral(result)).toBe(true);
     });
 
+    it("does not fold when local declarations have conflicting initializers", () => {
+      const parseDecl = (src: string): ts.VariableDeclaration => {
+        const file = ts.createSourceFile("decl.ts", src, ts.ScriptTarget.Latest, true);
+        const stmt = file.statements[0] as ts.VariableStatement;
+        return stmt.declarationList.declarations[0];
+      };
+
+      const result = foldIdentifierWithChecker({
+        getSymbolAtLocation: () =>
+          ({
+            declarations: [parseDecl("const FLAG = true;"), parseDecl("const FLAG = false;")],
+          }) as unknown as ts.Symbol,
+      });
+
+      // Conflicting declarations prevent folding — falls back to superTransformExpression (nil)
+      expect(tstl.isNilLiteral(result)).toBe(true);
+    });
+
     function expectSwitchStatementFallback(source: string): void {
       const visitors = createRuleVisitors({ getSymbolAtLocation: () => undefined });
       const visitor = Reflect.get(visitors, ts.SyntaxKind.SwitchStatement) as (

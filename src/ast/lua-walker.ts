@@ -38,6 +38,13 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
     },
   };
 
+  const enterGuard = (): void => {
+    if (hooks.guardDepth !== undefined) hooks.guardDepth++;
+  };
+  const exitGuard = (): void => {
+    if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+  };
+
   function visitExpr(expr: tstl.Expression, replace: (n: tstl.Expression) => void): void {
     skipped = false;
     exprHook(expr, replace, control);
@@ -54,11 +61,11 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
       const isGuardOp =
         expr.operator === tstl.SyntaxKind.AndOperator ||
         expr.operator === tstl.SyntaxKind.OrOperator;
-      if (isGuardOp && hooks.guardDepth !== undefined) hooks.guardDepth++;
+      if (isGuardOp) enterGuard();
       visitExpr(expr.right, (n) => {
         expr.right = n;
       });
-      if (isGuardOp && hooks.guardDepth !== undefined) hooks.guardDepth--;
+      if (isGuardOp) exitGuard();
     } else if (tstl.isUnaryExpression(expr)) {
       visitExpr(expr.operand, (n) => {
         expr.operand = n;
@@ -115,18 +122,18 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
         expr.condition = n;
       });
       if (stopped) return;
-      if (hooks.guardDepth !== undefined) hooks.guardDepth++;
+      enterGuard();
       visitExpr(expr.whenTrue, (n) => {
         expr.whenTrue = n;
       });
       if (stopped) {
-        if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+        exitGuard();
         return;
       }
       visitExpr(expr.whenFalse, (n) => {
         expr.whenFalse = n;
       });
-      if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+      exitGuard();
     }
   }
 
@@ -175,10 +182,10 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
         stmt.condition = n;
       });
       if (stopped) return;
-      if (hooks.guardDepth !== undefined) hooks.guardDepth++;
+      enterGuard();
       walkStmts(stmt.ifBlock.statements);
       if (stopped) {
-        if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+        exitGuard();
         return;
       }
       if (stmt.elseBlock) {
@@ -188,7 +195,7 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
           walkStmts(stmt.elseBlock.statements);
         }
       }
-      if (hooks.guardDepth !== undefined) hooks.guardDepth--;
+      exitGuard();
     } else if (tstl.isWhileStatement(stmt)) {
       visitExpr(stmt.condition, (n) => {
         stmt.condition = n;
