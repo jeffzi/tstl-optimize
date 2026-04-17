@@ -1,6 +1,3 @@
-// This file contains the six handle* dispatcher bodies. It is explicitly exempt from the
-// ~400-line file cap — six dispatcher bodies don't factor further, and co-locating them
-// here beats one-handler-per-file fragmentation.
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 import {
