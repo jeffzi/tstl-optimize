@@ -1,6 +1,6 @@
 import ts from "typescript";
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
-import * as tstl from "typescript-to-lua";
+import type * as tstl from "typescript-to-lua";
+import { createLiteral } from "../../ast/lua-literal";
 import type { ConstantValue } from "../../config";
 
 export function isTruthy(value: ConstantValue): boolean {
@@ -114,8 +114,8 @@ export function evaluateCondition(
   return evaluateResolvedExpression(expr, (node) => constants.get(node.text));
 }
 
+// Delegates to the shared literal factory; no wrapNegativeNumber needed here because
+// the resolved-constant path never lands a folded negative in a negation-sensitive context.
 export function constantToLuaLiteral(value: ConstantValue): tstl.Expression {
-  if (typeof value === "boolean") return tstl.createBooleanLiteral(value);
-  if (typeof value === "number") return tstl.createNumericLiteral(value);
-  return tstl.createStringLiteral(value);
+  return createLiteral(value);
 }

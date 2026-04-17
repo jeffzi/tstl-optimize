@@ -1,5 +1,6 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
+import { isExplicitAmbientTopLevelDeclaration } from "../ast/ts-ambient";
 import { type RuleFactory, resolveDebugStripConfig } from "../config";
 
 function rootIdentifier(expr: ts.Expression): ts.Identifier | undefined {
@@ -19,11 +20,7 @@ function rootIdentifier(expr: ts.Expression): ts.Identifier | undefined {
 function isAmbientTopLevelDeclaration(
   node: ts.VariableStatement | ts.FunctionDeclaration | ts.ModuleDeclaration,
 ): boolean {
-  return (
-    ts.isSourceFile(node.parent) &&
-    (node.getSourceFile().isDeclarationFile ||
-      node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) === true)
-  );
+  return node.getSourceFile().isDeclarationFile || isExplicitAmbientTopLevelDeclaration(node);
 }
 
 function isStripSafeGlobalDeclaration(declaration: ts.Declaration): boolean {

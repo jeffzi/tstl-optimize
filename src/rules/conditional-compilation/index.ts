@@ -1,5 +1,6 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
+import { isExplicitAmbientTopLevelDeclaration } from "../../ast/ts-ambient";
 import {
   type ConstantValue,
   type RuleFactory,
@@ -54,18 +55,11 @@ export const createVisitors: RuleFactory = (checker, config) => {
     if (!ts.isVariableDeclaration(declaration)) {
       return false;
     }
-
-    const list = declaration.parent;
-    const statement = list.parent;
-    if (!ts.isVariableStatement(statement) || !ts.isSourceFile(statement.parent)) {
+    const statement = declaration.parent.parent;
+    if (!ts.isVariableStatement(statement)) {
       return false;
     }
-
-    const hasDeclare =
-      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ===
-      true;
-
-    return hasDeclare;
+    return isExplicitAmbientTopLevelDeclaration(statement);
   }
 
   function getTopLevelConstInitializer(declaration: ts.Declaration): ts.Expression | undefined {

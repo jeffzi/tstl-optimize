@@ -2,48 +2,11 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { isLuaExprPure } from "../ast/lua-ast";
+import { createLiteral, getLiteralValue } from "../ast/lua-literal";
 import { walkStatements } from "../ast/lua-walker";
 import type { ConstantValue, RuleFactory } from "../config";
 
 const UTF8_ENCODER = new TextEncoder();
-
-function getLiteralValue(expr: tstl.Expression): ConstantValue | undefined {
-  if (tstl.isParenthesizedExpression(expr)) {
-    return getLiteralValue(expr.expression);
-  }
-  if (tstl.isNumericLiteral(expr)) return expr.value;
-  if (tstl.isStringLiteral(expr)) return expr.value;
-  if (tstl.isBooleanLiteral(expr)) return expr.kind === tstl.SyntaxKind.TrueKeyword;
-  // TSTL represents negative number literals as unary negation of a positive literal.
-  if (
-    tstl.isUnaryExpression(expr) &&
-    expr.operator === tstl.SyntaxKind.NegationOperator &&
-    tstl.isNumericLiteral(expr.operand)
-  ) {
-    return -expr.operand.value;
-  }
-  return undefined;
-}
-
-function createNegativeLiteral(value: number): tstl.Expression {
-  return tstl.createParenthesizedExpression(
-    tstl.createUnaryExpression(
-      tstl.createNumericLiteral(Math.abs(value)),
-      tstl.SyntaxKind.NegationOperator,
-    ),
-  );
-}
-
-function createLiteral(value: ConstantValue, wrapNegativeNumber = false): tstl.Expression {
-  if (typeof value === "number") {
-    if (wrapNegativeNumber && value < 0) {
-      return createNegativeLiteral(value);
-    }
-    return tstl.createNumericLiteral(value);
-  }
-  if (typeof value === "string") return tstl.createStringLiteral(value);
-  return tstl.createBooleanLiteral(value);
-}
 
 function finiteOrUndefined(n: number): number | undefined {
   return Number.isFinite(n) ? n : undefined;
@@ -266,7 +229,7 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
               if (leftVal !== undefined && rightVal !== undefined) {
                 const folded = evaluateBinary(expr.operator, leftVal, rightVal);
                 if (folded !== undefined) {
-                  const lit = createLiteral(folded, true);
+                  const lit = createLiteral(folded, { wrapNegativeNumber: true });
                   lit.line = expr.line;
                   lit.column = expr.column;
                   replace(lit);
