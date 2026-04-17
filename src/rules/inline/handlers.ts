@@ -2,7 +2,6 @@
 // ~400-line file cap — six dispatcher bodies don't factor further, and co-locating them
 // here beats one-handler-per-file fragmentation.
 import ts from "typescript";
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import type * as tstl from "typescript-to-lua";
 import {
   buildArrayDestructureInline,
