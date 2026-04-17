@@ -1,0 +1,63 @@
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
+import { describe, expect, it } from "vitest";
+import { replaceArrayElements } from "../../../src/rules/localizer/array-elements";
+
+function id(name: string): tstl.Identifier {
+  return tstl.createIdentifier(name);
+}
+
+function arrIndex(base: string, idx: string): tstl.TableIndexExpression {
+  return tstl.createTableIndexExpression(id(base), id(idx));
+}
+
+describe("replaceArrayElements", () => {
+  describe("expr hook — base not in hoisted map", () => {
+    it("leaves base[loopVar] expression unchanged when base is absent from the hoisted map", () => {
+      const access = arrIndex("arr", "i");
+      const stmt = tstl.createExpressionStatement(access);
+      const statements: tstl.Statement[] = [stmt];
+
+      // "arr" is NOT in the hoisted map — covers the false branch of `if (ident)`
+      replaceArrayElements(statements, new Map(), new Set(["i"]));
+
+      expect(tstl.isTableIndexExpression((stmt as tstl.ExpressionStatement).expression)).toBe(true);
+    });
+  });
+
+  describe("stmt hook — ForStatement with non-matching control variable", () => {
+    it("does not skip a ForStatement whose control variable is not a loop variable", () => {
+      // ForStatement with control "j" — not in loopVarNames {"i"}.
+      // The stmt handler must not call control.skip(), so the walker recurses into the body.
+      const innerAccess = arrIndex("arr", "i");
+      const forBody = tstl.createBlock([tstl.createExpressionStatement(innerAccess)]);
+      const forStmt = tstl.createForStatement(
+        forBody,
+        id("j"),
+        tstl.createNumericLiteral(1),
+        tstl.createNumericLiteral(10),
+      );
+
+      const hoisted = new Map([["arr", id("____arr")]]);
+      const statements: tstl.Statement[] = [forStmt];
+
+      // No error thrown — ForStatement is processed, walker recurses into body
+      expect(() => replaceArrayElements(statements, hoisted, new Set(["i"]))).not.toThrow();
+    });
+  });
+
+  describe("stmt hook — assignment LHS not in hoisted map", () => {
+    it("leaves assignment LHS unchanged when base is absent from the hoisted map", () => {
+      // arr[i] = 5, but "arr" is NOT in hoisted — covers the false branch of `if (ident)` on LHS
+      const lhs = arrIndex("arr", "i");
+      const assignStmt = tstl.createAssignmentStatement(lhs, tstl.createNumericLiteral(5));
+      const statements: tstl.Statement[] = [assignStmt];
+
+      replaceArrayElements(statements, new Map(), new Set(["i"]));
+
+      // LHS is still a table index expression (not replaced)
+      const resultStmt = statements[0] as tstl.AssignmentStatement;
+      expect(tstl.isTableIndexExpression(resultStmt.left[0])).toBe(true);
+    });
+  });
+});

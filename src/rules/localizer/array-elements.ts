@@ -98,6 +98,7 @@ export function hoistArrayElements(
 
     const hoistBaseName = `____${baseName}`;
     const indexName = loopVar.get(baseName);
+    /* v8 ignore next */ // counts and loopVar are populated together — undefined is unreachable
     if (indexName === undefined) continue;
 
     // Safety: base locally defined — hoisting would read before definition

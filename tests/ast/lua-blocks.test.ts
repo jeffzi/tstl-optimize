@@ -225,6 +225,26 @@ describe("forEachNestedStatementList", () => {
       expect(visitedLists[0]).toStrictEqual(ifBlockStmts);
     });
 
+    it("stops iteration when visitor returns true on else-block visit", () => {
+      const ifBlockStmts = [tstl.createExpressionStatement(tstl.createIdentifier("x"))];
+      const elseBlockStmts = [tstl.createExpressionStatement(tstl.createIdentifier("y"))];
+      const ifStmt = tstl.createIfStatement(
+        tstl.createBooleanLiteral(true),
+        tstl.createBlock(ifBlockStmts),
+        tstl.createBlock(elseBlockStmts),
+      );
+
+      const visitedLists: tstl.Statement[][] = [];
+      forEachNestedStatementList(ifStmt, (stmts) => {
+        visitedLists.push([...stmts]);
+        return visitedLists.length >= 2 ? true : undefined; // stop after else-block visit
+      });
+
+      expect(visitedLists).toHaveLength(2);
+      expect(visitedLists[0]).toStrictEqual(ifBlockStmts);
+      expect(visitedLists[1]).toStrictEqual(elseBlockStmts);
+    });
+
     it.each([
       {
         name: "DoStatement",

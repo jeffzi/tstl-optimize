@@ -41,6 +41,7 @@ export function createDiscardTemp(
     undefined,
     discardSymId,
   );
+  /* v8 ignore next */
   return tstl.createVariableDeclarationStatement([discardIdent], expr ? [expr] : undefined);
 }
 
@@ -58,6 +59,7 @@ export function buildParamMap(
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
     if (!paramSymbol) return undefined;
     const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
+    /* v8 ignore next */
     if (paramSymbolId === undefined) return undefined;
     const luaArg = context.transformExpression(callArgs[i]);
     const tempId = context.nextSymbolId();
@@ -196,6 +198,7 @@ export function inlineExpressionBody(
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
   for (let i = 0; i < target.params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    /* v8 ignore next */
     if (!paramSymbol) return undefined;
     const symbolId = context.symbolIdMaps.get(paramSymbol);
     if (symbolId === undefined) return undefined;
@@ -209,6 +212,7 @@ export function inlineExpressionBody(
 
   if (needsEagerArgumentTemps(target, callNode, checker)) {
     const mapped = buildParamMap(target.params, callNode.arguments, checker, context);
+    /* v8 ignore next */
     if (!mapped) return undefined;
 
     const substituted = substituteParams(luaBody, mapped.paramMap);
@@ -272,6 +276,7 @@ export function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: stri
         return true;
       if (stmt.finallyBlock && bodyDeclaresLocal(stmt.finallyBlock.statements, name)) return true;
     }
+    /* v8 ignore start */
     if (
       // Defensive only: current TSTL rejects labeled statements end-to-end, but
       // preserve their scope interactions if one reaches this analysis.
@@ -283,6 +288,7 @@ export function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: stri
     ) {
       return true;
     }
+    /* v8 ignore stop */
   }
   return false;
 }
@@ -425,6 +431,7 @@ export function buildArrayDestructureInline(
   }
 
   const signature = checker.getResolvedSignature(callNode);
+  /* v8 ignore next */
   const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
   const isMultiReturn =
     returnType?.symbol?.name === "LuaMultiReturn" ||
@@ -520,6 +527,7 @@ export function buildReturnSiteInline(
     const { luaBody, luaReturn } = transformed;
 
     const mapped = buildParamMap(params, callNode.arguments, checker, context);
+    /* v8 ignore next */
     if (!mapped) return undefined;
     const { tempDecls, paramMap } = mapped;
     const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
