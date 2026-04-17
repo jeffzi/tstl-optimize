@@ -20,7 +20,6 @@ function checkLuaSyntax(lua: string): void {
   const result = spawnSync("luac", ["-p", "-"], {
     input: lua,
     encoding: "utf8",
-    timeout: 5000,
   });
   if (result.error) {
     throw new Error(
