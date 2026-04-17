@@ -2,6 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { getElseBranchStatements, isLuaRhsPure } from "../ast/lua-ast";
+import { withoutShadowedNames } from "../ast/lua-references";
 import { walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
@@ -10,29 +11,6 @@ function expressionsReferenceAnyOf(
   names: ReadonlySet<string>,
 ): boolean {
   return expressions?.some((expression) => expressionReferencesAnyOf(expression, names)) ?? false;
-}
-
-function withoutShadowedNames<T>(
-  names: ReadonlySet<string>,
-  nodes: Iterable<T>,
-  getName: (node: T) => string | undefined,
-): ReadonlySet<string> {
-  let nextNames: Set<string> | undefined;
-
-  for (const node of nodes) {
-    const shadowedName = getName(node);
-    if (shadowedName === undefined || !names.has(shadowedName)) {
-      continue;
-    }
-
-    nextNames ??= new Set(names);
-    nextNames.delete(shadowedName);
-    if (nextNames.size === 0) {
-      return nextNames;
-    }
-  }
-
-  return nextNames ?? names;
 }
 
 /**
