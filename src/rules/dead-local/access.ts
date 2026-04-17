@@ -1,4 +1,3 @@
-// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import type * as tstl from "typescript-to-lua";
 import { forEachAccess } from "../../ast/lua-references";
 
