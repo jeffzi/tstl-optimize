@@ -1,14 +1,14 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 import {
-  buildArrayDestructureInline,
   buildDoEndBlock,
-  buildObjectDestructureInline,
   buildReturnSiteInline,
   buildVarDeclInline,
   createDiscardTemp,
   inlineExpressionBody,
 } from "./builders";
+import { rejectIfCrossModuleFreeVar } from "./cross-module";
+import { buildArrayDestructureInline, buildObjectDestructureInline } from "./destructure-builders";
 import { createInlineWarning } from "./diagnostics";
 import {
   canEraseInlineDeclaration,
@@ -16,7 +16,6 @@ import {
   isExported,
   isModuleScopeDeclaration,
   isPureAtVoidSite,
-  rejectIfCrossModuleFreeVar,
 } from "./eligibility";
 import { getInlineTarget, hasInlineTag } from "./target";
 
