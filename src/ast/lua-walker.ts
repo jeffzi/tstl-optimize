@@ -14,6 +14,9 @@ type ExprVisitor = (
 
 type StmtVisitor = (stmt: tstl.Statement, control: TraversalControl) => void;
 
+type FuncEnterVisitor = (expr: tstl.FunctionExpression) => void;
+type FuncExitVisitor = (expr: tstl.FunctionExpression) => void;
+
 interface WalkerHooks {
   expr: ExprVisitor;
   stmt?: StmtVisitor;
@@ -21,6 +24,10 @@ interface WalkerHooks {
   /** When set, the walker increments this around guarded contexts (and/or RHS,
    *  if-branches, conditional expression branches) so callers can skip counting. */
   guardDepth?: number;
+  /** Called when entering a nested FunctionExpression body (only when shallow=false). */
+  funcEnter?: FuncEnterVisitor;
+  /** Called when exiting a nested FunctionExpression body (only when shallow=false). */
+  funcExit?: FuncExitVisitor;
 }
 
 /** Walk a Lua statement list, calling hooks for each expression and statement. */
@@ -111,7 +118,10 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
       }
     } else if (tstl.isFunctionExpression(expr)) {
       if (!shallow) {
+        const { funcEnter, funcExit } = hooks;
+        if (funcEnter) funcEnter(expr);
         walkStmts(expr.body.statements);
+        if (funcExit) funcExit(expr);
       }
     } else if (tstl.isParenthesizedExpression(expr)) {
       visitExpr(expr.expression, (n) => {

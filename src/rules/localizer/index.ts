@@ -157,9 +157,30 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
     if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
+      // Hoist chains inside if-block (pass outer snapshot of alreadyHoisted to each branch)
+      hoistScope(
+        stmt.ifBlock.statements,
+        threshold,
+        true,
+        alreadyHoisted,
+        context,
+        scopeReservedNames,
+        isRootAllowed,
+      );
       processFunctionBodies(stmt.ifBlock.statements, ctx);
+      // Hoist chains inside else-block independently
       if (stmt.elseBlock) {
-        processFunctionBodies(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], ctx);
+        const elseBranchStatements = getElseBranchStatements(stmt.elseBlock) as tstl.Statement[];
+        hoistScope(
+          elseBranchStatements,
+          threshold,
+          true,
+          alreadyHoisted,
+          context,
+          scopeReservedNames,
+          isRootAllowed,
+        );
+        processFunctionBodies(elseBranchStatements, ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)

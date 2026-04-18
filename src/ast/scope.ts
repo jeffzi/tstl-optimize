@@ -33,10 +33,17 @@ export interface ScopeInfo {
  * - all variable/assignment LHS identifiers defined in the scope
  *
  * When `shallow` is true, skips FunctionExpression bodies.
+ * When `shallow` is false, descends into nested functions with scope-aware tracking:
+ * nested function parameters are NOT added to scopeDefs (they belong to nested scopes).
+ * We track shadowed roots via shadowStack and exclude chains with BOTH outer and inner reads
+ * when the inner reads are shadowed (Concern B2 scenario).
  */
 export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean): ScopeInfo {
   const chainCounts = new Map<string, number>();
   const scopeDefs = new Set<string>();
+  const shadowStack: Array<Set<string>> = []; // Stack of shadowed param names as we enter/exit nested funcs
+  const shadowedChains = new Set<string>(); // Tracks chains with mixed outer + shadowed inner reads
+
   const hooks = {
     shallow,
     guardDepth: 0,
@@ -45,16 +52,28 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
       _replace: (n: tstl.Expression) => void,
       control: TraversalControl,
     ) => {
-      if (!shallow && tstl.isFunctionExpression(expr)) {
-        for (const param of expr.params ?? []) {
-          if (tstl.isIdentifier(param)) scopeDefs.add(param.text);
-        }
-      }
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
+          const root = chain.split(".")[0];
+          // Check if root is shadowed at current depth
+          const isShadowed =
+            shadowStack.length > 0 && shadowStack[shadowStack.length - 1].has(root);
+
+          // Only count unguarded chains at every scope. Guarded accesses (inside
+          // if/else branches, &&/|| RHS, ternary branches) would be hoisted ABOVE
+          // the guard, turning a conditional dereference into an unconditional one.
+          // Branch-local hoisting happens via recursive hoistScope calls on each
+          // branch's statement list from the caller.
           if (hooks.guardDepth === 0) {
-            chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
+            if (isShadowed && shadowStack.length > 0) {
+              // Inside a nested function with shadowing param — mark chain as dangerous
+              // (has reads at both outer and inner scope with shadowing)
+              shadowedChains.add(chain);
+            } else {
+              // Either at module scope or shadowing doesn't apply — count normally
+              chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
+            }
           }
           control.skip();
         }
@@ -72,14 +91,10 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
             }
           }
         }
-        // Only collect function parameters at module scope (shallow=false).
-        // At function scope (shallow=true), nested function parameters should NOT
-        // prevent hoisting of outer scope chains.
-        if (!shallow && tstl.isFunctionDefinition(stmt)) {
-          for (const p of stmt.right[0].params?.filter(tstl.isIdentifier) ?? []) {
-            scopeDefs.add(p.text);
-          }
-        }
+        // NOTE: We do NOT add nested function parameters to scopeDefs here.
+        // Nested function parameters belong to their own scope and should not block
+        // hoisting of outer-scope chains, even if the names shadow outer variables.
+        // The shadowing is handled via shadowStack tracking in the expr hook.
       }
       if (tstl.isForInStatement(stmt)) {
         for (const name of stmt.names) {
@@ -90,8 +105,26 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
         scopeDefs.add(stmt.controlVariable.text);
       }
     },
+    funcEnter: (expr: tstl.FunctionExpression) => {
+      const params = new Set<string>();
+      for (const param of expr.params ?? []) {
+        if (tstl.isIdentifier(param)) {
+          params.add(param.text);
+        }
+      }
+      shadowStack.push(params);
+    },
+    funcExit: (_expr: tstl.FunctionExpression) => {
+      shadowStack.pop();
+    },
   };
   walkStatements(statements, hooks);
+
+  // Remove chains that have mixed shadowing (both outer and inner reads with shadowing)
+  for (const chain of shadowedChains) {
+    chainCounts.delete(chain);
+  }
+
   return { chainCounts, scopeDefs };
 }
 

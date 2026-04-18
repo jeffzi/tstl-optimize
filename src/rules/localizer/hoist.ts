@@ -1,5 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { getElseBranchStatements } from "../../ast/lua-ast";
 import { walkStatements } from "../../ast/lua-walker";
 import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../ast/scope";
 import { hasInterveningCallForChain, hasTopLevelChainAccess, STDLIB_ROOTS } from "./safety";
@@ -44,12 +45,22 @@ export function replaceChains(
   hoisted: Map<string, tstl.Identifier>,
   shallow: boolean,
 ): void {
+  const shadowStack: Array<Set<string>> = []; // Stack of shadowed roots as we enter/exit nested funcs
+
   walkStatements(statements, {
     shallow,
     expr: (expr, replace, control) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
+          const root = chain.split(".")[0];
+          // Skip replacement only if the root is shadowed by the IMMEDIATE parent function's parameter
+          // (i.e., the top of the shadow stack). This prevents retargeting shadowed reads to outer scope.
+          const immediateShadow = shadowStack[shadowStack.length - 1];
+          if (immediateShadow?.has(root)) {
+            // Root is shadowed in the immediate parent scope — don't replace
+            return;
+          }
           const ident = hoisted.get(chain);
           if (ident) {
             replace(tstl.cloneIdentifier(ident));
@@ -57,6 +68,18 @@ export function replaceChains(
           }
         }
       }
+    },
+    funcEnter: (expr: tstl.FunctionExpression) => {
+      const params = new Set<string>();
+      for (const param of expr.params ?? []) {
+        if (tstl.isIdentifier(param)) {
+          params.add(param.text);
+        }
+      }
+      shadowStack.push(params);
+    },
+    funcExit: (_expr: tstl.FunctionExpression) => {
+      shadowStack.pop();
     },
   });
 }
@@ -121,6 +144,42 @@ export function hoistScope(
     replaceChains(statements, toHoist, shallow);
     if (inBodyDecls.length > 0) statements.unshift(...inBodyDecls);
     if (outDecls) outDecls.push(...liftableDecls);
+  }
+
+  // At module scope (shallow=false), recursively process if/else blocks
+  // Each branch gets the outer snapshot of alreadyHoisted to avoid cross-branch suppression
+  if (!shallow) {
+    for (const stmt of statements) {
+      if (tstl.isIfStatement(stmt)) {
+        // Process if-block independently
+        hoistScope(
+          stmt.ifBlock.statements,
+          threshold,
+          shallow,
+          alreadyHoisted,
+          context,
+          reservedNames,
+          isRootAllowed,
+          outDecls,
+          extraBoundNames,
+        );
+        // Process else-block independently
+        if (stmt.elseBlock) {
+          const elseBranchStatements = getElseBranchStatements(stmt.elseBlock) as tstl.Statement[];
+          hoistScope(
+            elseBranchStatements,
+            threshold,
+            shallow,
+            alreadyHoisted,
+            context,
+            reservedNames,
+            isRootAllowed,
+            outDecls,
+            extraBoundNames,
+          );
+        }
+      }
+    }
   }
 
   return new Set(toHoist.keys());
