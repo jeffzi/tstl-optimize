@@ -371,7 +371,7 @@ describe("constant-folding", () => {
 
   it("preserves if-statement when elseif condition has side effects", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       declare function get(): boolean;
       if (true) {
         print(1);

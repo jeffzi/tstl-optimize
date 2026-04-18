@@ -7,7 +7,7 @@ import { compile, normalizeLua } from "../helpers";
 const enabled = { pluginOptions: { rules: { "debug-strip": true } } };
 
 const ENV =
-  "declare function print(...args: any[]): void;\ndeclare function assert(cond: any, msg?: string): asserts cond;\n";
+  "declare function print(...args: unknown[]): void;\ndeclare function assert(cond: unknown, msg?: string): asserts cond;\n";
 
 function parseExpressionStatement(source: string): ts.ExpressionStatement {
   const file = ts.createSourceFile("debug-strip.ts", source, ts.ScriptTarget.Latest, true);
@@ -229,7 +229,7 @@ describe("debug-strip", () => {
     it("coexists with other rules (different SyntaxKinds)", () => {
       const lua = compile(
         [
-          "declare function print(...args: any[]): void;",
+          "declare function print(...args: unknown[]): void;",
           "declare const x: number;",
           "const a = Math.floor(x);",
           'print("debug");',
