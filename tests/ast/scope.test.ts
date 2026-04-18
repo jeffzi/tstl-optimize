@@ -236,7 +236,7 @@ describe("collectScopeInfo", () => {
     expect(scopeDefs).toStrictEqual(new Set(["fn"]));
   });
 
-  it("collects nested function expression parameters as scopeDefs when shallow=false", () => {
+  it("does NOT collect nested function expression parameters as scopeDefs (they belong to nested scope)", () => {
     const funcBody = tstl.createBlock([
       tstl.createReturnStatement([makeAccess("config", "timeout")]),
     ]);
@@ -245,10 +245,11 @@ describe("collectScopeInfo", () => {
     const statements: tstl.Statement[] = [tstl.createExpressionStatement(callExpr)];
 
     const { scopeDefs } = collectScopeInfo(statements, false);
-    expect(scopeDefs).toStrictEqual(new Set(["config"]));
+    // Nested function parameters belong to the nested scope and should NOT be in the outer scope's scopeDefs
+    expect(scopeDefs).toStrictEqual(new Set([]));
   });
 
-  it("collects chained assignment targets, function-definition params, and loop variables", () => {
+  it("collects chained assignment targets, loop variables (but not nested function params)", () => {
     const functionDefinition = tstl.createAssignmentStatement(
       makeAccess("module", "run"),
       tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("config")]),
@@ -274,7 +275,8 @@ describe("collectScopeInfo", () => {
       false,
     );
 
-    expect(scopeDefs).toStrictEqual(new Set(["module.run", "config", "state.value", "key", "i"]));
+    // NOTE: "config" is a parameter of the nested function, so it should NOT be in module-level scopeDefs
+    expect(scopeDefs).toStrictEqual(new Set(["module.run", "state.value", "key", "i"]));
   });
 
   it("ignores TableIndexExpression LHS when property chain is non-string-keyed", () => {

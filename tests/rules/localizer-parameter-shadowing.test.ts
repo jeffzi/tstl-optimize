@@ -143,3 +143,165 @@ describe("localizer: parameter shadowing", () => {
     expect(lua).toContain("local a = ____arr_1 + ____arr_1");
   });
 });
+
+describe("localizer: module-scope hoisting respects nested function scoping", () => {
+  it("hoists module-level config.timeout chain when nested function param shadows root (Concern A primary)", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const a = config.timeout;
+      const b = config.timeout;
+      function inner(config: string) {
+        return config.length;
+      }
+      inner("x");
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "all",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    // The module-level config.timeout reads should be hoisted
+    expect(lua).toContain("local ____config_timeout = config.timeout");
+    // Both module-level assignments should use the hoisted var (not config.timeout directly)
+    expect(lua).toContain("a = ____config_timeout");
+    expect(lua).toContain("b = ____config_timeout");
+    // The inner function should still exist and NOT be affected
+    expect(lua).toContain("function inner");
+  });
+
+  it("hoists outer chain when inner param name differs (Concern A variant — function expression)", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const a = config.timeout;
+      const b = config.timeout;
+      const fn = function (cfg: { timeout: number }) {
+        return cfg.timeout;
+      };
+      fn(config);
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    // The outer config.timeout chain should be hoisted (param is named cfg, not config)
+    expect(lua).toContain("local ____config_timeout = config.timeout");
+    // Both assignments should use the hoisted var
+    expect(lua).toContain("a = ____config_timeout");
+    expect(lua).toContain("b = ____config_timeout");
+  });
+
+  it("hoists module-scope chain even though nested function shadows root (Concern A variant — module scope)", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const a = config.timeout;
+      const b = config.timeout;
+      function inner(config: string) {
+        return config.length;
+      }
+      inner("x");
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    // The module-scope config.timeout should be hoisted
+    expect(lua).toContain("local ____config_timeout = config.timeout");
+    // Both assignments should use the hoisted var
+    expect(lua).toContain("a = ____config_timeout");
+    expect(lua).toContain("b = ____config_timeout");
+  });
+
+  it("does NOT hoist when outer and IIFE reads mix with shadowing (Concern B2)", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const a = config.timeout;
+      const b = config.timeout;
+      const value = (function (config: { timeout: number }) {
+        return config.timeout + config.timeout;
+      })({ timeout: 0 });
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    // MUST NOT hoist because the IIFE's config.timeout refers to the local config
+    expect(lua).not.toContain("local ____config_timeout = config.timeout");
+    // And the IIFE's config.timeout reads must be present verbatim
+    expect(lua).toContain("return config.timeout + config.timeout");
+  });
+
+  it("Concern B1 preserved: does not hoist chain from nested IIFE with shadowing param (existing test)", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const value = (function (config: { timeout: number }) {
+        return config.timeout + config.timeout;
+      })(config);
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    // Should not hoist since only the IIFE reads the config chain
+    expect(lua).not.toContain("local ____config_timeout = config.timeout");
+    expect(lua).toContain("return config.timeout + config.timeout");
+  });
+});

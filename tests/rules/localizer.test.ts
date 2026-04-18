@@ -198,6 +198,304 @@ describe("localizer", () => {
 
       expect(lua).toContain("local ____obj_x_2 = obj.x");
     });
+
+    it("hoists chain into a guarded if-block, not above it (function scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "  return 0;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+      // No reference to the temp appears above the guard
+      expect(normalized.indexOf("____obj_x")).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists chain into a guarded else-block, not above the if (function scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    return 0;",
+          "  } else {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const elseIdx = normalized.indexOf("else");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(elseIdx).toBeGreaterThan(ifIdx);
+      expect(declIdx).toBeGreaterThan(elseIdx);
+    });
+
+    it("hoists different chains branch-locally in sibling if/else (function scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number; y: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  } else {",
+          "    const d = obj.y;",
+          "    const e = obj.y;",
+          "    const f = obj.y;",
+          "    return d + e + f;",
+          "  }",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const elseIdx = normalized.indexOf("else");
+      const xIdx = normalized.indexOf("local ____obj_x = obj.x");
+      const yIdx = normalized.indexOf("local ____obj_y = obj.y");
+      expect(xIdx).toBeGreaterThan(ifIdx);
+      expect(xIdx).toBeLessThan(elseIdx);
+      expect(yIdx).toBeGreaterThan(elseIdx);
+    });
+
+    it("nullable-root anchor: hoists obj.x inside `if obj then`, not above it", () => {
+      // Regression guard: an escaped hoist here dereferences obj before the nil-check.
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "function process() {",
+          "  if (obj) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "  return 0;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if obj then");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists chain into a guarded if-block with scope: all", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "  return 0;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "all" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists chain inside top-level guarded if-block at module scope, not above it", () => {
+      const lua = compile(
+        [
+          "declare const config: { x: number };",
+          "declare const cond: boolean;",
+          "if (cond) {",
+          "  const a = config.x;",
+          "  const b = config.x;",
+          "  const c = config.x;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const declIdx = normalized.indexOf("local ____config_x = config.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists different chains branch-locally in sibling if/else at module scope", () => {
+      const lua = compile(
+        [
+          "declare const config: { x: number; y: number };",
+          "declare const cond: boolean;",
+          "if (cond) {",
+          "  const a = config.x;",
+          "  const b = config.x;",
+          "  const c = config.x;",
+          "} else {",
+          "  const d = config.y;",
+          "  const e = config.y;",
+          "  const f = config.y;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"], threshold: 3 } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const elseIdx = normalized.indexOf("else");
+      const xIdx = normalized.indexOf("local ____config_x = config.x");
+      const yIdx = normalized.indexOf("local ____config_y = config.y");
+      expect(xIdx).toBeGreaterThan(ifIdx);
+      expect(xIdx).toBeLessThan(elseIdx);
+      expect(yIdx).toBeGreaterThan(elseIdx);
+    });
+
+    it("does not hoist chain inside guarded if when intervening call suppresses hoisting at module scope", () => {
+      const lua = compile(
+        [
+          "declare const config: { x: number };",
+          "declare const cond: boolean;",
+          "declare function extern(): void;",
+          "if (cond) {",
+          "  const a = config.x;",
+          "  extern();",
+          "  const b = config.x;",
+          "  const c = config.x;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"], threshold: 3 } },
+          },
+        },
+      );
+      expect(lua).not.toContain("local ____config_x = config.x");
+      expect(lua).toContain("config.x");
+    });
+
+    it("does NOT hoist chain from ternary branches (expression-guarded, out of scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  const a = cond ? obj!.x : 0;",
+          "  const b = cond ? obj!.x : 0;",
+          "  const c = cond ? obj!.x : 0;",
+          "  return a + b + c;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      // A hoist here would dereference obj unconditionally, bypassing the ternary guard.
+      expect(lua).not.toContain("____obj_x");
+      // Raw reads still present — at least 3 literal obj.x occurrences.
+      expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
+
+    it("does NOT hoist chain from && RHS (expression-guarded, out of scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  const a = cond && obj!.x;",
+          "  const b = cond && obj!.x;",
+          "  const c = cond && obj!.x;",
+          "  return [a, b, c];",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      expect(lua).not.toContain("____obj_x");
+      expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
+
+    it("does NOT hoist chain from || RHS (expression-guarded, out of scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "declare const fallback: boolean;",
+          "function process() {",
+          "  const a = fallback || obj!.x;",
+          "  const b = fallback || obj!.x;",
+          "  const c = fallback || obj!.x;",
+          "  return [a, b, c];",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+          },
+        },
+      );
+      expect(lua).not.toContain("____obj_x");
+      expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
   });
 
   describe("when negative cases are not hoisted", () => {
