@@ -295,6 +295,59 @@ describe("dead-local", () => {
       expect(lua).toContain("x = 2");
       expect(lua).toContain("return y");
     });
+
+    it("preserves initializer when the first write is inside an if branch", () => {
+      const lua = normalizeLua(
+        compile(`
+        function f(flag: boolean) {
+          let called = false;
+          if (flag) {
+            called = true;
+          }
+          return called;
+        }
+      `),
+      );
+
+      expect(lua).toContain("local called = false");
+      expect(lua).toContain("called = true");
+    });
+
+    it("preserves initializer when the first write is inside a for-loop body", () => {
+      const lua = normalizeLua(
+        compile(`
+        declare const n: number;
+        function f() {
+          let called = false;
+          for (let i = 0; i < n; i++) {
+            called = true;
+          }
+          return called;
+        }
+      `),
+      );
+
+      expect(lua).toContain("local called = false");
+      expect(lua).toContain("called = true");
+    });
+
+    it("drops initializer when the first write is unconditional (do-block)", () => {
+      const lua = normalizeLua(
+        compile(`
+        function f() {
+          let x = 1;
+          {
+            x = 2;
+          }
+          return x;
+        }
+      `),
+      );
+
+      expect(lua).toContain("local x");
+      expect(lua).not.toMatch(/local x\s*=\s*1/);
+      expect(lua).toContain("x = 2");
+    });
   });
 
   describe("when removing unused locals in branching statements", () => {
