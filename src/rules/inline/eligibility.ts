@@ -2,12 +2,18 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 import { hasSideEffects, SideEffectOptions } from "../../ast/ts-ast";
 import { hasCrossModuleFreeVariable } from "./cross-module";
+import { InlineDiagnosticCode } from "./diagnostics";
 import type {
   ExpressionInlineTarget,
   ReturnValueInlineTarget,
   StatementInlineTarget,
 } from "./target";
 import { getInlineTarget, isDeclarationNameReference, resolveSymbol } from "./target";
+
+export interface InlineRejection {
+  reason: string;
+  code: number;
+}
 
 export function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {
   if (ts.isIdentifier(name)) return true;
@@ -61,7 +67,7 @@ export function isCallSiteFullyInlined(
 
   if (target.kind === "expression") {
     return (
-      canInline(target, callNode, checker) === true &&
+      canInline(target, callNode, checker) === undefined &&
       !hasBlockingFreeVariable([target.bodyExpr], target.declaration, target.params)
     );
   }
@@ -69,14 +75,14 @@ export function isCallSiteFullyInlined(
   if (target.kind === "statements") {
     return (
       ts.isExpressionStatement(callNode.parent) &&
-      canInlineStatements(target, callNode, checker) === true &&
+      canInlineStatements(target, callNode, checker) === undefined &&
       !hasBlockingFreeVariable(target.bodyStmts, target.declaration, target.params)
     );
   }
 
   if (ts.isReturnStatement(callNode.parent)) {
     return (
-      canInlineStatements(target, callNode, checker) === true &&
+      canInlineStatements(target, callNode, checker) === undefined &&
       !hasBlockingFreeVariable(
         [...target.bodyStmts, target.returnExpr],
         target.declaration,
@@ -95,7 +101,7 @@ export function isCallSiteFullyInlined(
     ts.isVariableStatement(variableStatement) &&
     variableStatement.declarationList.declarations.length === 1 &&
     isSupportedInlineBindingPattern(callNode.parent.name) &&
-    canInlineStatements(target, callNode, checker) === true &&
+    canInlineStatements(target, callNode, checker) === undefined &&
     !hasBlockingFreeVariable(
       [...target.bodyStmts, target.returnExpr],
       target.declaration,
@@ -168,24 +174,88 @@ function isParamWritten(body: ts.Node, paramSymbol: ts.Symbol, checker: ts.TypeC
   return written;
 }
 
-/**
- * Checks the three prerequisites shared by both canInline and canInlineStatements.
- * Returns a rejection reason string, or undefined if all checks pass.
- */
+function analyzeParamUsage(
+  body: ts.Node,
+  paramSymbol: ts.Symbol,
+  checker: ts.TypeChecker,
+): { isCaptured: boolean; isWritten: boolean; count: number } {
+  const isDescendant = (node: ts.Node, ancestor: ts.Node): boolean => {
+    let current: ts.Node | undefined = node;
+    while (current !== undefined) {
+      if (current === ancestor) return true;
+      current = current.parent;
+    }
+    return false;
+  };
+
+  const isCapturedByNestedFunction = (node: ts.Identifier): boolean => {
+    let current: ts.Node | undefined = node.parent;
+    while (current !== undefined) {
+      if (ts.isFunctionLike(current)) {
+        return ts.isFunctionLike(body)
+          ? current === body || isDescendant(current, body)
+          : isDescendant(current, body);
+      }
+      current = current.parent;
+    }
+    return false;
+  };
+
+  let isCaptured = false;
+  let isWritten = false;
+  let count = 0;
+  function visit(n: ts.Node): void {
+    if (ts.isIdentifier(n)) {
+      const sym = checker.getSymbolAtLocation(n);
+      if (sym === paramSymbol) {
+        if (isCapturedByNestedFunction(n)) isCaptured = true;
+        if (getAccessKind(n) & AccessKind.Write) isWritten = true;
+        count++;
+      }
+    }
+    ts.forEachChild(n, visit);
+  }
+  visit(body);
+  return { isCaptured, isWritten, count };
+}
+
 function checkSharedPrereqs(
   params: readonly ts.ParameterDeclaration[],
   args: ts.NodeArray<ts.Expression>,
   declaration: ts.Node,
-): string | undefined {
+): InlineRejection | undefined {
   for (const param of params) {
     if (ts.isObjectBindingPattern(param.name) || ts.isArrayBindingPattern(param.name))
-      return "destructuring parameters are not supported";
-    if (param.dotDotDotToken) return "rest parameters are not supported";
-    if (param.questionToken) return "optional parameters are not supported";
-    if (param.initializer) return "default parameters are not supported";
+      return {
+        reason: "destructuring parameters are not supported",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
+    if (param.dotDotDotToken)
+      return {
+        reason: "rest parameters are not supported",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
+    if (param.questionToken)
+      return {
+        reason: "optional parameters are not supported",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
+    if (param.initializer)
+      return {
+        reason: "default parameters are not supported",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
   }
-  if (args.length !== params.length) return "argument count does not match parameter count";
-  if (!isModuleScopeDeclaration(declaration)) return "function must be declared at module scope";
+  if (args.length !== params.length)
+    return {
+      reason: "argument count does not match parameter count",
+      code: InlineDiagnosticCode.parameterRestriction,
+    };
+  if (!isModuleScopeDeclaration(declaration))
+    return {
+      reason: "function must be declared at module scope",
+      code: InlineDiagnosticCode.moduleScope,
+    };
   return undefined;
 }
 
@@ -193,20 +263,31 @@ export function canInline(
   target: ExpressionInlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
-): true | string {
+): InlineRejection | undefined {
   const { bodyExpr, params, declaration, resolvedSymbol } = target;
 
   const prereqFailure = checkSharedPrereqs(params, callNode.arguments, declaration);
   if (prereqFailure !== undefined) return prereqFailure;
 
   if (countReferences(bodyExpr, resolvedSymbol, checker) > 0)
-    return "recursive functions cannot be inlined";
+    return {
+      reason: "recursive functions cannot be inlined",
+      code: InlineDiagnosticCode.recursion,
+    };
 
   for (let i = 0; i < params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
-    if (!paramSymbol) return "parameter symbol could not be resolved";
-    if (isParamWritten(bodyExpr, paramSymbol, checker)) return "parameter is written inside body";
-    const usageCount = countReferences(bodyExpr, paramSymbol, checker);
+    if (!paramSymbol)
+      return {
+        reason: "parameter symbol could not be resolved",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
+    const { isWritten, count: usageCount } = analyzeParamUsage(bodyExpr, paramSymbol, checker);
+    if (isWritten)
+      return {
+        reason: "parameter is written inside body",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
     if (
       usageCount !== 1 &&
       hasSideEffects(
@@ -215,114 +296,127 @@ export function canInline(
       )
     )
       return usageCount === 0
-        ? "argument with side effects is not used"
-        : "argument with side effects is used multiple times";
+        ? {
+            reason: "argument with side effects is not used",
+            code: InlineDiagnosticCode.sideEffects,
+          }
+        : {
+            reason: "argument with side effects is used multiple times",
+            code: InlineDiagnosticCode.sideEffects,
+          };
   }
 
-  return true;
+  return undefined;
 }
 
 export function hasLinearControlFlow(
   stmts: readonly ts.Statement[],
   loopBody = false,
-): true | string {
+): InlineRejection | undefined {
   for (const stmt of stmts) {
-    if (ts.isReturnStatement(stmt)) return "early return in body";
+    if (ts.isReturnStatement(stmt))
+      return { reason: "early return in body", code: InlineDiagnosticCode.controlFlow };
     // break/continue inside a loop are scoped to that loop, not to the surrounding
     // do...end inline wrapper in Lua, so only reject them at the top level.
     if (!loopBody) {
-      if (ts.isBreakStatement(stmt)) return "break in body";
-      if (ts.isContinueStatement(stmt)) return "continue in body";
+      if (ts.isBreakStatement(stmt))
+        return { reason: "break in body", code: InlineDiagnosticCode.controlFlow };
+      if (ts.isContinueStatement(stmt))
+        return { reason: "continue in body", code: InlineDiagnosticCode.controlFlow };
     }
     // Recurse into nested blocks: a return/break/continue inside an if/while/for
-    // becomes a return/break/continue inside a do...end in Lua, which returns from
+    // becomes a return/break/continue inside a do...end in Lua, which return s from
     // the enclosing function rather than just the inlined block, changing semantics.
     if (ts.isIfStatement(stmt)) {
       const thenResult = hasLinearControlFlow([stmt.thenStatement], loopBody);
-      if (thenResult !== true) return thenResult;
+      if (thenResult !== undefined) return thenResult;
       if (stmt.elseStatement) {
         const elseResult = hasLinearControlFlow([stmt.elseStatement], loopBody);
-        if (elseResult !== true) return elseResult;
+        if (elseResult !== undefined) return elseResult;
       }
-    } else if (ts.isWhileStatement(stmt)) {
+    } else if (
+      ts.isWhileStatement(stmt) ||
+      ts.isForStatement(stmt) ||
+      ts.isForInStatement(stmt) ||
+      ts.isForOfStatement(stmt)
+    ) {
       const bodyResult = hasLinearControlFlow([stmt.statement], true);
-      if (bodyResult !== true) return bodyResult;
-    } else if (ts.isForStatement(stmt)) {
-      const bodyResult = hasLinearControlFlow([stmt.statement], true);
-      if (bodyResult !== true) return bodyResult;
-    } else if (ts.isForInStatement(stmt) || ts.isForOfStatement(stmt)) {
-      const bodyResult = hasLinearControlFlow([stmt.statement], true);
-      if (bodyResult !== true) return bodyResult;
+      if (bodyResult !== undefined) return bodyResult;
     } else if (ts.isBlock(stmt)) {
       const blockResult = hasLinearControlFlow(stmt.statements, loopBody);
-      if (blockResult !== true) return blockResult;
+      if (blockResult !== undefined) return blockResult;
     } else if (ts.isDoStatement(stmt)) {
       const bodyResult = hasLinearControlFlow([stmt.statement], true);
-      if (bodyResult !== true) return bodyResult;
+      if (bodyResult !== undefined) return bodyResult;
     } else if (ts.isSwitchStatement(stmt)) {
       for (const clause of stmt.caseBlock.clauses) {
         // break inside switch is scoped to the switch — TSTL compiles switches to if-elseif chains
         const clauseResult = hasLinearControlFlow(clause.statements, true);
-        if (clauseResult !== true) return clauseResult;
+        if (clauseResult !== undefined) return clauseResult;
       }
     } else if (ts.isTryStatement(stmt)) {
       const tryResult = hasLinearControlFlow(stmt.tryBlock.statements, loopBody);
-      if (tryResult !== true) return tryResult;
+      if (tryResult !== undefined) return tryResult;
       if (stmt.catchClause) {
         const catchResult = hasLinearControlFlow(stmt.catchClause.block.statements, loopBody);
-        if (catchResult !== true) return catchResult;
+        if (catchResult !== undefined) return catchResult;
       }
       if (stmt.finallyBlock) {
         const finallyResult = hasLinearControlFlow(stmt.finallyBlock.statements, loopBody);
-        if (finallyResult !== true) return finallyResult;
+        if (finallyResult !== undefined) return finallyResult;
       }
     } else if (ts.isLabeledStatement(stmt)) {
       // Defensive only: current TSTL rejects labeled statements end-to-end, so
       // treat them as non-inlineable if one reaches this control-flow analysis.
-      return "labeled statement in body";
+      return { reason: "labeled statement in body", code: InlineDiagnosticCode.controlFlow };
     }
   }
-  return true;
+  return undefined;
 }
 
 export function canInlineStatements(
   target: StatementInlineTarget | ReturnValueInlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
-): true | string {
+): InlineRejection | undefined {
   const { bodyStmts, params, declaration, resolvedSymbol } = target;
+  // Include the return expression in checks so recursion and param-write detection
+  // cover the full body. hasLinearControlFlow only receives bodyStmts — the terminal
+  // return is not in that list and never constitutes an early return.
+  const allNodes: ReadonlyArray<ts.Node> =
+    target.kind === "statementsWithReturn" ? [...bodyStmts, target.returnExpr] : bodyStmts;
 
   const prereqFailure = checkSharedPrereqs(params, callNode.arguments, declaration);
   if (prereqFailure !== undefined) return prereqFailure;
 
-  for (const stmt of bodyStmts) {
-    if (countReferences(stmt, resolvedSymbol, checker) > 0)
-      return "recursive functions cannot be inlined";
-  }
-
-  if (target.kind === "statementsWithReturn") {
-    if (countReferences(target.returnExpr, resolvedSymbol, checker) > 0)
-      return "recursive functions cannot be inlined";
+  for (const node of allNodes) {
+    if (countReferences(node, resolvedSymbol, checker) > 0)
+      return {
+        reason: "recursive functions cannot be inlined",
+        code: InlineDiagnosticCode.recursion,
+      };
   }
 
   for (const param of params) {
     const paramSymbol = checker.getSymbolAtLocation(param.name);
-    if (!paramSymbol) return "parameter symbol could not be resolved";
-    for (const stmt of bodyStmts) {
-      if (isParamWritten(stmt, paramSymbol, checker)) return "parameter is written inside body";
-    }
-    if (target.kind === "statementsWithReturn") {
-      if (isParamWritten(target.returnExpr, paramSymbol, checker))
-        return "parameter is written inside body";
+    if (!paramSymbol)
+      return {
+        reason: "parameter symbol could not be resolved",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
+    for (const node of allNodes) {
+      if (isParamWritten(node, paramSymbol, checker))
+        return {
+          reason: "parameter is written inside body",
+          code: InlineDiagnosticCode.parameterRestriction,
+        };
     }
   }
 
-  // For statementsWithReturn: pass only pre-return statements to hasLinearControlFlow.
-  // The terminal return is NOT in bodyStmts, so no early-return check needed for it.
   const controlFlow = hasLinearControlFlow(bodyStmts);
-  if (controlFlow !== true) return controlFlow;
+  if (controlFlow !== undefined) return controlFlow;
 
-  return true;
+  return undefined;
 }
 
 export function needsEagerArgumentTemps(
@@ -336,10 +430,12 @@ export function needsEagerArgumentTemps(
       return false;
     }
 
-    if (
-      countReferences(target.bodyExpr, paramSymbol, checker) === 1 &&
-      hasSideEffects(callNode.arguments[i], SideEffectOptions.None)
-    ) {
+    const usage = analyzeParamUsage(target.bodyExpr, paramSymbol, checker);
+    if (usage.isCaptured) {
+      return true;
+    }
+
+    if (usage.count === 1 && hasSideEffects(callNode.arguments[i], SideEffectOptions.None)) {
       return true;
     }
   }
@@ -357,7 +453,7 @@ export function isPureAtVoidSite(
 }
 
 export function isExported(node: ts.FunctionDeclaration | ts.VariableStatement): boolean {
-  if ((ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0) {
+  if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
     return true;
   }
 

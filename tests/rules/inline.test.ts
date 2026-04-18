@@ -88,12 +88,31 @@ describe("inline", () => {
 
       expect(lua).toContain("mul(obj.a.b.c)");
     });
+
+    it("preserves closure capture through the call-site temp", () => {
+      const lua = normalizeLua(
+        compile(`
+        /** @inline */
+        function capture(x: number) {
+          return () => x;
+        }
+
+        let x = 1;
+        const g = capture(x);
+        x = 2;
+      `),
+      );
+
+      expect(lua).toContain("____inline_arg_0 = x");
+      expect(lua).toContain("return function() return ____inline_arg_0 end");
+      expect(lua).not.toContain("g = function() return x end");
+    });
   });
 
   describe("void multi-statement inline", () => {
     it("expands body into do...end block", () => {
       const lua = compile(`
-        declare function print(...args: any[]): void;
+        declare function print(...args: unknown[]): void;
         /** @inline */
         function setup(x: number) { let a = x + 1; print(a); }
         setup(10);
@@ -106,7 +125,7 @@ describe("inline", () => {
 
     it("hoists arguments to temporaries to preserve order", () => {
       const lua = compile(`
-        declare function print(...args: any[]): void;
+        declare function print(...args: unknown[]): void;
         /** @inline */
         function foo(a: number, b: number) { print(a + b); }
         declare function s1(): number; declare function s2(): number;
@@ -279,7 +298,7 @@ describe("inline", () => {
 
     it("inlines multi-statement body with switch containing break", () => {
       expectInlinedWithoutWarnings(`
-        declare function print(...args: any[]): void;
+        declare function print(...args: unknown[]): void;
         /** @inline */
         function classify(x: number): void {
           let label: string;
@@ -321,7 +340,7 @@ describe("inline", () => {
     ])("rejects bodies with $name", ({ body, skipLuaCheck }) => {
       const { diagnostics } = compileWithDiagnostics(
         `
-          declare function print(...args: any[]): void;
+          declare function print(...args: unknown[]): void;
           /** @inline */
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
@@ -333,7 +352,7 @@ describe("inline", () => {
     });
 
     it.each([
-      { decl: "function f(...args: any[]) {}", name: "rest parameters" },
+      { decl: "function f(...args: unknown[]) {}", name: "rest parameters" },
       { decl: "function f(x?: number) {}", name: "optional parameters" },
       { decl: "function f(x: number = 0) {}", name: "default parameters" },
     ])("rejects unsupported $name", ({ decl }) => {
@@ -427,6 +446,18 @@ describe("inline", () => {
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0].messageText).toContain("side effects");
       });
+    });
+
+    it("emits exactly one diagnostic when an eager-arg inline wraps a failing inline", () => {
+      const { diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function g(x?: number) { return 42; }
+        /** @inline */
+        function f(x: number) { return x + 1; }
+        const r = f(g(0));
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(String(diagnostics[0].messageText)).toContain("optional parameters");
     });
   });
 
@@ -841,7 +872,7 @@ describe("inline coverage", () => {
 
   it("preserves @inline void function called in object literal", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function foo() { print(1); }
       // multi-stmt at expr position fails prereq
@@ -853,7 +884,7 @@ describe("inline coverage", () => {
 
   it("preserves @inline function with multi-statement body at expression position", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function foo() {
         print(1);
@@ -867,7 +898,7 @@ describe("inline coverage", () => {
 
   it("preserves @inline function with return value when called at void site", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function foo() {
         print("side effect");
@@ -883,7 +914,7 @@ describe("inline coverage", () => {
 
   it("buildObjectDestructureInline coverage", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function getObj() { 
         print("side effect");
@@ -902,7 +933,7 @@ describe("inline coverage", () => {
 
   it("buildObjectDestructureInline rejection (nested)", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function getObj() { 
         print("side effect");
@@ -919,7 +950,7 @@ describe("inline coverage", () => {
 
   it("buildArrayDestructureInline coverage (non-multi)", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function getArr() { 
         print("side effect");
@@ -938,7 +969,7 @@ describe("inline coverage", () => {
     // The inline rule cannot inline try-catch bodies (statements kind, VariableDeclaration
     // call site). The erasure guard keeps the declaration; TSTL compiles try-catch to pcall.
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function withTry() {
         try { return 1; } catch(e) { return 2; } finally { print(3); }
@@ -1411,6 +1442,23 @@ describe("inline uncovered branches", () => {
           String(d.messageText).includes("argument with side effects is not used"),
         ),
       ).toBe(true);
+    });
+
+    it("still inlines unused pure arguments and erases the declaration", () => {
+      const { lua, diagnostics } = compileWithDiagnostics(`
+        /** @inline */
+        function ignore(x: number): number {
+          return 42;
+        }
+
+        declare const value: number;
+        const result = ignore(value);
+      `);
+
+      expect(diagnostics).toHaveLength(0);
+      expect(lua).toContain("result = 42");
+      expect(lua).not.toContain("ignore(value)");
+      expect(lua).not.toContain("function ignore");
     });
 
     it("rejects when argument with side effects is used multiple times", () => {
@@ -1968,7 +2016,7 @@ describe("inline uncovered branches", () => {
 
     it("preserves call when function has optional parameters at statement position", () => {
       const code = `
-        declare function print(x: any): void;
+        declare function print(x: unknown): void;
 
         /** @inline */
         function greet(name?: string): void {
@@ -1995,7 +2043,7 @@ describe("inline uncovered branches", () => {
 
     it("preserves call when function has default parameters at statement position", () => {
       const code = `
-        declare function print(x: any): void;
+        declare function print(x: unknown): void;
 
         /** @inline */
         function multiply(x: number, y: number = 2): void {
@@ -2959,7 +3007,7 @@ describe("inline uncovered branches", () => {
       });
     });
 
-    it("returns undefined from statement-position visitors when body parameter maps are missing", () => {
+    it("keeps lowering statement-position visitors when the lowered body no longer needs the param map", () => {
       const { visitors, program } = createInlineVisitors({
         "/main.ts": `
           /** @inline */
@@ -2986,10 +3034,10 @@ describe("inline uncovered branches", () => {
         }),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(result).toBeDefined();
     });
 
-    it("returns undefined from direct call visitors when expression bindings cannot map params", () => {
+    it("keeps lowering direct call visitors when the lowered expression no longer needs the param map", () => {
       const { visitors, program } = createInlineVisitors({
         "/main.ts": `
           /** @inline */
@@ -3010,7 +3058,7 @@ describe("inline uncovered branches", () => {
         createDirectContext(),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(result).toBeDefined();
     });
 
     it("reports unresolved parameter symbols from direct call visitors", () => {
@@ -3146,7 +3194,7 @@ describe("inline uncovered branches", () => {
       ).toBe(true);
     });
 
-    it("skips eager temp remapping when a later param lookup cannot be rebuilt", () => {
+    it("returns undefined when buildParamMap fails in the eager temp path", () => {
       const program = createTestProgram({
         "/main.ts": `
           declare function sideEffect(): number;
@@ -3204,14 +3252,13 @@ describe("inline uncovered branches", () => {
         }),
       ]);
 
-      expect(tstl.isIdentifier(result as tstl.Expression)).toBe(true);
-      expect((result as tstl.Identifier).text).toBe("mapped");
+      expect(result).toBeUndefined();
     });
 
     describe("direct variable visitor guard rails", () => {
       it.each([
         {
-          name: "returns undefined when identifier bindings cannot map params",
+          name: "keeps lowering identifier bindings when the lowered return no longer needs the param map",
           source: `
             /** @inline */
             function compute(value: number): number {
@@ -3226,7 +3273,7 @@ describe("inline uncovered branches", () => {
             createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
         },
         {
-          name: "returns undefined when destructuring bindings cannot map params",
+          name: "keeps lowering destructuring bindings when the lowered return no longer needs the param map",
           source: `
             /** @inline */
             function compute(value: number): { value: number } {
@@ -3240,7 +3287,7 @@ describe("inline uncovered branches", () => {
           buildContext: () => createDirectContext(),
         },
         {
-          name: "returns undefined when plain array bindings cannot map params",
+          name: "keeps lowering plain array bindings when the lowered return no longer needs the param map",
           source: `
             /** @inline */
             function pair(value: number): [number, number] {
@@ -3262,11 +3309,11 @@ describe("inline uncovered branches", () => {
           context: buildContext(),
         });
 
-        expect(result).toBeUndefined();
+        expect(result).toBeDefined();
       });
     });
 
-    it("returns undefined from direct variable visitors when multi-return array bindings cannot map params", () => {
+    it("keeps lowering multi-return array bindings when the lowered return no longer needs the param map", () => {
       const { visitors, program } = createInlineVisitors({
         "/main.ts": `
           type LuaMultiReturn<T extends unknown[]> = T & { __brand: never };
@@ -3301,7 +3348,7 @@ describe("inline uncovered branches", () => {
         }),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(result).toBeDefined();
     });
 
     it("returns undefined from direct variable visitors when multi-return array lowering emits no return node", () => {
@@ -3347,7 +3394,7 @@ describe("inline uncovered branches", () => {
       expect(result).toBeUndefined();
     });
 
-    it("returns undefined from direct return visitors when param mapping cannot be built", () => {
+    it("keeps lowering direct return visitors when the lowered return no longer needs the param map", () => {
       const { visitors, program } = createInlineVisitors({
         "/main.ts": `
           /** @inline */
@@ -3376,7 +3423,7 @@ describe("inline uncovered branches", () => {
         createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(result).toBeDefined();
     });
 
     it("returns undefined from direct variable visitors when cross-module free variables block inlining", () => {
@@ -3502,6 +3549,107 @@ describe("inline uncovered branches", () => {
       ]);
 
       expect(result).toBeUndefined();
+    });
+  });
+
+  describe("diagnostic codes", () => {
+    const findDiagnostic = (
+      diags: ReturnType<typeof compileWithDiagnostics>["diagnostics"],
+      matcher: (text: string) => boolean,
+    ) => {
+      const found = diags.find((d) => matcher(String(d.messageText)));
+      expect(found).toBeDefined();
+      // biome-ignore lint/style/noNonNullAssertion: test assertion guarantees non-null
+      return found!;
+    };
+
+    it("cross-module free variable emits code 90003", () => {
+      const code = `
+        export const factor = 2;
+
+        /** @inline */
+        export function multiply(x: number): number {
+          return x * factor;
+        }
+      `;
+      const files = {
+        "utils.ts": code,
+        "main.ts": `
+          import { multiply } from "./utils";
+          const result = multiply(5);
+        `,
+      };
+
+      const { diagnostics } = compileMultiFileWithDiagnostics(files);
+      const diag = findDiagnostic(diagnostics, (text) => text.includes("cross-module"));
+      expect(diag.code).toBe(90003);
+    });
+
+    it("recursive function emits code 90004", () => {
+      const code = `
+        /** @inline */
+        function fact(n: number): number {
+          if (n <= 1) return 1;
+          return n * fact(n - 1);
+        }
+        export const x = fact(5);
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+      const diag = findDiagnostic(diagnostics, (text) => text.includes("recursive"));
+      expect(diag.code).toBe(90004);
+    });
+
+    it("optional parameter restriction emits code 90005", () => {
+      const code = `
+        /** @inline */
+        function withOptional(x?: number): number {
+          return x ?? 0;
+        }
+        export const result = withOptional();
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+      const diag = findDiagnostic(diagnostics, (text) => text.includes("parameter"));
+      expect(diag.code).toBe(90005);
+    });
+
+    it("side-effects restriction: argument with side effects used multiple times (code 90006)", () => {
+      const code = `
+        declare function sideEffect(): number;
+
+        /** @inline */
+        function useArg(x: number): number {
+          return x + x;
+        }
+
+        export const result = useArg(sideEffect());
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+      const diag = findDiagnostic(
+        diagnostics,
+        (text) => text.includes("side effect") || text.includes("argument"),
+      );
+      expect(diag.code).toBe(90006);
+    });
+
+    it("multi-statement body at expression position emits code 90010", () => {
+      const code = `
+        declare function print(...args: unknown[]): void;
+
+        /** @inline */
+        function foo() {
+          print(1);
+          return 2;
+        }
+
+        export const x = 1 + foo();
+      `;
+
+      const { diagnostics } = compileWithDiagnostics(code);
+      const diag = findDiagnostic(diagnostics, (text) => text.includes("expression position"));
+      expect(diag.code).toBe(90010);
     });
   });
 });

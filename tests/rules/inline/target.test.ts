@@ -2,79 +2,82 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { declarationHasLuaMultiReturnReturnType } from "../../../src/rules/inline/target";
 
-const luaMultiReturnTypeNode = ts.factory.createTypeReferenceNode("LuaMultiReturn", undefined);
+function createLuaMultiReturnTypeNode(): ts.TypeReferenceNode {
+  return ts.factory.createTypeReferenceNode("LuaMultiReturn", undefined);
+}
+
+function createArrowFunction(returnType: ts.TypeNode | undefined): ts.ArrowFunction {
+  return ts.factory.createArrowFunction(
+    undefined,
+    undefined,
+    [],
+    returnType,
+    ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
+    ts.factory.createBlock([]),
+  );
+}
+
+function createFunctionExpression(returnType: ts.TypeNode | undefined): ts.FunctionExpression {
+  return ts.factory.createFunctionExpression(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    [],
+    returnType,
+    ts.factory.createBlock([]),
+  );
+}
+
+function createVariableDeclaration(
+  name: string,
+  initializer: ts.Expression | undefined,
+): ts.VariableDeclaration {
+  return ts.factory.createVariableDeclaration(name, undefined, undefined, initializer);
+}
 
 describe("declarationHasLuaMultiReturnReturnType", () => {
-  describe("VariableDeclaration with arrow function initializer", () => {
-    it("returns true when the arrow function has a LuaMultiReturn return type", () => {
-      const arrowFn = ts.factory.createArrowFunction(
-        undefined,
-        undefined,
-        [],
-        luaMultiReturnTypeNode,
-        ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
-        ts.factory.createBlock([]),
-      );
-      const varDecl = ts.factory.createVariableDeclaration("fn", undefined, undefined, arrowFn);
-      expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(true);
-    });
-
-    it("returns false when the arrow function has no explicit return type", () => {
-      const arrowFn = ts.factory.createArrowFunction(
-        undefined,
-        undefined,
-        [],
-        undefined,
-        ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
-        ts.factory.createBlock([]),
-      );
-      const varDecl = ts.factory.createVariableDeclaration("fn", undefined, undefined, arrowFn);
-      expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(false);
-    });
-
-    it("returns false when the arrow function return type is not LuaMultiReturn", () => {
-      const arrowFn = ts.factory.createArrowFunction(
-        undefined,
-        undefined,
-        [],
-        ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
-        ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
-        ts.factory.createBlock([]),
-      );
-      const varDecl = ts.factory.createVariableDeclaration("fn", undefined, undefined, arrowFn);
-      expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(false);
+  describe("when the declaration is a variable initialized with an arrow function", () => {
+    it.each([
+      {
+        caseName: "the arrow function returns LuaMultiReturn",
+        returnType: createLuaMultiReturnTypeNode(),
+        expected: true,
+      },
+      {
+        caseName: "the arrow function omits an explicit return type",
+        returnType: undefined,
+        expected: false,
+      },
+      {
+        caseName: "the arrow function returns a non-LuaMultiReturn type",
+        returnType: ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+        expected: false,
+      },
+    ])("returns $expected when $caseName", ({ returnType, expected }) => {
+      const varDecl = createVariableDeclaration("fn", createArrowFunction(returnType));
+      expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(expected);
     });
   });
 
-  describe("VariableDeclaration with function expression initializer", () => {
-    it("returns true when the function expression has a LuaMultiReturn return type", () => {
-      const fnExpr = ts.factory.createFunctionExpression(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        [],
-        luaMultiReturnTypeNode,
-        ts.factory.createBlock([]),
+  describe("when the declaration is a variable initialized with a function expression", () => {
+    it("returns true when the function expression returns LuaMultiReturn", () => {
+      const varDecl = createVariableDeclaration(
+        "fn",
+        createFunctionExpression(createLuaMultiReturnTypeNode()),
       );
-      const varDecl = ts.factory.createVariableDeclaration("fn", undefined, undefined, fnExpr);
       expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(true);
     });
   });
 
-  describe("VariableDeclaration with non-function initializer", () => {
+  describe("when the declaration is not initialized with an inlineable function", () => {
     it("returns false when initializer is a numeric literal", () => {
-      const varDecl = ts.factory.createVariableDeclaration(
-        "x",
-        undefined,
-        undefined,
-        ts.factory.createNumericLiteral(42),
-      );
+      const varDecl = createVariableDeclaration("x", ts.factory.createNumericLiteral(42));
       expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(false);
     });
 
     it("returns false when there is no initializer", () => {
-      const varDecl = ts.factory.createVariableDeclaration("x", undefined, undefined, undefined);
+      const varDecl = createVariableDeclaration("x", undefined);
       expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(false);
     });
   });

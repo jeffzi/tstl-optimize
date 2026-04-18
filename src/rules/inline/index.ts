@@ -23,7 +23,11 @@ export const createVisitors: RuleFactory = (checker, config) => {
   // Read per-rule strict directly from raw config to distinguish "not set" (undefined)
   // from "explicitly disabled" (false). resolveInlineConfig normalizes both to false.
   const rawInline = config.rules.inline;
-  const perRuleStrict = isRecord(rawInline) ? (rawInline.strict as boolean | undefined) : undefined;
+  const perRuleStrict = isRecord(rawInline)
+    ? typeof rawInline.strict === "boolean"
+      ? rawInline.strict
+      : undefined
+    : undefined;
   const strictMode = resolveEffectiveStrict(config.strict ?? false, perRuleStrict);
 
   // Returning undefined signals "not handled" to the merge wrapper; the strict

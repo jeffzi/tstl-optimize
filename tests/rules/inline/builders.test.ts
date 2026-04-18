@@ -12,14 +12,14 @@ function varStmt(name: string): ts.VariableStatement {
 }
 
 describe("bodyDeclaresLocal", () => {
-  describe("IfStatement — thenStatement is not a Block", () => {
+  describe("when an if statement has a non-block then branch", () => {
     it("returns true when the non-Block thenStatement declares the name", () => {
       const ifStmt = ts.factory.createIfStatement(ts.factory.createTrue(), varStmt("x"), undefined);
       expect(bodyDeclaresLocal([ifStmt], "x")).toBe(true);
     });
   });
 
-  describe("IfStatement — no elseStatement", () => {
+  describe("when an if statement has no else branch", () => {
     it("returns false when thenStatement does not declare the name and there is no else", () => {
       const ifStmt = ts.factory.createIfStatement(
         ts.factory.createTrue(),
@@ -30,34 +30,28 @@ describe("bodyDeclaresLocal", () => {
     });
   });
 
-  describe("IfStatement — elseStatement is not a Block", () => {
-    it("returns true when the non-Block elseStatement declares the name", () => {
+  describe("when an if statement has a non-block else branch", () => {
+    it.each([
+      { elseName: "x", expected: true },
+      { elseName: "y", expected: false },
+    ])("returns $expected when the else branch declares $elseName", ({ elseName, expected }) => {
       const ifStmt = ts.factory.createIfStatement(
         ts.factory.createTrue(),
         ts.factory.createBlock([]),
-        varStmt("x"),
+        varStmt(elseName),
       );
-      expect(bodyDeclaresLocal([ifStmt], "x")).toBe(true);
-    });
-
-    it("returns false when the non-Block elseStatement does not declare the name", () => {
-      const ifStmt = ts.factory.createIfStatement(
-        ts.factory.createTrue(),
-        ts.factory.createBlock([]),
-        varStmt("y"),
-      );
-      expect(bodyDeclaresLocal([ifStmt], "x")).toBe(false);
+      expect(bodyDeclaresLocal([ifStmt], "x")).toBe(expected);
     });
   });
 
-  describe("loop statement — body is not a Block", () => {
+  describe("when a loop has a non-block body", () => {
     it("returns true when the non-Block while-loop body declares the name", () => {
       const whileStmt = ts.factory.createWhileStatement(ts.factory.createTrue(), varStmt("x"));
       expect(bodyDeclaresLocal([whileStmt], "x")).toBe(true);
     });
   });
 
-  describe("TryStatement — finallyBlock exists but does not declare the name", () => {
+  describe("when a try statement has a finally block without the name", () => {
     it("returns false when finallyBlock is present but contains a different name", () => {
       const tryStmt = ts.factory.createTryStatement(
         ts.factory.createBlock([]),
