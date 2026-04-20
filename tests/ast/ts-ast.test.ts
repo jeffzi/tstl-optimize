@@ -75,7 +75,6 @@ describe("hasSideEffects", () => {
       { name: "pure binary expression", expr: "a + b" },
       { name: "conditional with pure branches", expr: "x ? a : b" },
       { name: "array literal with pure elements", expr: "[1, 2, 3]" },
-      { name: "array literal with pure spread element", expr: "[...items]" },
       { name: "object literal with pure properties", expr: "({ a: 1, b: 2 })" },
       { name: "object literal with pure computed key", expr: '({ ["literal"]: 1 })' },
       { name: "object literal with shorthand property", expr: "({ x })" },
@@ -112,6 +111,13 @@ describe("hasSideEffects", () => {
       { name: "delete expression", expr: "delete obj.x" },
       { name: "element access", expr: "arr[0]" },
     ])("returns true for $name", ({ expr }) => {
+      expect(hasSideEffects(parseExpr(expr))).toBe(true);
+    });
+
+    it.each([
+      { name: "array spread element", expr: "[...items]" },
+      { name: "object spread assignment", expr: "({ ...obj })" },
+    ])("returns true for spread syntax $name", ({ expr }) => {
       expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 

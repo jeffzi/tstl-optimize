@@ -277,6 +277,81 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
     expect(lua).toContain("return config.timeout + config.timeout");
   });
 
+  it("does not rewrite a deeper closure when an ancestor parameter shadows the hoisted root", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const a = config.timeout;
+      const b = config.timeout;
+      const readerFactory = (function (config: { timeout: number }) {
+        return function () {
+          return config.timeout;
+        };
+      })({ timeout: 0 });
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    expect(lua).toContain("local ____config_timeout = config.timeout");
+    expect(lua).toContain("a = ____config_timeout");
+    expect(lua).toContain("b = ____config_timeout");
+    expect(lua).toContain("return config.timeout");
+    expect(lua).not.toContain("return ____config_timeout");
+  });
+
+  it("does not rewrite a grandchild closure when only a non-immediate ancestor shadows the hoisted root", () => {
+    // Three-level nesting: the function immediately wrapping the read does NOT
+    // shadow `config`; the outer IIFE parameter does. Pre-fix code only checked
+    // the top of the shadow stack, so the inner read would be rewritten to the
+    // module-level hoisted binding — crossing a parameter boundary and reading
+    // the wrong `config`.
+    const lua = normalizeLua(
+      compile(
+        `
+      declare const config: { timeout: number };
+      const a = config.timeout;
+      const b = config.timeout;
+      const factory = (function (config: { timeout: number }) {
+        return function middle() {
+          return function inner() {
+            return config.timeout;
+          };
+        };
+      })({ timeout: 0 });
+      `,
+        {
+          pluginOptions: {
+            rules: {
+              localizer: {
+                scope: "module",
+                include: ["config"],
+              },
+            },
+          },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
+      ),
+    );
+
+    expect(lua).toContain("local ____config_timeout = config.timeout");
+    expect(lua).toContain("a = ____config_timeout");
+    expect(lua).toContain("b = ____config_timeout");
+    expect(lua).toContain("return config.timeout");
+    expect(lua).not.toContain("return ____config_timeout");
+  });
+
   it("Concern B1 preserved: does not hoist chain from nested IIFE with shadowing param (existing test)", () => {
     const lua = normalizeLua(
       compile(

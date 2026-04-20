@@ -3,6 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors, mapLuaStatements } from "../../src/rules/inline";
+import { isPureAtVoidSite } from "../../src/rules/inline/eligibility";
 import {
   compile,
   compileMultiFileWithDiagnostics,
@@ -11,6 +12,25 @@ import {
 } from "../helpers";
 
 describe("inline", () => {
+  describe("void-site purity", () => {
+    function parseCallArguments(code: string): ts.NodeArray<ts.Expression> {
+      const src = ts.createSourceFile("test.ts", code, ts.ScriptTarget.Latest, true);
+      const stmt = src.statements[0];
+      if (!ts.isExpressionStatement(stmt) || !ts.isCallExpression(stmt.expression)) {
+        throw new Error("Expected call expression statement");
+      }
+      return stmt.expression.arguments;
+    }
+
+    it.each([
+      { name: "spread argument", code: "keep(...items);" },
+      { name: "object spread argument", code: "keep({ ...obj });" },
+    ])("treats $name as impure at a void site", ({ code }) => {
+      const args = parseCallArguments(code);
+      expect(isPureAtVoidSite(ts.factory.createIdentifier("value"), args)).toBe(false);
+    });
+  });
+
   describe("positive: inlined", () => {
     it("inlines function declaration", () => {
       const lua = compile(`

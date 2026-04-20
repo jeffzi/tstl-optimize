@@ -94,6 +94,14 @@ describe("constant-folding", () => {
     expect(lua).toContain("value = (-2) ^ exp()");
   });
 
+  it("keeps folded unary negatives grouped before exponentiation", () => {
+    const lua = normalizeLua(
+      compile("declare function exp(): number; export const value = (-(-(1 - 3))) ** exp();"),
+    );
+
+    expect(lua).toContain("value = (-2) ^ exp()");
+  });
+
   describe("optimizeControlFlow preserves side-effectful conditions in empty if-blocks", () => {
     it("preserves call expression when if-body and else-body are both empty", () => {
       const lua = compile(`

@@ -1,7 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { walkStatements } from "../../src/ast/lua-walker";
+import { Walk, walkStatements } from "../../src/ast/lua-walker";
 import {
   buildChainExpression,
   collectArrayElementAccesses,
@@ -17,6 +17,7 @@ function countPropertyAccess(statements: tstl.Statement[], chain: string): numbe
         const repr = luaPropertyChain(expr);
         if (repr === chain) count++;
       }
+      return Walk.keep;
     },
   });
   return count;
@@ -249,6 +250,67 @@ describe("collectScopeInfo", () => {
     expect(scopeDefs).toStrictEqual(new Set([]));
   });
 
+  it("does not count chains from deeper closures when an ancestor parameter shadows the root", () => {
+    const nestedClosure = tstl.createFunctionExpression(
+      tstl.createBlock([tstl.createReturnStatement([makeAccess("config", "timeout")])]),
+      [],
+    );
+    const outerShadowingFunction = tstl.createFunctionExpression(
+      tstl.createBlock([tstl.createReturnStatement([nestedClosure])]),
+      [tstl.createIdentifier("config")],
+    );
+    const statements: tstl.Statement[] = [
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("a"),
+        makeAccess("config", "timeout"),
+      ),
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("b"),
+        makeAccess("config", "timeout"),
+      ),
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("readerFactory"),
+        outerShadowingFunction,
+      ),
+    ];
+
+    const { chainCounts } = collectScopeInfo(statements, false);
+    expect(chainCounts.get("config.timeout")).toBe(2);
+  });
+
+  it("does not count chains from a grandchild closure when only a non-immediate ancestor shadows the root", () => {
+    // Three-level nesting: outer(config) → middle() → inner() reads config.timeout.
+    // The immediate parent of the read (middle) has no shadowing param, but outer does.
+    // Pre-fix code only checked the top of the shadow stack, so this read was counted
+    // (or worse — later rewritten to the hoisted outer binding, crossing a parameter boundary).
+    const inner = tstl.createFunctionExpression(
+      tstl.createBlock([tstl.createReturnStatement([makeAccess("config", "timeout")])]),
+      [],
+    );
+    const middle = tstl.createFunctionExpression(
+      tstl.createBlock([tstl.createReturnStatement([inner])]),
+      [],
+    );
+    const outerShadowing = tstl.createFunctionExpression(
+      tstl.createBlock([tstl.createReturnStatement([middle])]),
+      [tstl.createIdentifier("config")],
+    );
+    const statements: tstl.Statement[] = [
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("a"),
+        makeAccess("config", "timeout"),
+      ),
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("b"),
+        makeAccess("config", "timeout"),
+      ),
+      tstl.createVariableDeclarationStatement(tstl.createIdentifier("factory"), outerShadowing),
+    ];
+
+    const { chainCounts } = collectScopeInfo(statements, false);
+    expect(chainCounts.get("config.timeout")).toBe(2);
+  });
+
   it("collects chained assignment targets, loop variables (but not nested function params)", () => {
     const functionDefinition = tstl.createAssignmentStatement(
       makeAccess("module", "run"),
@@ -276,7 +338,10 @@ describe("collectScopeInfo", () => {
     );
 
     // NOTE: "config" is a parameter of the nested function, so it should NOT be in module-level scopeDefs
-    expect(scopeDefs).toStrictEqual(new Set(["module.run", "state.value", "key", "i"]));
+    // "state.value" is a regular property assignment (not a function definition), so it should NOT be in scopeDefs.
+    // Regular assignments mutate existing values; they don't define new bindings. Safety checks in hasInterveningCallForChain
+    // prevent hoisting when assignments interfere with reads.
+    expect(scopeDefs).toStrictEqual(new Set(["module.run", "key", "i"]));
   });
 
   it("ignores TableIndexExpression LHS when property chain is non-string-keyed", () => {
