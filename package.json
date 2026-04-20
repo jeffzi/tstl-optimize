@@ -17,7 +17,7 @@
     "test:runtime": "vitest run --config vitest.config.runtime.ts",
     "test:conformance": "tsx scripts/conformance.ts",
     "check": "biome check --fix .",
-    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#research' '#plans'",
+    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#.research' '#research' '#plans' '#CLAUDE.md'",
     "check:unused": "knip",
     "typecheck": "tsc -p tsconfig.plugin.json --noEmit && tsc -p tsconfig.scripts.json --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p examples/tsconfig.json --noEmit",
     "validate": "npm run check && npm run typecheck && npm run check:unused",

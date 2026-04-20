@@ -13,6 +13,7 @@ import type { ReturnValueInlineTarget } from "../../../src/rules/inline/target";
 const SOURCE = "function f(x: number): number { return x; }";
 const sourceFile = ts.createSourceFile("test.ts", SOURCE, ts.ScriptTarget.Latest, true);
 const funcDecl = sourceFile.statements[0] as ts.FunctionDeclaration;
+// biome-ignore lint/style/noNonNullAssertion: test fixture has known structure
 const returnExpr = (funcDecl.body!.statements[0] as ts.ReturnStatement)
   .expression! as ts.Expression;
 
