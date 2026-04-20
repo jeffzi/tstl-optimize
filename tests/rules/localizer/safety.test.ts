@@ -6,7 +6,8 @@ import {
   hasEarlyExit,
   hasInterveningCallForChain,
   isNonStdlibCall,
-  statementHasInterveningCallForChain,
+  statementAssignsToChain,
+  statementHasUnsafeCallAfterFirstChainAccess,
   statementHasUnsafeCallBeforeFirstChainAccess,
   statementTouchesChain,
 } from "../../../src/rules/localizer/safety";
@@ -117,29 +118,6 @@ describe("statementTouchesChain", () => {
   it("returns false when statement does not contain the chain", () => {
     const stmt = exprStmt(id("x"));
     expect(statementTouchesChain(stmt, "math.floor", false)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// statementHasInterveningCallForChain
-// ---------------------------------------------------------------------------
-
-describe("statementHasInterveningCallForChain", () => {
-  it("returns false when no call follows a chain access", () => {
-    // just accessing the chain, no call after
-    const stmt = exprStmt(chain("a", "b"));
-    expect(statementHasInterveningCallForChain(stmt, "a.b", false)).toBe(false);
-  });
-
-  it("returns true when a call follows a chain access in the same statement", () => {
-    // expr statement with binary: a.b + foo() — chain then call
-    const expr = tstl.createBinaryExpression(
-      chain("a", "b"),
-      tstl.createCallExpression(id("foo"), []),
-      tstl.SyntaxKind.AdditionOperator,
-    );
-    const stmt = exprStmt(expr);
-    expect(statementHasInterveningCallForChain(stmt, "a.b", false)).toBe(true);
   });
 });
 
@@ -313,6 +291,287 @@ describe("statementHasUnsafeCallBeforeFirstChainAccess", () => {
     );
     expect(statementHasUnsafeCallBeforeFirstChainAccess(ifStmt, "a.b", false)).toBe(false);
   });
+
+  it("UnaryExpression: visits operand (call in operand precedes chain read)", () => {
+    // return -foo(), a.b  — call in unary operand marks unsafe; then chain read triggers flag.
+    const unary = tstl.createUnaryExpression(
+      tstl.createCallExpression(id("foo"), []),
+      tstl.SyntaxKind.NegationOperator,
+    );
+    const stmt = tstl.createReturnStatement([unary, chain("a", "b")]);
+    expect(statementHasUnsafeCallBeforeFirstChainAccess(stmt, "a.b", false)).toBe(true);
+  });
+
+  it("VariableDeclarationStatement with no right: handles undefined RHS", () => {
+    // local x   (no initializer)
+    const stmt = tstl.createVariableDeclarationStatement(id("x"));
+    expect(statementHasUnsafeCallBeforeFirstChainAccess(stmt, "a.b", false)).toBe(false);
+  });
+
+  it("non-matching chain access does not arm sawFirstChainAccess", () => {
+    // a.b read target; stmt reads other.c — no match → false
+    const stmt = exprStmt(chain("other", "c"));
+    expect(statementHasUnsafeCallBeforeFirstChainAccess(stmt, "a.b", false)).toBe(false);
+  });
+
+  it("FunctionExpression body is always skipped — closures execute later, not inline", () => {
+    // Chain access inside a nested function body must not count: the closure runs later,
+    // so it cannot influence the current statement's evaluation.
+    const funcExpr = tstl.createFunctionExpression(tstl.createBlock([exprStmt(chain("a", "b"))]));
+    const stmt = tstl.createVariableDeclarationStatement(id("f"), funcExpr);
+    expect(statementHasUnsafeCallBeforeFirstChainAccess(stmt, "a.b", false)).toBe(false);
+    expect(statementHasUnsafeCallBeforeFirstChainAccess(stmt, "a.b", true)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// statementHasUnsafeCallAfterFirstChainAccess
+// ---------------------------------------------------------------------------
+
+describe("statementHasUnsafeCallAfterFirstChainAccess", () => {
+  it("returns both flags false when only call present (no chain access)", () => {
+    const stmt = callStmt(id("foo"));
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("returns both flags false when only chain access present (no calls)", () => {
+    const stmt = exprStmt(chain("a", "b"));
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("returns both false when call precedes chain access (pre-order)", () => {
+    // foo() + a.b — call before chain
+    const expr = tstl.createBinaryExpression(
+      tstl.createCallExpression(id("foo"), []),
+      chain("a", "b"),
+      tstl.SyntaxKind.AdditionOperator,
+    );
+    const stmt = exprStmt(expr);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("returns afterFirst=true, betweenAccesses=false when chain then call (one statement)", () => {
+    // DoStatement: { a.b; foo() } — read then call
+    const stmt = tstl.createDoStatement([exprStmt(chain("a", "b")), callStmt(id("foo"))]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: false });
+  });
+
+  it("returns both true when read-call-read in sequence (same statement)", () => {
+    // DoStatement: { a.b; foo(); a.b }
+    const stmt = tstl.createDoStatement([
+      exprStmt(chain("a", "b")),
+      callStmt(id("foo")),
+      exprStmt(chain("a", "b")),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: true });
+  });
+
+  it("returns both false when stdlib call (math.floor) appears after chain", () => {
+    // a.b; math.floor(1); a.b — stdlib call is safe
+    const stmt = tstl.createDoStatement([
+      exprStmt(chain("a", "b")),
+      callStmt(chain("math", "floor"), num(1)),
+      exprStmt(chain("a", "b")),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("returns afterFirst=true when chain in args, call marked after (core bug case)", () => {
+    // foo(a.b) — chain visited during arg traversal, call marked after
+    const callExpr = tstl.createCallExpression(id("foo"), [chain("a", "b")]);
+    const stmt = exprStmt(callExpr);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: false });
+  });
+
+  it("returns both false when chain buried inside FunctionExpression body", () => {
+    // function() a.b; foo(); a.b end — function body is skipped
+    const funcExpr = tstl.createFunctionExpression(
+      tstl.createBlock([exprStmt(chain("a", "b")), callStmt(id("foo")), exprStmt(chain("a", "b"))]),
+    );
+    const stmt = exprStmt(funcExpr);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("returns afterFirst=true for method call after chain", () => {
+    // a.b; obj:method(); a.b — method calls are always unsafe
+    const stmt = tstl.createDoStatement([
+      exprStmt(chain("a", "b")),
+      methodCallStmt(id("obj"), "method"),
+      exprStmt(chain("a", "b")),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: true });
+  });
+
+  it("returns both false when stdlib call appears after chain (to verify non-stdlib filtering)", () => {
+    // string.len is stdlib, so it should NOT arm afterFirst
+    const stmt = tstl.createDoStatement([
+      exprStmt(chain("a", "b")),
+      exprStmt(tstl.createCallExpression(chain("string", "len"), [num(1)])),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it.each([
+    {
+      name: "DoStatement",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createDoStatement([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+    },
+    {
+      name: "IfStatement ifBlock",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createIfStatement(
+          tstl.createBooleanLiteral(true),
+          tstl.createBlock([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+        ),
+    },
+    {
+      name: "IfStatement elseBlock",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createIfStatement(
+          tstl.createBooleanLiteral(true),
+          tstl.createBlock([]),
+          tstl.createBlock([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+        ),
+    },
+    {
+      name: "WhileStatement",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createWhileStatement(
+          tstl.createBlock([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+          tstl.createBooleanLiteral(true),
+        ),
+    },
+    {
+      name: "RepeatStatement",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createRepeatStatement(
+          tstl.createBlock([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+          tstl.createBooleanLiteral(false),
+        ),
+    },
+    {
+      name: "ForStatement",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createForStatement(
+          tstl.createBlock([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+          id("i"),
+          num(1),
+          num(10),
+        ),
+    },
+    {
+      name: "ForInStatement",
+      createStmt: (read: tstl.Expression, call: tstl.Expression, read2: tstl.Expression) =>
+        tstl.createForInStatement(
+          tstl.createBlock([exprStmt(read), exprStmt(call), exprStmt(read2)]),
+          [id("v")],
+          [id("t")],
+        ),
+    },
+  ])("wrapper coverage via $name: returns betweenAccesses=true for read-call-read pattern", ({
+    createStmt,
+  }) => {
+    const stmt = createStmt(
+      chain("a", "b"),
+      tstl.createCallExpression(id("unsafe"), []),
+      chain("a", "b"),
+    );
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: true });
+  });
+
+  it("UnaryExpression: visits operand (chain inside unary)", () => {
+    // return -a.b  → chain access seen, no call → both false
+    const stmt = tstl.createReturnStatement([
+      tstl.createUnaryExpression(chain("a", "b"), tstl.SyntaxKind.NegationOperator),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("ParenthesizedExpression: visits inner expression", () => {
+    // return (a.b); foo(); a.b  →  both true
+    const paren = tstl.createParenthesizedExpression(chain("a", "b"));
+    const stmt = tstl.createDoStatement([
+      exprStmt(paren),
+      callStmt(id("foo")),
+      exprStmt(chain("a", "b")),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: true });
+  });
+
+  it("ConditionalExpression: visits condition, whenTrue, whenFalse", () => {
+    // (a.b) ? foo() : a.b  →  read then call then read
+    const cond = tstl.createConditionalExpression(
+      chain("a", "b"),
+      tstl.createCallExpression(id("foo"), []),
+      chain("a", "b"),
+    );
+    const stmt = tstl.createReturnStatement([cond]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: true });
+  });
+
+  it("VariableDeclarationStatement with no right: handles undefined RHS", () => {
+    const stmt = tstl.createVariableDeclarationStatement(id("x"));
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("AssignmentStatement: inspects RHS for chain access", () => {
+    // x = a.b; (a.b only on RHS)
+    const stmt = tstl.createAssignmentStatement([id("x")], [chain("a", "b")]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("MethodCallExpression before first chain access: flags unchanged", () => {
+    // obj:m(); a.b  → sawFirstChainAccess=false at call → no arming
+    const stmt = tstl.createDoStatement([
+      methodCallStmt(id("obj"), "m"),
+      exprStmt(chain("a", "b")),
+    ]);
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: false, betweenAccesses: false });
+  });
+
+  it("ForStatement with stepExpression: visits step before body", () => {
+    // for i = 1, 10, 2 do a.b; foo(); a.b end
+    const stmt = tstl.createForStatement(
+      tstl.createBlock([exprStmt(chain("a", "b")), callStmt(id("foo")), exprStmt(chain("a", "b"))]),
+      id("i"),
+      num(1),
+      num(10),
+      num(2),
+    );
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: true });
+  });
+
+  it("ExpressionStatement at top level: visits its expression", () => {
+    // Direct ExpressionStatement passed as the top-level statement
+    const stmt = exprStmt(
+      tstl.createBinaryExpression(
+        chain("a", "b"),
+        tstl.createCallExpression(id("foo"), []),
+        tstl.SyntaxKind.AdditionOperator,
+      ),
+    );
+    const result = statementHasUnsafeCallAfterFirstChainAccess(stmt, "a.b");
+    expect(result).toStrictEqual({ afterFirst: true, betweenAccesses: false });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -327,6 +586,11 @@ describe("hasInterveningCallForChain", () => {
       exprStmt(chain("math", "floor")),
     ];
     expect(hasInterveningCallForChain(stmts, "math.floor", true)).toBe(false);
+  });
+
+  it("returns false when no chain is touched by any statement (early exit)", () => {
+    const stmts = [callStmt(id("foo")), exprStmt(id("x"))];
+    expect(hasInterveningCallForChain(stmts, "a.b", true)).toBe(false);
   });
 
   it("returns false when chain appears only once (no span to interleave)", () => {
@@ -404,6 +668,61 @@ describe("hasInterveningCallForChain", () => {
     const stmt0 = tstl.createAssignmentStatement([id("x")], [chain("self", "i")]);
     const stmt1 = tstl.createAssignmentStatement([id("y")], [chain("self", "i")]);
     expect(hasInterveningCallForChain([stmt0, stmt1], "self.i", false)).toBe(false);
+  });
+
+  it("returns true for: return this.bump(this.i) + this.i (call with chain in args, then later read)", () => {
+    // Modeled as: ReturnStatement([BinaryExpression(CallExpression(chain("self","bump"), [chain("self","i")]), chain("self","i"), AdditionOperator)])
+    const callWithChainArg = tstl.createCallExpression(chain("self", "bump"), [chain("self", "i")]);
+    const binExpr = tstl.createBinaryExpression(
+      callWithChainArg,
+      chain("self", "i"),
+      tstl.SyntaxKind.AdditionOperator,
+    );
+    const stmt = tstl.createReturnStatement([binExpr]);
+    expect(hasInterveningCallForChain([stmt], "self.i", false)).toBe(true);
+  });
+
+  it("returns true for: return { x: this.bump(this.i), y: this.i } (table with call and read)", () => {
+    // ReturnStatement([TableExpression([field(x: CallExpression(chain("self","bump"), [chain("self","i")])), field(y: chain("self","i"))])])
+    const callWithChainArg = tstl.createCallExpression(chain("self", "bump"), [chain("self", "i")]);
+    const tableExpr = tstl.createTableExpression([
+      tstl.createTableFieldExpression(callWithChainArg, tstl.createStringLiteral("x")),
+      tstl.createTableFieldExpression(chain("self", "i"), tstl.createStringLiteral("y")),
+    ]);
+    const stmt = tstl.createReturnStatement([tableExpr]);
+    expect(hasInterveningCallForChain([stmt], "self.i", false)).toBe(true);
+  });
+
+  it("returns true for: const x = this.bump(this.i); return [x, this.i] (multi-statement with call then read)", () => {
+    // First statement: VariableDeclarationStatement(id("x"), CallExpression(chain("self","bump"), [chain("self","i")]))
+    // Second statement: ReturnStatement([TableExpression([field(chain("self","i"))])])
+    const callWithChainArg = tstl.createCallExpression(chain("self", "bump"), [chain("self", "i")]);
+    const stmt0 = tstl.createVariableDeclarationStatement(id("x"), callWithChainArg);
+    const tableExpr = tstl.createTableExpression([
+      tstl.createTableFieldExpression(chain("self", "i")),
+    ]);
+    const stmt1 = tstl.createReturnStatement([tableExpr]);
+    expect(hasInterveningCallForChain([stmt0, stmt1], "self.i", false)).toBe(true);
+  });
+
+  it("returns false for: const x = string.len(this.i); return [x, this.i] (stdlib call is safe)", () => {
+    // First statement with stdlib call
+    const stdlibCall = tstl.createCallExpression(chain("string", "len"), [chain("self", "i")]);
+    const stmt0 = tstl.createVariableDeclarationStatement(id("x"), stdlibCall);
+    const tableExpr = tstl.createTableExpression([
+      tstl.createTableFieldExpression(chain("self", "i")),
+    ]);
+    const stmt1 = tstl.createReturnStatement([tableExpr]);
+    expect(hasInterveningCallForChain([stmt0, stmt1], "self.i", false)).toBe(false);
+  });
+
+  it("returns true when a method call precedes the first chain access", () => {
+    // obj:m(); return self.i; return self.i
+    // hasNonStdlibCall finds the method call before first access → unsafe
+    const stmt0 = methodCallStmt(id("obj"), "m");
+    const stmt1 = tstl.createReturnStatement([chain("self", "i")]);
+    const stmt2 = tstl.createReturnStatement([chain("self", "i")]);
+    expect(hasInterveningCallForChain([stmt0, stmt1, stmt2], "self.i", false)).toBe(true);
   });
 });
 
@@ -513,5 +832,133 @@ describe("hasEarlyExit", () => {
   it("returns false for do block without exit", () => {
     const doStmt = tstl.createDoStatement([exprStmt(id("x"))]);
     expect(hasEarlyExit([doStmt])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// statementAssignsToChain
+// ---------------------------------------------------------------------------
+
+describe("statementAssignsToChain", () => {
+  it("returns false for a statement that doesn't mention the chain at all", () => {
+    const stmt = exprStmt(id("unrelated"));
+    expect(statementAssignsToChain(stmt, "a.b")).toBe(false);
+  });
+
+  it("returns true for a top-level AssignmentStatement whose LHS is the chain", () => {
+    // self.i = 1
+    const stmt = tstl.createAssignmentStatement([chain("self", "i")], [num(1)]);
+    expect(statementAssignsToChain(stmt, "self.i")).toBe(true);
+  });
+
+  it("returns true for a top-level AssignmentStatement whose LHS is the chain root identifier", () => {
+    // self = { i = 0 }
+    const stmt = tstl.createAssignmentStatement(
+      [id("self")],
+      [
+        tstl.createTableExpression([
+          tstl.createTableFieldExpression(num(0), tstl.createStringLiteral("i")),
+        ]),
+      ],
+    );
+    expect(statementAssignsToChain(stmt, "self.i")).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "DoStatement",
+      createStmt: (assignStmt: tstl.AssignmentStatement) => tstl.createDoStatement([assignStmt]),
+    },
+    {
+      name: "IfStatement if-branch",
+      createStmt: (assignStmt: tstl.AssignmentStatement) =>
+        tstl.createIfStatement(tstl.createBooleanLiteral(true), tstl.createBlock([assignStmt])),
+    },
+    {
+      name: "IfStatement else-branch",
+      createStmt: (assignStmt: tstl.AssignmentStatement) =>
+        tstl.createIfStatement(
+          tstl.createBooleanLiteral(true),
+          tstl.createBlock([]),
+          tstl.createBlock([assignStmt]),
+        ),
+    },
+    {
+      name: "WhileStatement",
+      createStmt: (assignStmt: tstl.AssignmentStatement) =>
+        tstl.createWhileStatement(tstl.createBlock([assignStmt]), tstl.createBooleanLiteral(true)),
+    },
+    {
+      name: "RepeatStatement",
+      createStmt: (assignStmt: tstl.AssignmentStatement) =>
+        tstl.createRepeatStatement(
+          tstl.createBlock([assignStmt]),
+          tstl.createBooleanLiteral(false),
+        ),
+    },
+    {
+      name: "ForStatement",
+      createStmt: (assignStmt: tstl.AssignmentStatement) =>
+        tstl.createForStatement(tstl.createBlock([assignStmt]), id("i"), num(1), num(10)),
+    },
+    {
+      name: "ForInStatement",
+      createStmt: (assignStmt: tstl.AssignmentStatement) =>
+        tstl.createForInStatement(tstl.createBlock([assignStmt]), [id("v")], [id("t")]),
+    },
+  ])("returns true when nested in $name containing assignment to chain", ({ createStmt }) => {
+    const assignStmt = tstl.createAssignmentStatement([chain("a", "b")], [num(99)]);
+    const stmt = createStmt(assignStmt);
+    expect(statementAssignsToChain(stmt, "a.b")).toBe(true);
+  });
+
+  it("returns true for nested wrapper-in-wrapper (DoStatement containing IfStatement containing assignment)", () => {
+    const assignStmt = tstl.createAssignmentStatement([chain("x", "y")], [num(42)]);
+    const ifStmt = tstl.createIfStatement(
+      tstl.createBooleanLiteral(true),
+      tstl.createBlock([assignStmt]),
+    );
+    const doStmt = tstl.createDoStatement([ifStmt]);
+    expect(statementAssignsToChain(doStmt, "x.y")).toBe(true);
+  });
+
+  it("returns false when assignment is inside a nested FunctionExpression body", () => {
+    // local f = function() a.b = 1 end
+    // The function body should be skipped because closures execute later
+    const assignStmt = tstl.createAssignmentStatement([chain("a", "b")], [num(1)]);
+    const funcExpr = tstl.createFunctionExpression(tstl.createBlock([assignStmt]));
+    const varDecl = tstl.createVariableDeclarationStatement(id("f"), funcExpr);
+    expect(statementAssignsToChain(varDecl, "a.b")).toBe(false);
+  });
+
+  it("returns true for assignment to chain prefix (root identifier) nested in DoStatement", () => {
+    // do a = { b = 2 } end
+    // assigning to root 'a', which is a prefix of "a.b"
+    const assignStmt = tstl.createAssignmentStatement(
+      [id("a")],
+      [
+        tstl.createTableExpression([
+          tstl.createTableFieldExpression(num(2), tstl.createStringLiteral("b")),
+        ]),
+      ],
+    );
+    const doStmt = tstl.createDoStatement([assignStmt]);
+    expect(statementAssignsToChain(doStmt, "a.b")).toBe(true);
+  });
+
+  it("returns false for IfStatement with ifBlock only and no matching write", () => {
+    // Exercises the elseBlock-undefined branch — no elseBlock to descend into.
+    const assignStmt = tstl.createAssignmentStatement([id("other")], [num(0)]);
+    const ifStmt = tstl.createIfStatement(
+      tstl.createBooleanLiteral(true),
+      tstl.createBlock([assignStmt]),
+    );
+    expect(statementAssignsToChain(ifStmt, "a.b")).toBe(false);
+  });
+
+  it("returns false when LHS is a chain whose root differs from the target root", () => {
+    // other.b = 1; target "a.b" — root mismatch, chain prefix mismatch → false
+    const stmt = tstl.createAssignmentStatement([chain("other", "b")], [num(1)]);
+    expect(statementAssignsToChain(stmt, "a.b")).toBe(false);
   });
 });

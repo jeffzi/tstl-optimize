@@ -41,35 +41,6 @@ export function statementTouchesChain(
   return found;
 }
 
-export function statementHasInterveningCallForChain(
-  statement: tstl.Statement,
-  chain: string,
-  shallow: boolean,
-): boolean {
-  let sawChainAccess = false;
-  let hasInterveningCall = false;
-
-  walkStatements([statement], {
-    shallow,
-    expr: (expr: tstl.Expression) => {
-      if (tstl.isCallExpression(expr) || tstl.isMethodCallExpression(expr)) {
-        if (sawChainAccess) {
-          hasInterveningCall = true;
-          return Walk.stop;
-        }
-        return Walk.keep;
-      }
-
-      if (tstl.isTableIndexExpression(expr) && luaPropertyChain(expr) === chain) {
-        sawChainAccess = true;
-      }
-      return Walk.keep;
-    },
-  });
-
-  return hasInterveningCall;
-}
-
 export function statementHasUnsafeCallBeforeFirstChainAccess(
   statement: tstl.Statement,
   chain: string,
@@ -79,10 +50,39 @@ export function statementHasUnsafeCallBeforeFirstChainAccess(
   let foundUnsafePrefix = false;
   let sawFirstChainAccess = false;
 
-  const shouldStopWalking = (): boolean => foundUnsafePrefix || sawFirstChainAccess;
+  walkChainWithUnsafeCalls(statement, chain, shallow, {
+    onChain: () => {
+      if (sawUnsafeCall) {
+        foundUnsafePrefix = true;
+      }
+      sawFirstChainAccess = true;
+    },
+    onCall: (unsafe: boolean) => {
+      if (!unsafe || sawFirstChainAccess) {
+        return;
+      }
+      sawUnsafeCall = true;
+    },
+    shouldStop: () => foundUnsafePrefix || sawFirstChainAccess,
+  });
 
+  return foundUnsafePrefix;
+}
+
+interface ChainWithUnsafeCallsVisitors {
+  onChain: () => void;
+  onCall: (unsafe: boolean) => void;
+  shouldStop: () => boolean;
+}
+
+function walkChainWithUnsafeCalls(
+  statement: tstl.Statement,
+  chain: string,
+  shallow: boolean,
+  visitors: ChainWithUnsafeCallsVisitors,
+): void {
   const visitExpr = (expr: tstl.Expression): void => {
-    if (shouldStopWalking()) {
+    if (visitors.shouldStop()) {
       return;
     }
 
@@ -100,21 +100,23 @@ export function statementHasUnsafeCallBeforeFirstChainAccess(
     if (tstl.isCallExpression(expr)) {
       visitExpr(expr.expression);
       visitExpressionList(expr.params);
-      visitCall(isNonStdlibCall(expr.expression));
+      visitors.onCall(isNonStdlibCall(expr.expression));
       return;
     }
 
     if (tstl.isMethodCallExpression(expr)) {
       visitExpr(expr.prefixExpression);
       visitExpressionList(expr.params);
-      visitCall(true);
+      visitors.onCall(true);
       return;
     }
 
     if (tstl.isTableIndexExpression(expr)) {
       visitExpr(expr.table);
       visitExpr(expr.index);
-      visitChain(expr);
+      if (luaPropertyChain(expr) === chain) {
+        visitors.onChain();
+      }
       return;
     }
 
@@ -147,7 +149,7 @@ export function statementHasUnsafeCallBeforeFirstChainAccess(
 
   const visitExpressionList = (expressions: readonly tstl.Expression[]): void => {
     for (const expr of expressions) {
-      if (shouldStopWalking()) {
+      if (visitors.shouldStop()) {
         return;
       }
       visitExpr(expr);
@@ -156,28 +158,11 @@ export function statementHasUnsafeCallBeforeFirstChainAccess(
 
   const visitStatementList = (statements: readonly tstl.Statement[]): void => {
     for (const stmt of statements) {
-      if (shouldStopWalking()) {
+      if (visitors.shouldStop()) {
         return;
       }
       visitStatement(stmt);
     }
-  };
-
-  const visitChain = (expr: tstl.TableIndexExpression): void => {
-    if (sawFirstChainAccess || luaPropertyChain(expr) !== chain) {
-      return;
-    }
-    if (sawUnsafeCall) {
-      foundUnsafePrefix = true;
-    }
-    sawFirstChainAccess = true;
-  };
-
-  const visitCall = (unsafe: boolean): void => {
-    if (!unsafe || sawFirstChainAccess) {
-      return;
-    }
-    sawUnsafeCall = true;
   };
 
   const visitStatement = (stmt: tstl.Statement): void => {
@@ -243,7 +228,6 @@ export function statementHasUnsafeCallBeforeFirstChainAccess(
   };
 
   visitStatement(statement);
-  return foundUnsafePrefix;
 }
 
 /**
@@ -280,38 +264,129 @@ export function hasCallExpression(statements: tstl.Statement[]): boolean {
 }
 
 /**
+ * Visit a statement in logical (pre-order) traversal: callee/prefix and args before marking
+ * a call as unsafe. Returns flags indicating whether unsafe calls occur after the first chain
+ * access, and whether further accesses occur after any such call.
+ *
+ * - `afterFirst`: true if a non-stdlib call is marked after at least one chain access has been
+ *   visited earlier. MethodCallExpression is always unsafe. FunctionExpression bodies are always
+ *   skipped.
+ * - `betweenAccesses`: true if, after `afterFirst` arms, another chain access is visited.
+ */
+export function statementHasUnsafeCallAfterFirstChainAccess(
+  statement: tstl.Statement,
+  chain: string,
+): { afterFirst: boolean; betweenAccesses: boolean } {
+  let sawFirstChainAccess = false;
+  let sawCallAfterFirst = false;
+  let sawAccessAfterCall = false;
+
+  walkChainWithUnsafeCalls(statement, chain, false, {
+    onChain: () => {
+      if (!sawFirstChainAccess) {
+        sawFirstChainAccess = true;
+      } else if (sawCallAfterFirst) {
+        sawAccessAfterCall = true;
+      }
+    },
+    onCall: (unsafe: boolean) => {
+      if (unsafe && sawFirstChainAccess) {
+        sawCallAfterFirst = true;
+      }
+    },
+    shouldStop: () => false,
+  });
+
+  return { afterFirst: sawCallAfterFirst, betweenAccesses: sawAccessAfterCall };
+}
+
+/**
  * Check if a statement is an assignment where the LHS includes the given chain or a prefix of it.
  * For example, for chain "a.b.c", returns true if LHS is "a.b.c", "a.b", or "a".
+ *
+ * Recursively descends through wrapper statements (DoStatement, IfStatement, WhileStatement,
+ * RepeatStatement, ForStatement, ForInStatement) to find nested assignments. Always skips
+ * FunctionExpression bodies since closures execute later and cannot mutate the chain inline.
  */
 export function statementAssignsToChain(stmt: tstl.Statement, chain: string): boolean {
-  if (!tstl.isAssignmentStatement(stmt)) {
-    return false;
-  }
-
   const chainParts = chain.split(".");
   const prefixes = new Set<string>();
   for (let i = 1; i <= chainParts.length; i++) {
     prefixes.add(chainParts.slice(0, i).join("."));
   }
 
-  for (const lhs of stmt.left) {
-    if (tstl.isIdentifier(lhs)) {
+  const checkAssignmentLhs = (lhsExpr: tstl.Expression): boolean => {
+    if (tstl.isIdentifier(lhsExpr)) {
       const chainRoot = chainParts[0];
-      if (lhs.text === chainRoot) {
+      if (lhsExpr.text === chainRoot) {
         return true;
       }
-      continue;
+      return false;
     }
-    if (!tstl.isTableIndexExpression(lhs)) {
-      continue;
+    if (!tstl.isTableIndexExpression(lhsExpr)) {
+      return false;
     }
-    const lhsChain = luaPropertyChain(lhs);
-    if (lhsChain !== undefined && prefixes.has(lhsChain)) {
-      return true;
-    }
-  }
+    const lhsChain = luaPropertyChain(lhsExpr);
+    return lhsChain !== undefined && prefixes.has(lhsChain);
+  };
 
-  return false;
+  const walkStatementList = (statements: readonly tstl.Statement[]): boolean => {
+    for (const s of statements) {
+      if (walkStatement(s)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const walkStatement = (s: tstl.Statement): boolean => {
+    if (tstl.isAssignmentStatement(s)) {
+      for (const lhs of s.left) {
+        if (checkAssignmentLhs(lhs)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (tstl.isDoStatement(s)) {
+      return walkStatementList(s.statements);
+    }
+
+    if (tstl.isIfStatement(s)) {
+      if (walkStatementList(s.ifBlock.statements)) {
+        return true;
+      }
+      if (s.elseBlock) {
+        if (walkStatementList(getElseBranchStatements(s.elseBlock))) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (tstl.isWhileStatement(s)) {
+      return walkStatementList(s.body.statements);
+    }
+
+    if (tstl.isRepeatStatement(s)) {
+      return walkStatementList(s.body.statements);
+    }
+
+    if (tstl.isForStatement(s)) {
+      return walkStatementList(s.body.statements);
+    }
+
+    if (tstl.isForInStatement(s)) {
+      return walkStatementList(s.body.statements);
+    }
+
+    // Other statement types: VariableDeclarationStatement, ReturnStatement, etc.
+    // These don't directly contain the kinds of assignments we're checking for.
+    return false;
+  };
+
+  return walkStatement(stmt);
 }
 
 /**
@@ -355,17 +430,11 @@ export function hasInterveningCallForChain(
 
   let firstAccessIndex: number | undefined;
   let lastAccessIndex: number | undefined;
+
+  // First pass: record access indices only
   for (const [index, statement] of statements.entries()) {
     if (!statementTouchesChain(statement, chain, shallow)) {
       continue;
-    }
-
-    if (statementHasUnsafeCallBeforeFirstChainAccess(statement, chain, shallow)) {
-      return true;
-    }
-
-    if (statementHasInterveningCallForChain(statement, chain, shallow)) {
-      return true;
     }
 
     if (firstAccessIndex === undefined) {
@@ -374,17 +443,39 @@ export function hasInterveningCallForChain(
     lastAccessIndex = index;
   }
 
-  if (
-    firstAccessIndex === undefined ||
-    lastAccessIndex === undefined ||
-    firstAccessIndex >= lastAccessIndex
-  ) {
+  // No accesses found
+  if (firstAccessIndex === undefined || lastAccessIndex === undefined) {
     return false;
+  }
+
+  // Second pass: check safety at each access statement
+  for (const [index, statement] of statements.entries()) {
+    if (!statementTouchesChain(statement, chain, shallow)) {
+      continue;
+    }
+
+    // Check for unsafe call before first chain access in this statement
+    if (statementHasUnsafeCallBeforeFirstChainAccess(statement, chain, shallow)) {
+      return true;
+    }
+
+    // Check for unsafe call after first chain access in this statement
+    const afterFirstFlags = statementHasUnsafeCallAfterFirstChainAccess(statement, chain);
+    if (afterFirstFlags.betweenAccesses) {
+      // Call after first access, then another access in same statement — unsafe
+      return true;
+    }
+    if (afterFirstFlags.afterFirst && index < lastAccessIndex) {
+      // Call after first access in this statement, and there's a later statement with access
+      return true;
+    }
   }
 
   // Check for non-stdlib calls before the first access — hoisting via unshift() would place
   // the hoisted local above any pre-access call, capturing a potentially stale snapshot if
-  // the call mutates the root. Calls to stdlib functions are known to be safe.
+  // the call mutates the root. Calls to stdlib functions are known to be safe. Runs regardless
+  // of whether reads are single- or multi-statement, since a pre-access call can still mutate
+  // a chain read later in the first-access statement.
   if (hasNonStdlibCall(statements.slice(0, firstAccessIndex))) {
     return true;
   }
@@ -395,6 +486,11 @@ export function hasInterveningCallForChain(
     if (statementAssignsToChain(statements[index], chain)) {
       return true;
     }
+  }
+
+  // Only perform multi-statement intervening checks if there are multiple access statements
+  if (firstAccessIndex >= lastAccessIndex) {
+    return false;
   }
 
   // Check if the first-access statement itself writes the chain. If so, any later read is stale.

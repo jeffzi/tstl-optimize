@@ -2113,6 +2113,132 @@ describe("localizer safety around writes and shadowing", () => {
     expect(lua).toContain("for i = 1, inner do");
     expect(lua).toContain("arr[i] = arr[i] + 1");
   });
+
+  describe("nested wrapper writes before reads are detected (Cycle 1)", () => {
+    const FN_INCLUDE_OBJ = {
+      pluginOptions: {
+        rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 2 } },
+      },
+    };
+
+    it.each([
+      {
+        name: "IfStatement",
+        decls: "",
+        mutation: "if (cond) { obj.foo = 99; }",
+      },
+      {
+        name: "DoStatement (block)",
+        decls: "",
+        mutation: "{ obj.foo = 99; }",
+      },
+      {
+        name: "WhileStatement",
+        decls: "",
+        mutation: "while (cond) { obj.foo = 99; break; }",
+      },
+      {
+        name: "ForStatement",
+        decls: "",
+        mutation: "for (let i = 0; i < 1; i++) { obj.foo = 99; }",
+      },
+      {
+        name: "ForInStatement (for-of)",
+        decls: "declare const items: number[];",
+        mutation: "for (const _ of items) { obj.foo = 99; break; }",
+      },
+      {
+        name: "RepeatStatement (do-while)",
+        decls: "",
+        mutation: "do { obj.foo = 99; break; } while (cond);",
+      },
+    ])("does not hoist when write is nested in $name before reads", ({ decls, mutation }) => {
+      const lua = compile(
+        [
+          "declare const obj: { foo: number };",
+          "declare const cond: boolean;",
+          decls,
+          "function test() {",
+          `  ${mutation}`,
+          "  const a = obj.foo;",
+          "  const b = obj.foo;",
+          "  return a + b;",
+          "}",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        FN_INCLUDE_OBJ,
+      );
+
+      expect(lua).not.toContain("local ____obj_foo");
+    });
+
+    it("does not hoist when nested write precedes a single-statement multi-read", () => {
+      const lua = compile(
+        [
+          "declare const obj: { foo: number };",
+          "declare const cond: boolean;",
+          "function test() {",
+          "  if (cond) { obj.foo = 99; }",
+          "  return [obj.foo, obj.foo];",
+          "}",
+        ].join("\n"),
+        FN_INCLUDE_OBJ,
+      );
+
+      expect(lua).not.toContain("local ____obj_foo");
+    });
+  });
+
+  describe("single-statement mutating calls do not hoist (Cycle 2)", () => {
+    const FN_INCLUDE_THIS = {
+      pluginOptions: {
+        rules: { localizer: { scope: "function" as const, include: ["self"], threshold: 2 } },
+      },
+    };
+
+    const COUNTER_CLASS = [
+      "class Counter {",
+      "  i = 0;",
+      "  bump(x: number) { this.i++; return x; }",
+    ];
+
+    it.each([
+      {
+        desc: "return this.bump(this.i) + this.i",
+        useBody: "return this.bump(this.i) + this.i;",
+      },
+      {
+        desc: "return { x: this.bump(this.i), y: this.i }",
+        useBody: "return { x: this.bump(this.i), y: this.i };",
+      },
+      {
+        desc: "const x = this.bump(this.i); return [x, this.i]",
+        useBody: "const x = this.bump(this.i); return [x, this.i];",
+      },
+    ])("does not hoist: $desc", ({ useBody }) => {
+      const lua = compile(
+        [...COUNTER_CLASS, `  use() { ${useBody} }`, "}"].join("\n"),
+        FN_INCLUDE_THIS,
+      );
+
+      expect(lua).not.toContain("local ____self_i");
+    });
+
+    it("still hoists when a stdlib call takes the chain as argument: Math.floor(this.i)", () => {
+      const lua = compile(
+        [
+          "class Counter {",
+          "  i = 0;",
+          "  use() { const x = Math.floor(this.i); return [x, this.i]; }",
+          "}",
+        ].join("\n"),
+        FN_INCLUDE_THIS,
+      );
+
+      expect(lua).toContain("local ____self_i = self.i");
+    });
+  });
 });
 
 describe("localizer root filter configuration", () => {
@@ -2304,13 +2430,12 @@ describe("localizer property chain hoisting in various contexts", () => {
     expect(lua).toContain("local ____config_width = config.width");
   });
 
-  it("hoists chains in function call arguments across statements", () => {
+  it("hoists chains in stdlib function call arguments across statements", () => {
     const lua = compile(
       [
         "declare const config: { physics: { gravity: number } };",
-        "function applyGravity(g: number) { return g; }",
-        "const g1 = applyGravity(config.physics.gravity);",
-        "const g2 = applyGravity(config.physics.gravity);",
+        "const g1 = Math.floor(config.physics.gravity);",
+        "const g2 = Math.floor(config.physics.gravity);",
       ].join("\n"),
       {
         pluginOptions: {
