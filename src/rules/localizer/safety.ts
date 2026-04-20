@@ -1,7 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { getElseBranchStatements } from "../../ast/lua-ast";
-import { walkStatements } from "../../ast/lua-walker";
+import { Walk, walkStatements } from "../../ast/lua-walker";
 import { luaPropertyChain } from "../../ast/scope";
 
 /** Lua stdlib globals that are safe to hoist (flat function tables, no metatables). */
@@ -26,15 +26,16 @@ export function statementTouchesChain(
   let found = false;
   walkStatements([statement], {
     shallow,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (!tstl.isTableIndexExpression(expr)) {
-        return;
+        return Walk.keep;
       }
 
       if (luaPropertyChain(expr) === chain) {
         found = true;
-        control.stop();
+        return Walk.stop;
       }
+      return Walk.keep;
     },
   });
   return found;
@@ -50,18 +51,19 @@ export function statementHasInterveningCallForChain(
 
   walkStatements([statement], {
     shallow,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isCallExpression(expr) || tstl.isMethodCallExpression(expr)) {
         if (sawChainAccess) {
           hasInterveningCall = true;
-          control.stop();
+          return Walk.stop;
         }
-        return;
+        return Walk.keep;
       }
 
       if (tstl.isTableIndexExpression(expr) && luaPropertyChain(expr) === chain) {
         sawChainAccess = true;
       }
+      return Walk.keep;
     },
   });
 
@@ -266,14 +268,50 @@ export function hasCallExpression(statements: tstl.Statement[]): boolean {
   let found = false;
   walkStatements(statements, {
     shallow: true,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isCallExpression(expr) || tstl.isMethodCallExpression(expr)) {
         found = true;
-        control.stop();
+        return Walk.stop;
       }
+      return Walk.keep;
     },
   });
   return found;
+}
+
+/**
+ * Check if a statement is an assignment where the LHS includes the given chain or a prefix of it.
+ * For example, for chain "a.b.c", returns true if LHS is "a.b.c", "a.b", or "a".
+ */
+export function statementAssignsToChain(stmt: tstl.Statement, chain: string): boolean {
+  if (!tstl.isAssignmentStatement(stmt)) {
+    return false;
+  }
+
+  const chainParts = chain.split(".");
+  const prefixes = new Set<string>();
+  for (let i = 1; i <= chainParts.length; i++) {
+    prefixes.add(chainParts.slice(0, i).join("."));
+  }
+
+  for (const lhs of stmt.left) {
+    if (tstl.isIdentifier(lhs)) {
+      const chainRoot = chainParts[0];
+      if (lhs.text === chainRoot) {
+        return true;
+      }
+      continue;
+    }
+    if (!tstl.isTableIndexExpression(lhs)) {
+      continue;
+    }
+    const lhsChain = luaPropertyChain(lhs);
+    if (lhsChain !== undefined && prefixes.has(lhsChain)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -284,17 +322,18 @@ function hasNonStdlibCall(statements: tstl.Statement[]): boolean {
   let found = false;
   walkStatements(statements, {
     shallow: true,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isCallExpression(expr)) {
         if (isNonStdlibCall(expr.expression)) {
           found = true;
-          control.stop();
+          return Walk.stop;
         }
       } else if (tstl.isMethodCallExpression(expr)) {
         // Method calls like obj:method() — always unsafe (could mutate obj)
         found = true;
-        control.stop();
+        return Walk.stop;
       }
+      return Walk.keep;
     },
   });
   return found;
@@ -350,8 +389,19 @@ export function hasInterveningCallForChain(
     return true;
   }
 
+  // Check for chain mutations before the first read — if the chain is assigned before any
+  // read, hoisting would snapshot the pre-mutation value and produce incorrect results.
+  for (let index = 0; index < firstAccessIndex; index += 1) {
+    if (statementAssignsToChain(statements[index], chain)) {
+      return true;
+    }
+  }
+
   for (let index = firstAccessIndex + 1; index < lastAccessIndex; index += 1) {
     if (hasCallExpression([statements[index]])) {
+      return true;
+    }
+    if (statementAssignsToChain(statements[index], chain)) {
       return true;
     }
   }

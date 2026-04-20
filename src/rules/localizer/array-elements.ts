@@ -1,6 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { walkStatements } from "../../ast/lua-walker";
+import { Walk, walkStatements } from "../../ast/lua-walker";
 import { collectArrayElementAccesses, collectScopeInfo } from "../../ast/scope";
 import { allocateHoistName, mergeNameSets } from "./hoist";
 import { hasCallExpression, hasEarlyExit } from "./safety";
@@ -29,15 +29,15 @@ export function replaceArrayElements(
 ): void {
   walkStatements(statements, {
     shallow: true,
-    expr: (expr, replace, control) => {
+    expr: (expr: tstl.Expression) => {
       const baseName = getLocalizedArrayBaseName(expr, loopVarNames);
-      if (!baseName) return;
+      if (!baseName) return Walk.keep;
 
       const ident = hoisted.get(baseName);
       if (ident) {
-        replace(tstl.cloneIdentifier(ident));
-        control.skip();
+        return Walk.replace(tstl.cloneIdentifier(ident));
       }
+      return Walk.keep;
     },
     stmt: (stmt, control) => {
       if (

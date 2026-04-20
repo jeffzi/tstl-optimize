@@ -2,7 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { getElseBranchStatements } from "../../ast/lua-ast";
-import { walkStatements } from "../../ast/lua-walker";
+import { Walk, walkStatements } from "../../ast/lua-walker";
 import { collectScopeInfo } from "../../ast/scope";
 import type { LocalizerConfig, RuleFactory } from "../../config";
 import { resolveLocalizerConfig } from "../../config";
@@ -130,7 +130,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
 
   walkStatements(statements, {
     shallow: true,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isFunctionExpression(expr)) {
         const paramNames = new Set(expr.params?.filter(tstl.isIdentifier).map((p) => p.text));
         const functionReservedNames = mergeNameSets(scopeReservedNames, paramNames);
@@ -147,8 +147,9 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
           ...ctx,
           reservedNames: functionReservedNames,
         });
-        control.skip();
+        return Walk.skip;
       }
+      return Walk.keep;
     },
   });
 
@@ -179,8 +180,11 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
           context,
           scopeReservedNames,
           isRootAllowed,
+          undefined,
+          undefined,
+          stmt,
         );
-        processFunctionBodies(elseBranchStatements, ctx);
+        processFunctionBodies(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)

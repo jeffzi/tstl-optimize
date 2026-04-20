@@ -2,7 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { getElseBranchStatements, isLuaRhsPure } from "../../ast/lua-ast";
-import { walkStatements } from "../../ast/lua-walker";
+import { Walk, walkStatements } from "../../ast/lua-walker";
 import type { RuleFactory } from "../../config";
 import { collectReadSymbols, findFirstAccessKind } from "./access";
 
@@ -107,11 +107,12 @@ function eliminateDeadLocals(
 function recurseIntoNestedScopes(statements: tstl.Statement[]): void {
   walkStatements(statements, {
     shallow: true,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isFunctionExpression(expr)) {
         eliminateDeadLocals(expr.body.statements);
-        control.skip();
+        return Walk.skip;
       }
+      return Walk.keep;
     },
   });
 

@@ -1,20 +1,21 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { walkStatements } from "../ast/lua-walker";
+import { type ExprAction, Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
 interface AnalysisResult {
-  replacements: Array<() => void>;
+  targets: Set<tstl.BinaryExpression>;
   blocked: boolean;
 }
 
 function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
-  const replacements: Array<() => void> = [];
+  const targets = new Set<tstl.BinaryExpression>();
   let blocked = false;
 
+  // Pass 1: analyze
   walkStatements(body.statements, {
-    expr: (expr, replace, control) => {
+    expr: (expr: tstl.Expression): ExprAction => {
       // var + 1 or 1 + var → rebaseable
       if (tstl.isBinaryExpression(expr) && expr.operator === tstl.SyntaxKind.AdditionOperator) {
         const lIsVar = tstl.isIdentifier(expr.left) && expr.left.text === varName;
@@ -22,23 +23,23 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
         const lIsOne = tstl.isNumericLiteral(expr.left) && expr.left.value === 1;
         const rIsOne = tstl.isNumericLiteral(expr.right) && expr.right.value === 1;
         if ((lIsVar && rIsOne) || (lIsOne && rIsVar)) {
-          replacements.push(() => replace(tstl.createIdentifier(varName)));
-          control.skip();
-          return;
+          targets.add(expr);
+          return Walk.skip;
         }
       }
 
       // Bare identifier reference → blocks rebase
       if (tstl.isIdentifier(expr) && expr.text === varName) {
         blocked = true;
-        control.stop();
-        return;
+        return Walk.stop;
       }
 
       // FunctionExpression: skip body if param shadows the variable
       if (tstl.isFunctionExpression(expr) && expr.params?.some((p) => p.text === varName)) {
-        control.skip();
+        return Walk.skip;
       }
+
+      return Walk.keep;
     },
     stmt: (stmt, control) => {
       // Assignment or local declaration targeting the control variable → blocks rebase
@@ -65,7 +66,22 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
     },
   });
 
-  return { replacements, blocked };
+  return { targets, blocked };
+}
+
+function commitReplacements(
+  body: tstl.Block,
+  targets: Set<tstl.BinaryExpression>,
+  varName: string,
+): void {
+  walkStatements(body.statements, {
+    expr: (expr: tstl.Expression): ExprAction => {
+      if (tstl.isBinaryExpression(expr) && targets.has(expr)) {
+        return Walk.replace(tstl.createIdentifier(varName));
+      }
+      return Walk.keep;
+    },
+  });
 }
 
 function incrementLimit(limit: tstl.Expression): tstl.Expression {
@@ -116,15 +132,13 @@ export const createVisitors: RuleFactory = (_checker, _config) => ({
     }
 
     const varName = forStmt.controlVariable.text;
-    const { replacements, blocked } = analyzeBody(forStmt.body, varName);
-    if (blocked || replacements.length === 0) return result;
+    const { targets, blocked } = analyzeBody(forStmt.body, varName);
+    if (blocked || targets.size === 0) return result;
 
     // Rebase: init 0→1, limit +1, replace all var+1 with bare var
     forStmt.controlVariableInitializer = tstl.createNumericLiteral(1);
     forStmt.limitExpression = incrementLimit(forStmt.limitExpression);
-    for (const apply of replacements) {
-      apply();
-    }
+    commitReplacements(forStmt.body, targets, varName);
 
     return result;
   },

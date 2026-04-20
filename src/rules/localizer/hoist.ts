@@ -1,8 +1,13 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { getElseBranchStatements } from "../../ast/lua-ast";
-import { walkStatements } from "../../ast/lua-walker";
-import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../ast/scope";
+import { getElseBranchStatements, getMutableElseBranchStatements } from "../../ast/lua-ast";
+import { Walk, walkStatements } from "../../ast/lua-walker";
+import {
+  buildChainExpression,
+  collectScopeInfo,
+  isRootShadowedInActiveScopes,
+  luaPropertyChain,
+} from "../../ast/scope";
 import { hasInterveningCallForChain, hasTopLevelChainAccess, STDLIB_ROOTS } from "./safety";
 
 export function mergeNameSets(...sets: Array<ReadonlySet<string> | undefined>): Set<string> {
@@ -49,25 +54,22 @@ export function replaceChains(
 
   walkStatements(statements, {
     shallow,
-    expr: (expr, replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
           const root = chain.split(".")[0];
-          // Skip replacement only if the root is shadowed by the IMMEDIATE parent function's parameter
-          // (i.e., the top of the shadow stack). This prevents retargeting shadowed reads to outer scope.
-          const immediateShadow = shadowStack[shadowStack.length - 1];
-          if (immediateShadow?.has(root)) {
-            // Root is shadowed in the immediate parent scope — don't replace
-            return;
+          if (isRootShadowedInActiveScopes(root, shadowStack)) {
+            // Root is shadowed by an active ancestor function parameter — don't replace
+            return Walk.keep;
           }
           const ident = hoisted.get(chain);
           if (ident) {
-            replace(tstl.cloneIdentifier(ident));
-            control.skip();
+            return Walk.replace(tstl.cloneIdentifier(ident));
           }
         }
       }
+      return Walk.keep;
     },
     funcEnter: (expr: tstl.FunctionExpression) => {
       const params = new Set<string>();
@@ -98,6 +100,7 @@ export function hoistScope(
   isRootAllowed?: (root: string) => boolean,
   outDecls?: tstl.VariableDeclarationStatement[],
   extraBoundNames?: ReadonlySet<string>,
+  elseBranchOwner?: tstl.IfStatement,
 ): Set<string> {
   const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
   const unavailableNames = mergeNameSets(scopeDefs, reservedNames);
@@ -141,8 +144,11 @@ export function hoistScope(
   }
 
   if (toHoist.size > 0) {
-    replaceChains(statements, toHoist, shallow);
-    if (inBodyDecls.length > 0) statements.unshift(...inBodyDecls);
+    const targetStatements = elseBranchOwner
+      ? getMutableElseBranchStatements(elseBranchOwner)
+      : statements;
+    replaceChains(targetStatements, toHoist, shallow);
+    if (inBodyDecls.length > 0) targetStatements.unshift(...inBodyDecls);
     if (outDecls) outDecls.push(...liftableDecls);
   }
 
@@ -176,6 +182,7 @@ export function hoistScope(
             isRootAllowed,
             outDecls,
             extraBoundNames,
+            stmt,
           );
         }
       }
