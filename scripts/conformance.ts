@@ -12,7 +12,7 @@ import { resolve } from "node:path";
 import { argv, env, exit } from "node:process";
 import { fileURLToPath } from "node:url";
 
-const TSTL_TAG = "v1.33.2";
+const TSTL_TAG = "v1.34.0";
 const TSTL_REPO = "https://github.com/TypeScriptToLua/TypeScriptToLua.git";
 
 const projectRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
