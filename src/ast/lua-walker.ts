@@ -6,11 +6,24 @@ export interface TraversalControl {
   stop(): void;
 }
 
-type ExprVisitor = (
-  expr: tstl.Expression,
-  replace: (n: tstl.Expression) => void,
-  control: TraversalControl,
-) => void;
+// Walk action API (D-prime)
+export const Walk = {
+  keep: Object.freeze({ kind: "keep" } as const),
+  skip: Object.freeze({ kind: "skip" } as const),
+  stop: Object.freeze({ kind: "stop" } as const),
+  replace: (node: tstl.Expression) => ({ kind: "replace", node }) as const,
+  replaceChildren: (node: tstl.Expression) => ({ kind: "replaceChildren", node }) as const,
+};
+
+export type ExprAction =
+  | typeof Walk.keep
+  | typeof Walk.skip
+  | typeof Walk.stop
+  | ReturnType<typeof Walk.replace>
+  | ReturnType<typeof Walk.replaceChildren>;
+
+/** D-prime expr visitor — returns an ExprAction to control traversal. */
+export type ExprVisitor = (expr: tstl.Expression) => ExprAction;
 
 type StmtVisitor = (stmt: tstl.Statement, control: TraversalControl) => void;
 
@@ -53,10 +66,34 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
   };
 
   function visitExpr(expr: tstl.Expression, replace: (n: tstl.Expression) => void): void {
-    skipped = false;
-    exprHook(expr, replace, control);
-    if (stopped || skipped) return;
-    recurseExpr(expr);
+    const action = exprHook(expr);
+    switch (action.kind) {
+      case "stop":
+        stopped = true;
+        return;
+      case "skip":
+        return;
+      case "replace":
+        if (action.node === expr) {
+          throw new Error(
+            "Walk.replace(expr) where node === expr is not allowed; use Walk.keep or Walk.skip instead",
+          );
+        }
+        replace(action.node);
+        return;
+      case "replaceChildren":
+        if (action.node === expr) {
+          throw new Error(
+            "Walk.replaceChildren(expr) where node === expr is not allowed; use Walk.keep or Walk.skip instead",
+          );
+        }
+        replace(action.node);
+        recurseExpr(action.node);
+        return;
+      case "keep":
+        recurseExpr(expr);
+        return;
+    }
   }
 
   function recurseExpr(expr: tstl.Expression): void {
@@ -178,7 +215,9 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
           });
         } else if (tstl.isIdentifier(lhs)) {
           visitExpr(lhs, (_n) => {
-            // No-op replace for identifier LHS (walker just needs to visit it)
+            throw new Error(
+              "walkStatements: Identifier LHS of AssignmentStatement is not replaceable; visitor must return Walk.keep or Walk.skip instead of Walk.replace / Walk.replaceChildren",
+            );
           });
         }
       }
@@ -243,9 +282,11 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
       if (stopped) return;
       walkStmts(stmt.body.statements);
     } else if (tstl.isReturnStatement(stmt)) {
-      for (let i = 0; i < stmt.expressions.length && !stopped; i++) {
-        visitExpr(stmt.expressions[i], (n) => {
-          stmt.expressions[i] = n;
+      const { expressions } = stmt;
+      if (!expressions) return;
+      for (let i = 0; i < expressions.length && !stopped; i++) {
+        visitExpr(expressions[i], (n) => {
+          expressions[i] = n;
         });
       }
     } else if (tstl.isExpressionStatement(stmt)) {

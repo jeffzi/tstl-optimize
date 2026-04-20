@@ -1,6 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { type TraversalControl, walkStatements } from "./lua-walker";
+import { type TraversalControl, Walk, walkStatements } from "./lua-walker";
 
 /** Build a dotted chain string from a Lua TableIndexExpression. */
 export function luaPropertyChain(node: tstl.TableIndexExpression): string | undefined {
@@ -27,6 +27,13 @@ export interface ScopeInfo {
   scopeDefs: Set<string>;
 }
 
+export function isRootShadowedInActiveScopes(
+  root: string,
+  shadowStack: ReadonlyArray<ReadonlySet<string>>,
+): boolean {
+  return shadowStack.some((shadowFrame) => shadowFrame.has(root));
+}
+
 /**
  * Walk a statement list in a single pass, collecting both:
  * - all unique TableIndexExpression chains and their counts (skips sub-expressions of matched chains)
@@ -47,18 +54,13 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
   const hooks = {
     shallow,
     guardDepth: 0,
-    expr: (
-      expr: tstl.Expression,
-      _replace: (n: tstl.Expression) => void,
-      control: TraversalControl,
-    ) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
           const root = chain.split(".")[0];
-          // Check if root is shadowed at current depth
-          const isShadowed =
-            shadowStack.length > 0 && shadowStack[shadowStack.length - 1].has(root);
+          const isShadowed = isRootShadowedInActiveScopes(root, shadowStack);
+          const immediateShadow = shadowStack[shadowStack.length - 1]?.has(root) ?? false;
 
           // Only count unguarded chains at every scope. Guarded accesses (inside
           // if/else branches, &&/|| RHS, ternary branches) would be hoisted ABOVE
@@ -66,28 +68,39 @@ export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean)
           // Branch-local hoisting happens via recursive hoistScope calls on each
           // branch's statement list from the caller.
           if (hooks.guardDepth === 0) {
-            if (isShadowed && shadowStack.length > 0) {
+            if (immediateShadow) {
               // Inside a nested function with shadowing param — mark chain as dangerous
               // (has reads at both outer and inner scope with shadowing)
               shadowedChains.add(chain);
-            } else {
+            } else if (!isShadowed) {
               // Either at module scope or shadowing doesn't apply — count normally
               chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
             }
           }
-          control.skip();
+          return Walk.skip;
         }
       }
+      return Walk.keep;
     },
     stmt: (stmt: tstl.Statement) => {
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
+        const isFunctionDef =
+          tstl.isAssignmentStatement(stmt) &&
+          stmt.right.length === 1 &&
+          tstl.isFunctionExpression(stmt.right[0]);
+
         for (const lhs of stmt.left) {
           if (tstl.isIdentifier(lhs)) {
             scopeDefs.add(lhs.text);
           } else if (tstl.isTableIndexExpression(lhs)) {
-            const chain = luaPropertyChain(lhs);
-            if (chain !== undefined) {
-              scopeDefs.add(chain);
+            // Only add table index chains if this is a function definition (e.g., module.fn = function() end).
+            // Regular assignments like obj.foo.bar = 99 mutate existing values and should not prevent
+            // hoisting of reads that occur before the assignment — the safety check handles that.
+            if (isFunctionDef || tstl.isVariableDeclarationStatement(stmt)) {
+              const chain = luaPropertyChain(lhs);
+              if (chain !== undefined) {
+                scopeDefs.add(chain);
+              }
             }
           }
         }
@@ -165,11 +178,7 @@ export function collectArrayElementAccesses(
   const hooks = {
     shallow,
     guardDepth: 0,
-    expr: (
-      expr: tstl.Expression,
-      _replace: (n: tstl.Expression) => void,
-      control: TraversalControl,
-    ) => {
+    expr: (expr: tstl.Expression) => {
       if (
         tstl.isTableIndexExpression(expr) &&
         tstl.isIdentifier(expr.table) &&
@@ -180,8 +189,9 @@ export function collectArrayElementAccesses(
           trackLoopVar(expr.table.text, expr.index.text);
           counts.set(expr.table.text, (counts.get(expr.table.text) ?? 0) + 1);
         }
-        control.skip();
+        return Walk.skip;
       }
+      return Walk.keep;
     },
     stmt: (stmt: tstl.Statement, control: TraversalControl) => {
       if (

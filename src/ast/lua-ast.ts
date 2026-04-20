@@ -57,3 +57,21 @@ export function getElseBranchStatements(
 ): readonly tstl.Statement[] {
   return tstl.isIfStatement(elseBlock) ? [elseBlock] : elseBlock.statements;
 }
+
+/**
+ * Returns a mutable statement list for an if-statement's else branch.
+ *
+ * Bare `elseif` nodes are wrapped in a real Block so callers can prepend
+ * declarations before the nested if statement and have those edits persist.
+ */
+export function getMutableElseBranchStatements(stmt: tstl.IfStatement): tstl.Statement[] {
+  const { elseBlock } = stmt;
+  if (!elseBlock) {
+    throw new Error("getMutableElseBranchStatements requires an elseBlock");
+  }
+  if (tstl.isIfStatement(elseBlock)) {
+    stmt.elseBlock = tstl.createBlock([elseBlock]);
+    return stmt.elseBlock.statements;
+  }
+  return elseBlock.statements;
+}
