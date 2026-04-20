@@ -397,6 +397,14 @@ export function hasInterveningCallForChain(
     }
   }
 
+  // Check if the first-access statement itself writes the chain. If so, any later read is stale.
+  if (statementAssignsToChain(statements[firstAccessIndex], chain)) {
+    return true;
+  }
+
+  // Check for intervening calls and mutations between first and last access.
+  // Calls: start at firstAccessIndex + 1 (first-access statement's calls already vetted).
+  // Assignments: start at firstAccessIndex + 1 (already checked above).
   for (let index = firstAccessIndex + 1; index < lastAccessIndex; index += 1) {
     if (hasCallExpression([statements[index]])) {
       return true;

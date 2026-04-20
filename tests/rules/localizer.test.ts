@@ -589,6 +589,23 @@ describe("localizer", () => {
       expect(lua).not.toContain("local ____obj_a = obj.a");
     });
 
+    it("does not hoist a chain that is mutated by the first-access statement", () => {
+      const lua = compile(
+        [
+          "const it = {",
+          "  i: -1,",
+          "  [Symbol.iterator]() { return this; },",
+          "  next() {",
+          "    ++this.i;",
+          "    return { value: 2 ** this.i, done: this.i === 9 };",
+          "  },",
+          "};",
+          "const out = [...it];",
+        ].join("\n"),
+      );
+      expect(lua).not.toMatch(/local ____self_i\s*=/);
+    });
+
     it("does nothing when rule is disabled", () => {
       const lua = compile(
         "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x + 1);",

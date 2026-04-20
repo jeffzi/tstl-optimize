@@ -362,6 +362,49 @@ describe("hasInterveningCallForChain", () => {
     const stmts = [exprStmt(chain("a", "b")), exprStmt(chain("a", "b"))];
     expect(hasInterveningCallForChain(stmts, "a.b", true)).toBe(false);
   });
+
+  it("returns true when first-access statement writes the chain, later read follows", () => {
+    // stmt0: self.i = self.i + 1  (read on RHS, write on LHS — same chain)
+    // stmt1: return { value: 2 ^ self.i } (read only)
+    // Expected: true because the write in stmt0 makes subsequent reads unsafe
+    const chainRef = chain("self", "i");
+    const readAndAdd = tstl.createBinaryExpression(
+      chainRef,
+      num(1),
+      tstl.SyntaxKind.AdditionOperator,
+    );
+    const stmt0 = tstl.createAssignmentStatement([chainRef], [readAndAdd]);
+    const stmt1 = tstl.createReturnStatement([
+      tstl.createTableExpression([
+        tstl.createTableFieldExpression(
+          tstl.createBinaryExpression(num(2), chain("self", "i"), tstl.SyntaxKind.PowerOperator),
+          tstl.createStringLiteral("value"),
+        ),
+      ]),
+    ]);
+    expect(hasInterveningCallForChain([stmt0, stmt1], "self.i", false)).toBe(true);
+  });
+
+  it("returns false when write is at the last-access position (no later reads)", () => {
+    // stmt0: x = self.i (read only)
+    // stmt1: self.i = self.i + 1 (read+write, but LAST access — no later reads)
+    // Expected: false because there are no reads after the write
+    const chainRef = chain("self", "i");
+    const readAndAdd = tstl.createBinaryExpression(
+      chainRef,
+      num(1),
+      tstl.SyntaxKind.AdditionOperator,
+    );
+    const stmt0 = tstl.createAssignmentStatement([id("x")], [chainRef]);
+    const stmt1 = tstl.createAssignmentStatement([chainRef], [readAndAdd]);
+    expect(hasInterveningCallForChain([stmt0, stmt1], "self.i", false)).toBe(false);
+  });
+
+  it("returns false when pure reads only (regression guard)", () => {
+    const stmt0 = tstl.createAssignmentStatement([id("x")], [chain("self", "i")]);
+    const stmt1 = tstl.createAssignmentStatement([id("y")], [chain("self", "i")]);
+    expect(hasInterveningCallForChain([stmt0, stmt1], "self.i", false)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
