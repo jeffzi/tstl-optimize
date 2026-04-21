@@ -14,6 +14,10 @@ function id(text: string, symbolId?: number, originalName?: string): tstl.Identi
   );
 }
 
+function bareReturnStatement(): tstl.ReturnStatement {
+  return Reflect.apply(tstl.createReturnStatement, undefined, []);
+}
+
 function assertNode<T extends tstl.Node>(
   node: tstl.Node,
   guard: (n: tstl.Node) => n is T,
@@ -116,6 +120,22 @@ describe("deepCloneExpression", () => {
     expect(cloned).not.toBe(funcExpr);
     expect(cloned.body).not.toBe(funcExpr.body);
     expect(cloned.body.statements[0]).not.toBe(bodyStmt);
+    expect(cloned).toStrictEqual(funcExpr);
+  });
+
+  it("clones FunctionExpression with bare return in body", () => {
+    const bodyStmt = bareReturnStatement();
+    const body = tstl.createBlock([bodyStmt]);
+    const funcExpr = tstl.createFunctionExpression(body);
+
+    const cloned = deepCloneExpression(funcExpr);
+    assertNode(cloned, tstl.isFunctionExpression);
+    assertNode(cloned.body.statements[0], tstl.isReturnStatement);
+
+    expect(cloned).not.toBe(funcExpr);
+    expect(cloned.body).not.toBe(funcExpr.body);
+    expect(cloned.body.statements[0]).not.toBe(bodyStmt);
+    expect(cloned.body.statements[0].expressions).toBeUndefined();
     expect(cloned).toStrictEqual(funcExpr);
   });
 
@@ -279,6 +299,28 @@ describe("deepCloneStatement", () => {
     const cloned = deepCloneStatement(stmt);
     expect(cloned).not.toBe(stmt);
     expect(cloned).toStrictEqual(stmt);
+  });
+
+  it.each([
+    {
+      name: "ReturnStatement",
+      stmt: tstl.createReturnStatement([id("x")]),
+    },
+    {
+      name: "AssignmentStatement",
+      stmt: tstl.createAssignmentStatement([id("x")], [id("y")]),
+    },
+  ])("preserves leadingComments and trailingComments on $name clone", ({ stmt }) => {
+    stmt.leadingComments = ["-- leading single", ["-- leading", "-- multiline"]];
+    stmt.trailingComments = [["-- trailing", "-- multiline"], "-- trailing single"];
+
+    const cloned = deepCloneStatement(stmt);
+
+    expect(cloned).not.toBe(stmt);
+    expect(cloned.leadingComments).toStrictEqual(stmt.leadingComments);
+    expect(cloned.trailingComments).toStrictEqual(stmt.trailingComments);
+    expect(cloned.leadingComments).not.toBe(stmt.leadingComments);
+    expect(cloned.trailingComments).not.toBe(stmt.trailingComments);
   });
 
   it.each([

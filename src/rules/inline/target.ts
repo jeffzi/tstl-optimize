@@ -1,6 +1,7 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 
+// ScopeType.Function = 2 (not re-exported from the public TSTL API)
 export const FUNCTION_SCOPE = 2 as Parameters<tstl.TransformationContext["pushScope"]>[0];
 
 export interface ExpressionInlineTarget {

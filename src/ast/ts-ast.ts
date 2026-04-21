@@ -48,7 +48,6 @@ export function hasSideEffects(
       case ts.SyntaxKind.NonNullExpression:
       case ts.SyntaxKind.VoidExpression:
       case ts.SyntaxKind.TypeOfExpression:
-      case ts.SyntaxKind.SpreadElement:
         current = (
           current as
             | ts.AssertionExpression
@@ -57,9 +56,11 @@ export function hasSideEffects(
             | ts.NonNullExpression
             | ts.VoidExpression
             | ts.TypeOfExpression
-            | ts.SpreadElement
         ).expression;
         continue;
+
+      case ts.SyntaxKind.SpreadElement:
+        return true;
 
       case ts.SyntaxKind.PropertyAccessExpression:
         // Property reads can invoke getters, so duplicating them is not semantics-preserving.
@@ -140,8 +141,7 @@ export function hasSideEffects(
               queue.push(child.initializer);
               break;
             case ts.SyntaxKind.SpreadAssignment:
-              queue.push(child.expression);
-              break;
+              return true;
             // Shorthand ({x}), methods, getters, setters — defining these is pure.
             // Computed keys on any of them are already handled above.
             case ts.SyntaxKind.ShorthandPropertyAssignment:

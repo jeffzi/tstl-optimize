@@ -2,7 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { walkStatements } from "../../src/ast/lua-walker";
+import { Walk, walkStatements } from "../../src/ast/lua-walker";
 import { createVisitors } from "../../src/rules/math-intrinsics";
 import { compile, normalizeLua } from "../helpers";
 
@@ -46,6 +46,7 @@ function collectExpressionReferences(expression: tstl.Expression): tstl.Expressi
   walkStatements([tstl.createExpressionStatement(expression)], {
     expr: (node) => {
       refs.push(node);
+      return Walk.keep;
     },
   });
   return refs;

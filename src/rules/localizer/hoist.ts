@@ -1,7 +1,13 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { walkStatements } from "../../ast/lua-walker";
-import { buildChainExpression, collectScopeInfo, luaPropertyChain } from "../../ast/scope";
+import { getElseBranchStatements, getMutableElseBranchStatements } from "../../ast/lua-ast";
+import { Walk, walkStatements } from "../../ast/lua-walker";
+import {
+  buildChainExpression,
+  collectScopeInfo,
+  isRootShadowedInActiveScopes,
+  luaPropertyChain,
+} from "../../ast/scope";
 import { hasInterveningCallForChain, hasTopLevelChainAccess, STDLIB_ROOTS } from "./safety";
 
 export function mergeNameSets(...sets: Array<ReadonlySet<string> | undefined>): Set<string> {
@@ -40,23 +46,42 @@ function isAnyPrefixBound(chain: string, scopeDefs: ReadonlySet<string>): boolea
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
 export function replaceChains(
-  statements: tstl.Statement[],
+  statements: readonly tstl.Statement[],
   hoisted: Map<string, tstl.Identifier>,
   shallow: boolean,
 ): void {
+  const shadowStack: Array<Set<string>> = []; // Stack of shadowed roots as we enter/exit nested funcs
+
   walkStatements(statements, {
     shallow,
-    expr: (expr, replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isTableIndexExpression(expr)) {
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
+          const root = chain.split(".")[0];
+          if (isRootShadowedInActiveScopes(root, shadowStack)) {
+            // Root is shadowed by an active ancestor function parameter — don't replace
+            return Walk.keep;
+          }
           const ident = hoisted.get(chain);
           if (ident) {
-            replace(tstl.cloneIdentifier(ident));
-            control.skip();
+            return Walk.replace(tstl.cloneIdentifier(ident));
           }
         }
       }
+      return Walk.keep;
+    },
+    funcEnter: (expr: tstl.FunctionExpression) => {
+      const params = new Set<string>();
+      for (const param of expr.params ?? []) {
+        if (tstl.isIdentifier(param)) {
+          params.add(param.text);
+        }
+      }
+      shadowStack.push(params);
+    },
+    funcExit: (_expr: tstl.FunctionExpression) => {
+      shadowStack.pop();
     },
   });
 }
@@ -66,7 +91,7 @@ export function replaceChains(
  * and prepend declarations. Returns the set of newly hoisted chain strings.
  */
 export function hoistScope(
-  statements: tstl.Statement[],
+  statements: readonly tstl.Statement[],
   threshold: number,
   shallow: boolean,
   alreadyHoisted: ReadonlySet<string>,
@@ -75,6 +100,7 @@ export function hoistScope(
   isRootAllowed?: (root: string) => boolean,
   outDecls?: tstl.VariableDeclarationStatement[],
   extraBoundNames?: ReadonlySet<string>,
+  elseBranchOwner?: tstl.IfStatement,
 ): Set<string> {
   const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
   const unavailableNames = mergeNameSets(scopeDefs, reservedNames);
@@ -118,9 +144,49 @@ export function hoistScope(
   }
 
   if (toHoist.size > 0) {
-    replaceChains(statements, toHoist, shallow);
-    if (inBodyDecls.length > 0) statements.unshift(...inBodyDecls);
+    const targetStatements: tstl.Statement[] = elseBranchOwner
+      ? getMutableElseBranchStatements(elseBranchOwner)
+      : (statements as tstl.Statement[]);
+    replaceChains(targetStatements, toHoist, shallow);
+    if (inBodyDecls.length > 0) targetStatements.unshift(...inBodyDecls);
     if (outDecls) outDecls.push(...liftableDecls);
+  }
+
+  // At module scope (shallow=false), recursively process if/else blocks
+  // Each branch gets the outer snapshot of alreadyHoisted to avoid cross-branch suppression
+  if (!shallow) {
+    for (const stmt of statements) {
+      if (tstl.isIfStatement(stmt)) {
+        // Process if-block independently
+        hoistScope(
+          stmt.ifBlock.statements,
+          threshold,
+          shallow,
+          alreadyHoisted,
+          context,
+          reservedNames,
+          isRootAllowed,
+          outDecls,
+          extraBoundNames,
+        );
+        // Process else-block independently
+        if (stmt.elseBlock) {
+          const elseBranchStatements = getElseBranchStatements(stmt.elseBlock);
+          hoistScope(
+            elseBranchStatements,
+            threshold,
+            shallow,
+            alreadyHoisted,
+            context,
+            reservedNames,
+            isRootAllowed,
+            outDecls,
+            extraBoundNames,
+            stmt,
+          );
+        }
+      }
+    }
   }
 
   return new Set(toHoist.keys());

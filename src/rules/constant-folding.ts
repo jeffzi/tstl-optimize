@@ -3,7 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { isLuaExprPure } from "../ast/lua-ast";
 import { createLiteral, getLiteralValue } from "../ast/lua-literal";
-import { walkStatements } from "../ast/lua-walker";
+import { Walk, walkStatements } from "../ast/lua-walker";
 import type { ConstantValue, RuleFactory } from "../config";
 
 const UTF8_ENCODER = new TextEncoder();
@@ -222,7 +222,7 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
         changed = false;
         passes++;
         walkStatements(file.statements, {
-          expr: (expr, replace) => {
+          expr: (expr: tstl.Expression) => {
             if (tstl.isBinaryExpression(expr)) {
               const leftVal = getLiteralValue(expr.left);
               const rightVal = getLiteralValue(expr.right);
@@ -232,33 +232,36 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
                   const lit = createLiteral(folded, { wrapNegativeNumber: true });
                   lit.line = expr.line;
                   lit.column = expr.column;
-                  replace(lit);
                   changed = true;
+                  return Walk.replace(lit);
                 }
               }
             } else if (tstl.isUnaryExpression(expr)) {
-              // Only fold NegationOperator when the operand is itself a unary expression
-              // (i.e. double-negation like -(-x)). Folding -(literal) would produce a
-              // raw NumericLiteral with a negative value that TSTL prints without
-              // parentheses, breaking operator precedence in expressions like (-4.2)^(-4.2).
+              // Preserve raw `-<numeric>` literals as-is. Re-folding the unary node
+              // inside createNegativeLiteral() would wrap the same negative value on
+              // every pass, but derived negatives still need the wrapped literal path
+              // so exponentiation keeps `(-n)` grouped.
               if (
                 expr.operator === tstl.SyntaxKind.NegationOperator &&
-                !tstl.isUnaryExpression(expr.operand)
+                tstl.isNumericLiteral(expr.operand)
               ) {
-                return;
+                return Walk.keep;
               }
               const operandVal = getLiteralValue(expr.operand);
               if (operandVal !== undefined) {
                 const folded = evaluateUnary(expr.operator, operandVal);
                 if (folded !== undefined) {
-                  const lit = createLiteral(folded);
+                  const lit = createLiteral(folded, {
+                    wrapNegativeNumber: expr.operator === tstl.SyntaxKind.NegationOperator,
+                  });
                   lit.line = expr.line;
                   lit.column = expr.column;
-                  replace(lit);
                   changed = true;
+                  return Walk.replace(lit);
                 }
               }
             }
+            return Walk.keep;
           },
         });
       }

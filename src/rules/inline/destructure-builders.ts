@@ -98,6 +98,7 @@ export function buildArrayDestructureInline(
   }
 
   const signature = checker.getResolvedSignature(callNode);
+  // Defensive only: TSTL always resolves signatures for valid, type-checked call sites
   /* v8 ignore next */
   const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
   const isMultiReturn =

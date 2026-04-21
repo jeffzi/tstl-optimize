@@ -1,13 +1,19 @@
 # Examples
 
 Each `.ts` file demonstrates one optimization rule. The accompanying `.lua` file
-shows the generated output with all rules enabled (PUC Lua 5.1 target).
+shows the generated output with all rules enabled (PUC Lua 5.1 target). Open each `.ts` beside
+its `.lua` to see the transform in context — the examples are ordered top-down so the rewritten
+lines line up visually.
 
 Regenerate the Lua files:
 
 ```bash
 npm run examples
 ```
+
+> **Note:** `examples/tsconfig.json` is type-check only (`noEmit: true`) and does **not** invoke the
+> plugin. Compilation runs through `scripts/examples.ts`, which uses `tstl.transpileVirtualProject`.
+> For a runnable project setup, see the Usage section in the top-level [`README`](../README.md).
 
 | File                                                  | Rule                      | Description                                                                        |
 | ----------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------- |

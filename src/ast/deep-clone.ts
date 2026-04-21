@@ -11,6 +11,16 @@ function cloneWith<T extends tstl.Node>(original: tstl.Node, create: () => T): T
   if (original.column !== undefined) {
     clone.column = original.column;
   }
+  if ("leadingComments" in original) {
+    type WithComments = {
+      leadingComments?: Array<string | string[]>;
+      trailingComments?: Array<string | string[]>;
+    };
+    const src = original as tstl.Node & WithComments;
+    const dst = clone as T & WithComments;
+    if (src.leadingComments !== undefined) dst.leadingComments = src.leadingComments.slice();
+    if (src.trailingComments !== undefined) dst.trailingComments = src.trailingComments.slice();
+  }
   return clone;
 }
 
@@ -175,12 +185,13 @@ export function deepCloneStatement(stmt: tstl.Statement): tstl.Statement {
         ),
       );
     }
-    case tstl.SyntaxKind.ReturnStatement:
+    case tstl.SyntaxKind.ReturnStatement: {
+      const exprs = (stmt as tstl.ReturnStatement).expressions;
       return cloneWith(stmt, () =>
-        tstl.createReturnStatement(
-          (stmt as tstl.ReturnStatement).expressions.map(deepCloneExpression),
-        ),
+        // biome-ignore lint/suspicious/noExplicitAny: expressions is typed as required but can be undefined at runtime (bare return)
+        (tstl.createReturnStatement as any)(exprs?.map(deepCloneExpression)),
       );
+    }
     case tstl.SyntaxKind.ExpressionStatement:
       return cloneWith(stmt, () =>
         tstl.createExpressionStatement(

@@ -1,6 +1,6 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
-import { createInlineWarning } from "./diagnostics";
+import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import type { InlineTarget } from "./target";
 
 export function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
@@ -89,6 +89,7 @@ export function rejectIfCrossModuleFreeVar(
         callNode,
         "cross-module function references non-parameter identifiers",
         strict,
+        InlineDiagnosticCode.crossModule,
       ),
     );
     return true;

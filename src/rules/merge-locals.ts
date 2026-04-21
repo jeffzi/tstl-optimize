@@ -3,7 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { getElseBranchStatements, isLuaRhsPure } from "../ast/lua-ast";
 import { withoutShadowedNames } from "../ast/lua-references";
-import { walkStatements } from "../ast/lua-walker";
+import { Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
 function expressionsReferenceAnyOf(
@@ -47,9 +47,6 @@ function functionBodyReferencesAnyOf(
   return false;
 }
 
-/**
- * Check if a statement contains any identifier reference matching `names`.
- */
 function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<string>): boolean {
   if (names.size === 0) {
     return false;
@@ -134,9 +131,6 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
   return false;
 }
 
-/**
- * Recursively scan an expression tree for identifier references matching `names`.
- */
 function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boolean {
   if (names.size === 0) {
     return false;
@@ -280,14 +274,14 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
   statements.push(...result);
 }
 
-/** Shallow-walk statements to find FunctionExpressions and merge their bodies. */
 function mergeFunctionBodiesShallow(statements: tstl.Statement[]): void {
   walkStatements(statements, {
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isFunctionExpression(expr)) {
         mergeConsecutiveLocals(expr.body.statements);
-        control.skip();
+        return Walk.skip;
       }
+      return Walk.keep;
     },
     shallow: true,
   });

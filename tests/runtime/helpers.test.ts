@@ -214,7 +214,7 @@ describe("detectRuntimes", () => {
 // ---------------------------------------------------------------------------
 
 describe("assertExpectedRuntimes", () => {
-  describe("when LUA_EXPECT is unset", () => {
+  describe("when LUA_EXPECT is empty or unset", () => {
     beforeEach(() => {
       vi.stubEnv("LUA_EXPECT", "");
     });

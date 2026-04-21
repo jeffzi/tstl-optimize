@@ -9,7 +9,7 @@ import {
 } from "./builders";
 import { rejectIfCrossModuleFreeVar } from "./cross-module";
 import { buildArrayDestructureInline, buildObjectDestructureInline } from "./destructure-builders";
-import { createInlineWarning } from "./diagnostics";
+import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import {
   canEraseInlineDeclaration,
   canInlineStatements,
@@ -47,6 +47,7 @@ export function handleCallExpression(
           "multi-statement body cannot be inlined at expression position" +
             " (only statement-position calls supported)",
           strict,
+          InlineDiagnosticCode.expressionPosition,
         ),
       );
     }
@@ -81,8 +82,10 @@ export function handleVariableStatement(
   if (target.kind !== "statementsWithReturn") return undefined;
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
+  if (canInlineResult !== undefined) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
+    );
     return undefined;
   }
 
@@ -132,8 +135,10 @@ export function handleReturnStatement(
   if (target.kind !== "statementsWithReturn") return undefined;
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
+  if (canInlineResult !== undefined) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
+    );
     return undefined;
   }
 
@@ -182,14 +187,21 @@ export function handleExpressionStatement(
 
   if (target.kind === "statementsWithReturn") {
     context.diagnostics.push(
-      createInlineWarning(callNode, "return-value function called at void site", strict),
+      createInlineWarning(
+        callNode,
+        "return-value function called at void site",
+        strict,
+        InlineDiagnosticCode.voidSite,
+      ),
     );
     return undefined;
   }
 
   const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
+  if (canInlineResult !== undefined) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
+    );
     return undefined;
   }
 

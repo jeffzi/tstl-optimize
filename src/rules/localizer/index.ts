@@ -2,7 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { getElseBranchStatements } from "../../ast/lua-ast";
-import { walkStatements } from "../../ast/lua-walker";
+import { Walk, walkStatements } from "../../ast/lua-walker";
 import { collectScopeInfo } from "../../ast/scope";
 import type { LocalizerConfig, RuleFactory } from "../../config";
 import { resolveLocalizerConfig } from "../../config";
@@ -121,7 +121,10 @@ function processFile(
   }
 }
 
-function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingContext): void {
+function processFunctionBodies(
+  statements: readonly tstl.Statement[],
+  ctx: ProcessingContext,
+): void {
   const { threshold, alreadyHoisted, context, isRootAllowed, reservedNames } = ctx;
   const scopeReservedNames = mergeNameSets(
     reservedNames,
@@ -130,7 +133,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
 
   walkStatements(statements, {
     shallow: true,
-    expr: (expr, _replace, control) => {
+    expr: (expr: tstl.Expression) => {
       if (tstl.isFunctionExpression(expr)) {
         const paramNames = new Set(expr.params?.filter(tstl.isIdentifier).map((p) => p.text));
         const functionReservedNames = mergeNameSets(scopeReservedNames, paramNames);
@@ -147,8 +150,9 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
           ...ctx,
           reservedNames: functionReservedNames,
         });
-        control.skip();
+        return Walk.skip;
       }
+      return Walk.keep;
     },
   });
 
@@ -157,9 +161,33 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
     if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
+      // Hoist chains inside if-block (pass outer snapshot of alreadyHoisted to each branch)
+      hoistScope(
+        stmt.ifBlock.statements,
+        threshold,
+        true,
+        alreadyHoisted,
+        context,
+        scopeReservedNames,
+        isRootAllowed,
+      );
       processFunctionBodies(stmt.ifBlock.statements, ctx);
+      // Hoist chains inside else-block independently
       if (stmt.elseBlock) {
-        processFunctionBodies(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], ctx);
+        const elseBranchStatements = getElseBranchStatements(stmt.elseBlock);
+        hoistScope(
+          elseBranchStatements,
+          threshold,
+          true,
+          alreadyHoisted,
+          context,
+          scopeReservedNames,
+          isRootAllowed,
+          undefined,
+          undefined,
+          stmt,
+        );
+        processFunctionBodies(getElseBranchStatements(stmt.elseBlock), ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)
@@ -184,7 +212,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context, loopReservedNames);
       processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: loopReservedNames });
       if (preLoopDecls.length > 0) {
-        statements.splice(j, 0, ...preLoopDecls);
+        (statements as tstl.Statement[]).splice(j, 0, ...preLoopDecls);
         j += preLoopDecls.length;
       }
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {

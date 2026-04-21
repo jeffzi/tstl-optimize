@@ -3,8 +3,8 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { createVisitors } from "../../src/rules/localizer";
-import { compile, normalizeLua } from "../helpers";
+import { createVisitors } from "../../../src/rules/localizer";
+import { compile, normalizeLua } from "../../helpers";
 
 const MODULE_SCOPE = { pluginOptions: { rules: { localizer: { scope: "module" as const } } } };
 const FUNC_SCOPE = { pluginOptions: { rules: { localizer: { scope: "function" as const } } } };
@@ -198,6 +198,306 @@ describe("localizer", () => {
 
       expect(lua).toContain("local ____obj_x_2 = obj.x");
     });
+
+    it("hoists chain into a guarded if-block, not above it (function scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "  return 0;",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+      // No reference to the temp appears above the guard
+      expect(normalized.indexOf("____obj_x")).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists chain into a guarded else-block, not above the if (function scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    return 0;",
+          "  } else {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const elseIdx = normalized.indexOf("else");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(elseIdx).toBeGreaterThan(ifIdx);
+      expect(declIdx).toBeGreaterThan(elseIdx);
+    });
+
+    it("hoists different chains branch-locally in sibling if/else (function scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number; y: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  } else {",
+          "    const d = obj.y;",
+          "    const e = obj.y;",
+          "    const f = obj.y;",
+          "    return d + e + f;",
+          "  }",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const elseIdx = normalized.indexOf("else");
+      const xIdx = normalized.indexOf("local ____obj_x = obj.x");
+      const yIdx = normalized.indexOf("local ____obj_y = obj.y");
+      expect(xIdx).toBeGreaterThan(ifIdx);
+      expect(xIdx).toBeLessThan(elseIdx);
+      expect(yIdx).toBeGreaterThan(elseIdx);
+    });
+
+    it("hoists repeated chains directly inside an elseif branch", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number; y: number; z: number };",
+          "declare const cond1: boolean;",
+          "declare const cond2: boolean;",
+          "function process() {",
+          "  if (cond1) {",
+          "    return obj.x + obj.x;",
+          "  } else if (cond2) {",
+          "    const d = obj.y;",
+          "    const e = obj.y;",
+          "    const f = obj.y;",
+          "    return d + e + f;",
+          "  } else {",
+          "    return obj.z + obj.z;",
+          "  }",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["obj"] } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const elseifIdx = normalized.indexOf("elseif cond2 then");
+      const declIdx = normalized.indexOf("local ____obj_y = obj.y");
+      const useIdx = normalized.indexOf("local d = ____obj_y");
+      expect(elseifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(elseifIdx);
+      expect(useIdx).toBeGreaterThan(declIdx);
+    });
+
+    it("nullable-root anchor: hoists obj.x inside `if obj then`, not above it", () => {
+      // Regression guard: an escaped hoist here dereferences obj before the nil-check.
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "function process() {",
+          "  if (obj) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "  return 0;",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if obj then");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists chain into a guarded if-block with scope: all", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number };",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  if (cond) {",
+          "    const a = obj.x;",
+          "    const b = obj.x;",
+          "    const c = obj.x;",
+          "    return a + b + c;",
+          "  }",
+          "  return 0;",
+          "}",
+        ].join("\n"),
+        ALL_SCOPE,
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const declIdx = normalized.indexOf("local ____obj_x = obj.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists chain inside top-level guarded if-block at module scope, not above it", () => {
+      const lua = compile(
+        [
+          "declare const config: { x: number };",
+          "declare const cond: boolean;",
+          "if (cond) {",
+          "  const a = config.x;",
+          "  const b = config.x;",
+          "  const c = config.x;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const declIdx = normalized.indexOf("local ____config_x = config.x");
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(declIdx).toBeGreaterThan(ifIdx);
+    });
+
+    it("hoists different chains branch-locally in sibling if/else at module scope", () => {
+      const lua = compile(
+        [
+          "declare const config: { x: number; y: number };",
+          "declare const cond: boolean;",
+          "if (cond) {",
+          "  const a = config.x;",
+          "  const b = config.x;",
+          "  const c = config.x;",
+          "} else {",
+          "  const d = config.y;",
+          "  const e = config.y;",
+          "  const f = config.y;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
+      );
+      const normalized = normalizeLua(lua);
+      const ifIdx = normalized.indexOf("if cond then");
+      const elseIdx = normalized.indexOf("else");
+      const xIdx = normalized.indexOf("local ____config_x = config.x");
+      const yIdx = normalized.indexOf("local ____config_y = config.y");
+      expect(xIdx).toBeGreaterThan(ifIdx);
+      expect(xIdx).toBeLessThan(elseIdx);
+      expect(yIdx).toBeGreaterThan(elseIdx);
+    });
+
+    it("does not hoist chain inside guarded if when intervening call suppresses hoisting at module scope", () => {
+      const lua = compile(
+        [
+          "declare const config: { x: number };",
+          "declare const cond: boolean;",
+          "declare function extern(): void;",
+          "if (cond) {",
+          "  const a = config.x;",
+          "  extern();",
+          "  const b = config.x;",
+          "  const c = config.x;",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "module" as const, include: ["config"] } },
+          },
+        },
+      );
+      expect(lua).not.toContain("local ____config_x = config.x");
+      expect(lua).toContain("config.x");
+    });
+
+    it("does NOT hoist chain from ternary branches (expression-guarded, out of scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  const a = cond ? obj!.x : 0;",
+          "  const b = cond ? obj!.x : 0;",
+          "  const c = cond ? obj!.x : 0;",
+          "  return a + b + c;",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      // A hoist here would dereference obj unconditionally, bypassing the ternary guard.
+      expect(lua).not.toContain("____obj_x");
+      // Raw reads still present — at least 3 literal obj.x occurrences.
+      expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
+
+    it("does NOT hoist chain from && RHS (expression-guarded, out of scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "declare const cond: boolean;",
+          "function process() {",
+          "  const a = cond && obj!.x;",
+          "  const b = cond && obj!.x;",
+          "  const c = cond && obj!.x;",
+          "  return [a, b, c];",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      expect(lua).not.toContain("____obj_x");
+      expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
+
+    it("does NOT hoist chain from || RHS (expression-guarded, out of scope)", () => {
+      const lua = compile(
+        [
+          "declare const obj: { x: number } | undefined;",
+          "declare const fallback: boolean;",
+          "function process() {",
+          "  const a = fallback || obj!.x;",
+          "  const b = fallback || obj!.x;",
+          "  const c = fallback || obj!.x;",
+          "  return [a, b, c];",
+          "}",
+        ].join("\n"),
+        FUNC_SCOPE,
+      );
+      expect(lua).not.toContain("____obj_x");
+      expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
   });
 
   describe("when negative cases are not hoisted", () => {
@@ -287,6 +587,23 @@ describe("localizer", () => {
         { pluginOptions: { rules: { localizer: { scope: "module" as const, include: ["obj"] } } } },
       );
       expect(lua).not.toContain("local ____obj_a = obj.a");
+    });
+
+    it("does not hoist a chain that is mutated by the first-access statement", () => {
+      const lua = compile(
+        [
+          "const it = {",
+          "  i: -1,",
+          "  [Symbol.iterator]() { return this; },",
+          "  next() {",
+          "    ++this.i;",
+          "    return { value: 2 ** this.i, done: this.i === 9 };",
+          "  },",
+          "};",
+          "const out = [...it];",
+        ].join("\n"),
+      );
+      expect(lua).not.toMatch(/local ____self_i\s*=/);
     });
 
     it("does nothing when rule is disabled", () => {
@@ -1611,10 +1928,6 @@ describe("localizer early exit detection in array element localization", () => {
 
   it.each([
     {
-      name: "an explicit break",
-      bodyLines: ["arr[i] = arr[i] + 1;", "arr[i] = arr[i] + 2;", "break;"],
-    },
-    {
       name: "a nested conditional breaks",
       bodyLines: [
         "arr[i] = arr[i] + 1;",
@@ -1651,6 +1964,100 @@ describe("localizer safety around writes and shadowing", () => {
 
     expect(lua).not.toContain("local ____config_physics_gravity");
     expect(lua).toContain("config.physics.gravity = 2");
+  });
+
+  it("does not hoist when write intervenes between first and last read", () => {
+    const lua = compile(
+      [
+        "declare const obj: { foo: { bar: number } };",
+        "function test() {",
+        "  const a = obj.foo.bar;",
+        "  const b = obj.foo.bar;",
+        "  obj.foo.bar = 99;",
+        "  const c = obj.foo.bar;",
+        "  return [a, b, c];",
+        "}",
+      ].join("\n"),
+      {
+        pluginOptions: {
+          rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 2 } },
+        },
+      },
+    );
+
+    expect(lua).not.toContain("local ____obj_foo_bar");
+    expect(lua).toContain("obj.foo.bar = 99");
+  });
+
+  it("does not hoist when bare-root assignment intervenes between reads", () => {
+    const lua = compile(
+      [
+        "declare const nextState: { value: number };",
+        "function test() {",
+        "  let state: { value: number } = { value: 1 };",
+        "  const a = state.value;",
+        "  const b = state.value;",
+        "  state = nextState;",
+        "  const c = state.value;",
+        "  return a + b + c;",
+        "}",
+      ].join("\n"),
+      {
+        pluginOptions: {
+          rules: { localizer: { scope: "function" as const, include: ["state"], threshold: 2 } },
+        },
+      },
+    );
+
+    expect(lua).not.toContain("local ____state_value");
+    expect(lua).toContain("state = nextState");
+  });
+
+  it("does not hoist when assignment precedes all reads in function scope", () => {
+    const lua = compile(
+      [
+        "declare const state: { value: number };",
+        "function test() {",
+        "  state.value = 0;",
+        "  const a = state.value;",
+        "  const b = state.value;",
+        "  const c = state.value;",
+        "  return a + b + c;",
+        "}",
+      ].join("\n"),
+      {
+        pluginOptions: {
+          rules: { localizer: { scope: "function" as const, include: ["state"], threshold: 3 } },
+        },
+      },
+    );
+
+    expect(lua).not.toContain("local ____state_value");
+    expect(lua).toContain("state.value = 0");
+  });
+
+  it("preserves LHS of assignment when chain would otherwise be hoisted", () => {
+    const lua = compile(
+      [
+        "declare const obj: { foo: { bar: number } };",
+        "function test() {",
+        "  const a = obj.foo.bar;",
+        "  const b = obj.foo.bar;",
+        "  const c = obj.foo.bar;",
+        "  obj.foo.bar = 99;",
+        "  return [a, b, c];",
+        "}",
+      ].join("\n"),
+      {
+        pluginOptions: {
+          rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 3 } },
+        },
+      },
+    );
+
+    expect(lua).toContain("local ____obj_foo_bar = obj.foo.bar");
+    expect(lua).toContain("obj.foo.bar = 99");
+    expect(lua).not.toContain("____obj_foo_bar = 99");
   });
 
   it("does not rewrite nested closures that outlive the hoist scope", () => {
@@ -1701,6 +2108,132 @@ describe("localizer safety around writes and shadowing", () => {
     expect(lua).toContain("local ____arr = arr[i]");
     expect(lua).toContain("for i = 1, inner do");
     expect(lua).toContain("arr[i] = arr[i] + 1");
+  });
+
+  describe("nested wrapper writes before reads are detected (Cycle 1)", () => {
+    const FN_INCLUDE_OBJ = {
+      pluginOptions: {
+        rules: { localizer: { scope: "function" as const, include: ["obj"], threshold: 2 } },
+      },
+    };
+
+    it.each([
+      {
+        name: "IfStatement",
+        decls: "",
+        mutation: "if (cond) { obj.foo = 99; }",
+      },
+      {
+        name: "DoStatement (block)",
+        decls: "",
+        mutation: "{ obj.foo = 99; }",
+      },
+      {
+        name: "WhileStatement",
+        decls: "",
+        mutation: "while (cond) { obj.foo = 99; break; }",
+      },
+      {
+        name: "ForStatement",
+        decls: "",
+        mutation: "for (let i = 0; i < 1; i++) { obj.foo = 99; }",
+      },
+      {
+        name: "ForInStatement (for-of)",
+        decls: "declare const items: number[];",
+        mutation: "for (const _ of items) { obj.foo = 99; break; }",
+      },
+      {
+        name: "RepeatStatement (do-while)",
+        decls: "",
+        mutation: "do { obj.foo = 99; break; } while (cond);",
+      },
+    ])("does not hoist when write is nested in $name before reads", ({ decls, mutation }) => {
+      const lua = compile(
+        [
+          "declare const obj: { foo: number };",
+          "declare const cond: boolean;",
+          decls,
+          "function test() {",
+          `  ${mutation}`,
+          "  const a = obj.foo;",
+          "  const b = obj.foo;",
+          "  return a + b;",
+          "}",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        FN_INCLUDE_OBJ,
+      );
+
+      expect(lua).not.toContain("local ____obj_foo");
+    });
+
+    it("does not hoist when nested write precedes a single-statement multi-read", () => {
+      const lua = compile(
+        [
+          "declare const obj: { foo: number };",
+          "declare const cond: boolean;",
+          "function test() {",
+          "  if (cond) { obj.foo = 99; }",
+          "  return [obj.foo, obj.foo];",
+          "}",
+        ].join("\n"),
+        FN_INCLUDE_OBJ,
+      );
+
+      expect(lua).not.toContain("local ____obj_foo");
+    });
+  });
+
+  describe("single-statement mutating calls do not hoist (Cycle 2)", () => {
+    const FN_INCLUDE_THIS = {
+      pluginOptions: {
+        rules: { localizer: { scope: "function" as const, include: ["self"], threshold: 2 } },
+      },
+    };
+
+    const COUNTER_CLASS = [
+      "class Counter {",
+      "  i = 0;",
+      "  bump(x: number) { this.i++; return x; }",
+    ];
+
+    it.each([
+      {
+        desc: "return this.bump(this.i) + this.i",
+        useBody: "return this.bump(this.i) + this.i;",
+      },
+      {
+        desc: "return { x: this.bump(this.i), y: this.i }",
+        useBody: "return { x: this.bump(this.i), y: this.i };",
+      },
+      {
+        desc: "const x = this.bump(this.i); return [x, this.i]",
+        useBody: "const x = this.bump(this.i); return [x, this.i];",
+      },
+    ])("does not hoist: $desc", ({ useBody }) => {
+      const lua = compile(
+        [...COUNTER_CLASS, `  use() { ${useBody} }`, "}"].join("\n"),
+        FN_INCLUDE_THIS,
+      );
+
+      expect(lua).not.toContain("local ____self_i");
+    });
+
+    it("still hoists when a stdlib call takes the chain as argument: Math.floor(this.i)", () => {
+      const lua = compile(
+        [
+          "class Counter {",
+          "  i = 0;",
+          "  use() { const x = Math.floor(this.i); return [x, this.i]; }",
+          "}",
+        ].join("\n"),
+        FN_INCLUDE_THIS,
+      );
+
+      expect(lua).toContain("local ____self_i = self.i");
+    });
   });
 });
 
@@ -1893,13 +2426,12 @@ describe("localizer property chain hoisting in various contexts", () => {
     expect(lua).toContain("local ____config_width = config.width");
   });
 
-  it("hoists chains in function call arguments across statements", () => {
+  it("hoists chains in stdlib function call arguments across statements", () => {
     const lua = compile(
       [
         "declare const config: { physics: { gravity: number } };",
-        "function applyGravity(g: number) { return g; }",
-        "const g1 = applyGravity(config.physics.gravity);",
-        "const g2 = applyGravity(config.physics.gravity);",
+        "const g1 = Math.floor(config.physics.gravity);",
+        "const g2 = Math.floor(config.physics.gravity);",
       ].join("\n"),
       {
         pluginOptions: {
@@ -2112,10 +2644,13 @@ describe("localizer raw Lua visitor coverage", () => {
     return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
   }
 
-  function runSourceFileVisitor(file: tstl.File): tstl.File {
+  function runSourceFileVisitor(
+    file: tstl.File,
+    localizerRule: true | { scope: "module" | "function" | "all"; include?: string[] } = true,
+  ): tstl.File {
     const visitors = Reflect.apply(createVisitors, undefined, [
       asTypeChecker({}),
-      { rules: { localizer: true } },
+      { rules: { localizer: localizerRule } },
     ]);
     const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
       node: ts.SourceFile,
@@ -2377,6 +2912,86 @@ describe("localizer raw Lua visitor coverage", () => {
     expect(((writeback as tstl.AssignmentStatement).right[0] as tstl.Identifier).text).toBe(
       tempIdent.text,
     );
+  });
+
+  it("prepends hoist declarations before raw elseif conditions", () => {
+    const createCeilCall = (name: string) =>
+      tstl.createCallExpression(
+        tstl.createTableIndexExpression(
+          tstl.createIdentifier("math"),
+          tstl.createStringLiteral("ceil"),
+        ),
+        [tstl.createIdentifier(name)],
+      );
+    const file = createLuaFile([
+      tstl.createVariableDeclarationStatement(
+        tstl.createIdentifier("process"),
+        tstl.createFunctionExpression(
+          tstl.createBlock([
+            tstl.createIfStatement(
+              tstl.createBooleanLiteral(false),
+              tstl.createBlock([]),
+              tstl.createIfStatement(
+                tstl.createBinaryExpression(
+                  createCeilCall("x"),
+                  createCeilCall("y"),
+                  tstl.SyntaxKind.LessThanOperator,
+                ),
+                tstl.createBlock([tstl.createReturnStatement([tstl.createNumericLiteral(1)])]),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+
+    const transformed = runSourceFileVisitor(file, { scope: "function" });
+    const processDecl = transformed.statements[0];
+    if (!processDecl || !tstl.isVariableDeclarationStatement(processDecl)) {
+      throw new Error("expected function declaration");
+    }
+    const processExpr = processDecl.right?.[0];
+    if (!processExpr || !tstl.isFunctionExpression(processExpr)) {
+      throw new Error("expected function expression");
+    }
+    const topIf = processExpr.body.statements[0];
+    if (
+      !topIf ||
+      !tstl.isIfStatement(topIf) ||
+      !topIf.elseBlock ||
+      !tstl.isBlock(topIf.elseBlock)
+    ) {
+      throw new Error("expected function body if with block-wrapped elseif elseBlock");
+    }
+    const [decl, elseIf] = topIf.elseBlock.statements;
+    if (!decl || !tstl.isVariableDeclarationStatement(decl)) {
+      throw new Error("expected localized declaration before elseif");
+    }
+    if (!elseIf || !tstl.isIfStatement(elseIf) || !tstl.isBinaryExpression(elseIf.condition)) {
+      throw new Error("expected elseif statement after localized declaration");
+    }
+
+    const hoisted = decl.left[0];
+    if (!hoisted || !tstl.isIdentifier(hoisted)) {
+      throw new Error("expected hoisted identifier");
+    }
+    expect(hoisted.text).toContain("____math_ceil");
+    const firstConditionCall = elseIf.condition.left;
+    const secondConditionCall = elseIf.condition.right;
+    if (
+      !tstl.isCallExpression(firstConditionCall) ||
+      !tstl.isIdentifier(firstConditionCall.expression)
+    ) {
+      throw new Error("expected localized call on elseif condition left");
+    }
+    if (
+      !tstl.isCallExpression(secondConditionCall) ||
+      !tstl.isIdentifier(secondConditionCall.expression)
+    ) {
+      throw new Error("expected localized call on elseif condition right");
+    }
+    expect(firstConditionCall.expression.text).toBe(hoisted.text);
+    expect(secondConditionCall.expression.text).toBe(hoisted.text);
   });
 
   it("does not rewrite raw nested for-in bodies that shadow the localized loop variable", () => {

@@ -11,11 +11,7 @@ import type {
   ReturnValueInlineTarget,
   StatementInlineTarget,
 } from "./target";
-import {
-  declarationHasLuaMultiReturnReturnType,
-  FUNCTION_SCOPE,
-  returnsLuaMultiReturn,
-} from "./target";
+import { FUNCTION_SCOPE, returnsLuaMultiReturn } from "./target";
 
 export interface ParamMapResult {
   tempDecls: tstl.VariableDeclarationStatement[];
@@ -42,12 +38,11 @@ export function createDiscardTemp(
     undefined,
     discardSymId,
   );
+  // Defensive only: all current callers pass expr; the bare-decl branch is unreachable in tests
   /* v8 ignore next */
   return tstl.createVariableDeclarationStatement([discardIdent], expr ? [expr] : undefined);
 }
 
-/** Build temp-var declarations and a symbolId→expression map for each call argument.
- *  Returns undefined if any param symbol or Lua symbolId cannot be resolved. */
 export function buildParamMap(
   params: readonly ts.ParameterDeclaration[],
   callArgs: ts.NodeArray<ts.Expression>,
@@ -60,8 +55,7 @@ export function buildParamMap(
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
     if (!paramSymbol) return undefined;
     const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    /* v8 ignore next */
-    if (paramSymbolId === undefined) return undefined;
+    if (paramSymbolId === undefined) continue;
     const luaArg = context.transformExpression(callArgs[i]);
     const tempId = context.nextSymbolId();
     const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
@@ -78,9 +72,11 @@ function transformBodyStatements(
   context: tstl.TransformationContext,
 ): tstl.Statement[] {
   context.pushScope(FUNCTION_SCOPE, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  context.popScope();
-  return luaBody;
+  try {
+    return bodyStmts.flatMap((s) => context.transformStatements(s));
+  } finally {
+    context.popScope();
+  }
 }
 
 interface TransformedInlineFunction {
@@ -96,9 +92,14 @@ export function transformInlineBodyAndReturn(
 ): TransformedInlineFunction | undefined {
   const returnStmt = createInlineReturnStatement(returnExpr);
   context.pushScope(FUNCTION_SCOPE, declaration);
-  const luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
-  const luaReturnStmts = context.transformStatements(returnStmt);
-  context.popScope();
+  let luaBody: tstl.Statement[];
+  let luaReturnStmts: tstl.Statement[];
+  try {
+    luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+    luaReturnStmts = context.transformStatements(returnStmt);
+  } finally {
+    context.popScope();
+  }
   const luaReturn = luaReturnStmts.find(
     (stmt): stmt is tstl.ReturnStatement => stmt.kind === tstl.SyntaxKind.ReturnStatement,
   );
@@ -189,23 +190,14 @@ export function inlineExpressionBody(
   strict: boolean,
 ): tstl.Expression | undefined {
   const canInlineResult = canInline(target, callNode, checker);
-  if (canInlineResult !== true) {
-    context.diagnostics.push(createInlineWarning(callNode, canInlineResult, strict));
+  if (canInlineResult !== undefined) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
+    );
     return undefined;
   }
 
   const luaBody = context.transformExpression(target.bodyExpr);
-
-  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
-  for (let i = 0; i < target.params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
-    /* v8 ignore next */
-    if (!paramSymbol) return undefined;
-    const symbolId = context.symbolIdMaps.get(paramSymbol);
-    if (symbolId === undefined) return undefined;
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    paramMap.set(symbolId, luaArg);
-  }
 
   if (rejectIfCrossModuleFreeVar(callNode, target, [target.bodyExpr], checker, context, strict)) {
     return undefined;
@@ -213,7 +205,6 @@ export function inlineExpressionBody(
 
   if (needsEagerArgumentTemps(target, callNode, checker)) {
     const mapped = buildParamMap(target.params, callNode.arguments, checker, context);
-    /* v8 ignore next */
     if (!mapped) return undefined;
 
     const substituted = substituteParams(luaBody, mapped.paramMap);
@@ -225,13 +216,24 @@ export function inlineExpressionBody(
     );
   }
 
+  const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
+  for (let i = 0; i < target.params.length; i++) {
+    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    // Defensive only: canInline verified all param symbols resolve before we reach here
+    /* v8 ignore next */
+    if (!paramSymbol) return undefined;
+    const symbolId = context.symbolIdMaps.get(paramSymbol);
+    if (symbolId === undefined) continue;
+    const luaArg = context.transformExpression(callNode.arguments[i]);
+    paramMap.set(symbolId, luaArg);
+  }
+
   const substituted = substituteParams(luaBody, paramMap);
   return needsParentheses(substituted)
     ? tstl.createParenthesizedExpression(substituted)
     : substituted;
 }
 
-/** Check whether any VariableStatement or FunctionDeclaration in the body declares a binding with the given name. */
 export function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: string): boolean {
   for (const stmt of bodyStmts) {
     if (ts.isVariableStatement(stmt)) {
@@ -358,6 +360,8 @@ export function buildReturnSiteInline(
     const { luaBody, luaReturn } = transformed;
 
     const mapped = buildParamMap(params, callNode.arguments, checker, context);
+    // Defensive only: buildParamMap only fails when a param symbol can't be resolved,
+    // which canInlineStatements would have rejected first
     /* v8 ignore next */
     if (!mapped) return undefined;
     const { tempDecls, paramMap } = mapped;
@@ -375,6 +379,3 @@ export function buildReturnSiteInline(
 
   return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
 }
-
-// Re-exported to avoid builders needing declarationHasLuaMultiReturnReturnType directly
-export { declarationHasLuaMultiReturnReturnType };

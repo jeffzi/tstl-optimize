@@ -1,6 +1,5 @@
 import ts from "typescript";
 
-/** Unwrap a Block into its inner statements; pass non-blocks through. */
 function unwrapBlock(stmt: ts.Statement): readonly ts.Statement[] {
   return ts.isBlock(stmt) ? stmt.statements : [stmt];
 }
@@ -63,7 +62,6 @@ export function containsConditionalCaseBreak(
   for (const statement of statements) {
     if (ts.isBreakStatement(statement)) {
       if (!topLevel) return true;
-      continue;
     }
 
     if (ts.isBlock(statement)) {

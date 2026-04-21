@@ -598,7 +598,7 @@ describe("plugin integration", () => {
 
   it("SourceFile visitor with existing visitors (merge logic)", () => {
     const code = `
-      declare function print(...args: any[]): void;
+      declare function print(...args: unknown[]): void;
       /** @inline */
       function foo() { return 1; }
       print(foo());

@@ -1,12 +1,9 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { walkStatements } from "../ast/lua-walker";
+import { Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
-/**
- * Type guard for loop statements (while, repeat, for, for-in).
- */
 function isLoopStatement(
   stmt: tstl.Statement,
 ): stmt is tstl.WhileStatement | tstl.RepeatStatement | tstl.ForStatement | tstl.ForInStatement {
@@ -105,9 +102,6 @@ function isRemovableIfChain(
   return true;
 }
 
-/**
- * Prunes trailing empty elseif/else branches when their conditions are safe to remove.
- */
 function pruneTrailingEmptyBranches(
   stmt: tstl.IfStatement,
   safeIdentifiers: ReadonlySet<tstl.SymbolId>,
@@ -161,9 +155,6 @@ function negateCondition(expr: tstl.Expression): tstl.Expression {
   return tstl.createUnaryExpression(operand, tstl.SyntaxKind.NotOperator);
 }
 
-/**
- * Promotes an else block when the if-block is empty.
- */
 function promoteElseBlock(statements: tstl.Statement[], i: number): void {
   const stmt = statements[i];
   if (!tstl.isIfStatement(stmt) || stmt.ifBlock.statements.length > 0 || !stmt.elseBlock) {
@@ -183,9 +174,6 @@ function promoteElseBlock(statements: tstl.Statement[], i: number): void {
   }
 }
 
-/**
- * Recursively process the elseif/else chain of an if-statement.
- */
 function recurseIntoIfChain(
   block: tstl.Block | tstl.IfStatement | undefined,
   safeIdentifiers: ReadonlySet<tstl.SymbolId>,
@@ -202,9 +190,6 @@ function recurseIntoIfChain(
   }
 }
 
-/**
- * Recursively removes empty branches and promotes else blocks.
- */
 function removeEmptyBranches(
   statements: tstl.Statement[],
   inheritedSafeIdentifiers: ReadonlySet<tstl.SymbolId>,
@@ -263,13 +248,14 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => ({
 
       // 2. Find all function expressions and process their bodies
       walkStatements(file.statements, {
-        expr: (expr) => {
+        expr: (expr: tstl.Expression) => {
           if (tstl.isFunctionExpression(expr)) {
             removeEmptyBranches(
               expr.body.statements,
               createSafeConditionScope(new Set<tstl.SymbolId>(), expr.params),
             );
           }
+          return Walk.keep;
         },
       });
 
