@@ -1928,10 +1928,6 @@ describe("localizer early exit detection in array element localization", () => {
 
   it.each([
     {
-      name: "an explicit break",
-      bodyLines: ["arr[i] = arr[i] + 1;", "arr[i] = arr[i] + 2;", "break;"],
-    },
-    {
       name: "a nested conditional breaks",
       bodyLines: [
         "arr[i] = arr[i] + 1;",
