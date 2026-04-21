@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-21
+
 ### Added
 
 - **constant-folding** rule — evaluate constant expressions at compile time.
@@ -34,10 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   array element accesses; hoists chains despite parameter shadowing; hardens config resolution.
 - **math-intrinsics** now guards the `Math.floor()` fast path for infinity, avoids unsafe `x ** 2`
   rewrites on indexed bases, and uses proper deep clone for power expressions.
-- SourceFile visitor chaining now routes statement fallbacks through the normal statement transform
-  path instead of the previous SourceFile visitor.
-- Core AST traversal now recognizes side effects in class expressions and correctly visits
-  assignment targets.
 
 ## [0.5.0] - 2026-04-02
 
@@ -124,7 +122,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
 - Runnable examples with generation script.
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.3.0...v0.3.1
