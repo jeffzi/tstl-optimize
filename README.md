@@ -465,7 +465,7 @@ A function must meet these conditions to be inlined:
 
 The plugin supports multi-statement function bodies at statement-level call sites. It expands these in-place, wrapping them in a `do...end` block (except at return sites) to keep declared variables from escaping into the caller's scope.
 
-**Pattern 1 — Void statement site**
+#### Pattern 1 — Void statement site
 
 ```typescript
 /** @inline */
@@ -485,7 +485,7 @@ do
 end
 ```
 
-**Pattern 2 — Variable-declaration site**
+#### Pattern 2 — Variable-declaration site
 
 ```typescript
 /** @inline */
@@ -506,7 +506,7 @@ do
 end
 ```
 
-**Pattern 3 — Return site**
+#### Pattern 3 — Return site
 
 ```typescript
 /** @inline */
@@ -527,7 +527,7 @@ local y = ____inline_arg_0 + 1
 return y * 2
 ```
 
-**Pattern 4 — Destructuring site**
+#### Pattern 4 — Destructuring site
 
 ```typescript
 /** @inline */
@@ -553,7 +553,7 @@ local b = ____inline_result_N.b
 
 (where `N` is a compiler-generated symbol ID; the exact value is unimportant)
 
-**Pattern 5 — LuaMultiReturn destructuring site**
+#### Pattern 5 — LuaMultiReturn destructuring site
 
 ```typescript
 /** @inline */
