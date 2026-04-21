@@ -3,7 +3,11 @@
 [![CI](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that optimizes Lua output with configurable rules. It supports **Lua 5.1 (PUC)** and **LuaJIT**. You can toggle each rule individually. Most rules are on by default. `conditional-compilation` and `debug-strip` are off by default because they remove code.
+A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that optimizes Lua output
+with configurable rules. Primary targets are **Lua 5.1 (PUC)** and **LuaJIT**; other TSTL targets
+(5.2-5.4) compile without errors but are not tuned — treat optimizations as best-effort there. Every
+rule is independently toggleable. All rules are on by default **except** `conditional-compilation`
+and `debug-strip`, which are off because they remove code.
 
 ```typescript
 // TypeScript input
@@ -34,6 +38,8 @@ local y = 5 * 2
 - [Strict mode](#strict-mode)
 - [Configuration reference](#configuration-reference)
 - [Examples](#examples)
+- [Benchmarks](#benchmarks)
+- [FAQ](#faq)
 - [License](#license)
 
 Rule reference:
@@ -52,21 +58,37 @@ Rule reference:
 ## Installation
 
 ```bash
-npm install tstl-optimize
+npm install --save-dev typescript-to-lua tstl-optimize
 ```
 
-**Peer dependency:** `typescript-to-lua >= 1.22.0`
+**Peer dependency:** `typescript-to-lua >= 1.22.0` (tested against `1.34.0`).
 
 ## Usage
 
-Add the plugin to your `tsconfig.json`:
+A minimal working `tsconfig.json` — the plugin auto-detects `target` from `luaTarget`:
 
 ```jsonc
 {
   "compilerOptions": {
+    "target": "ESNext",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "outDir": "./lua",
+    "types": ["@typescript-to-lua/language-extensions", "lua-types/5.1"],
     "plugins": [{ "name": "tstl-optimize" }]
-  }
+  },
+  "tstl": {
+    "luaTarget": "5.1"
+  },
+  "include": ["src/**/*"]
 }
+```
+
+Then compile:
+
+```bash
+npx tstl -p tsconfig.json
 ```
 
 To customize rules:
@@ -197,6 +219,10 @@ Evaluates compile-time constants and strips dead branches from `if`/ternary/`swi
 **Off by default** — enable it with a constants map binding each identifier to an environment
 variable and a default value.
 
+Each constant must be declared in TypeScript as `declare const NAME: T;` so the compiler treats it
+as ambient (no runtime binding). The plugin substitutes these identifiers with literals; without
+the `declare const`, TSTL would emit real variable declarations that override the substitution.
+
 ```jsonc
 {
   "compilerOptions": {
@@ -286,18 +312,20 @@ through the `math` table. The rule skips LuaJIT targets, which already handle C 
 | Source | Lua output | Notes |
 | --- | --- | --- |
 | `Math.sqrt(x)` | `x ^ 0.5` | Lossless |
-| `Math.floor(x)` | `x - x % 1` | Lossless |
-| `Math.abs(x)` | `(x < 0) and -x or x` | Lossy for `-0` (returns `-0` instead of `0`) |
-| `Math.max(a, b)` | `(a > b) and a or b` | 2-arg only. Returns `b` when either arg is `NaN` |
-| `Math.min(a, b)` | `(a < b) and a or b` | 2-arg only. Returns `b` when either arg is `NaN` |
+| `Math.floor(x)` | `(x == math.huge or x == -math.huge) and math.floor(x) or x - x % 1` | Lossless; guard preserves `math.huge` for ±∞ inputs |
+| `Math.abs(x)` | `(x == 0) and 0 or ((x < 0) and -x or x)` | Lossless; zero-check preserves `+0` for `-0` input |
+| `Math.max(1, 2)` | `(1 > 2) and 1 or 2` | 2-arg, numeric literals only |
+| `Math.min(1, 2)` | `(1 < 2) and 1 or 2` | 2-arg, numeric literals only |
 | `x ** 2` | `x * x` | Lossless. Literal `2` exponent only |
 
-The rule inlines `abs`, `max`, and `min` only for side-effect-free arguments, so duplicating them in
-the output stays safe.
+`abs` and `floor` rewrite only side-effect-free arguments, so duplicating them is safe. `max` and
+`min` rewrite only when **both** arguments are numeric literals, which — combined with
+`constant-folding` — collapses the pattern at compile time; non-literal arguments fall through to
+`math.max` / `math.min`.
 
-> **Edge cases:** The `-0` and `NaN` deviations are deliberate trade-offs. Typical Lua 5.1 game
-> code never observes these values. If your code relies on IEEE 754 `NaN` propagation or `-0`
-> semantics, disable this rule.
+> **Edge cases:** `x ** 2` assumes `x` is numeric; the rewrite skips non-numeric operands where
+> `__mul` and `__pow` metamethods could produce different results. If you rely on operator-overloaded
+> arithmetic, disable this rule.
 
 ### `dead-local`
 
@@ -375,8 +403,9 @@ end
 
 ### `loop-rebase`
 
-Converts 0-based `$range` for-of loops into 1-based Lua for loops when the body uses the loop
-variable only as `i + 1`.
+Converts 0-based `$range` for-of loops into 1-based Lua for loops. TSTL emits `i + 1` in Lua
+wherever TypeScript uses `i` to index a 1-based array; the rule eliminates that per-iteration
+arithmetic by shifting the loop bounds up by one instead.
 
 ```typescript
 // Input
@@ -436,7 +465,7 @@ A function must meet these conditions to be inlined:
 
 The plugin supports multi-statement function bodies at statement-level call sites. It expands these in-place, wrapping them in a `do...end` block (except at return sites) to keep declared variables from escaping into the caller's scope.
 
-##### Pattern 1 — Void statement site
+**Pattern 1 — Void statement site**
 
 ```typescript
 /** @inline */
@@ -456,7 +485,7 @@ do
 end
 ```
 
-##### Pattern 2 — Variable-declaration site
+**Pattern 2 — Variable-declaration site**
 
 ```typescript
 /** @inline */
@@ -477,7 +506,7 @@ do
 end
 ```
 
-##### Pattern 3 — Return site
+**Pattern 3 — Return site**
 
 ```typescript
 /** @inline */
@@ -498,7 +527,7 @@ local y = ____inline_arg_0 + 1
 return y * 2
 ```
 
-##### Pattern 4 — Destructuring site
+**Pattern 4 — Destructuring site**
 
 ```typescript
 /** @inline */
@@ -524,7 +553,7 @@ local b = ____inline_result_N.b
 
 (where `N` is a compiler-generated symbol ID; the exact value is unimportant)
 
-##### Pattern 5 — LuaMultiReturn destructuring site
+**Pattern 5 — LuaMultiReturn destructuring site**
 
 ```typescript
 /** @inline */
@@ -769,6 +798,23 @@ Precedence:
 - Per-rule `strict: false` always overrides global `strict: true` for that rule.
 - Per-rule `strict: true` promotes warnings to errors for that rule even when the global is `false`.
 
+### Diagnostic codes
+
+All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of the codes below.
+
+| Code | Rule | Meaning |
+| --- | --- | --- |
+| 90001 | `inline` | Generic inline failure (fallback when no more specific code applies) |
+| 90002 | `conditional-compilation` | Condition mixes compile-time constants with runtime variables; branch cannot be folded |
+| 90003 | `inline` | Cross-module inline rejected — body references captured module-scope variables |
+| 90004 | `inline` | Direct or mutual recursion detected |
+| 90005 | `inline` | Unsupported parameter shape (rest / default / optional / destructuring / parameter write) |
+| 90006 | `inline` | Argument has side effects but the parameter is used more than once in an expression body |
+| 90007 | `inline` | Body contains an early `return`, unscoped `break`, `continue`, or labeled statement |
+| 90008 | `inline` | Target is not module-scope |
+| 90009 | `inline` | Multi-statement body used at a void site with disallowed shape |
+| 90010 | `inline` | Multi-statement body used at an expression position where `do...end` cannot fit |
+
 ## Configuration reference
 
 | Key | Type | Default | Description |
@@ -791,6 +837,68 @@ Precedence:
 The [`examples/`](examples/) directory contains a `.ts` / `.lua` pair for each rule, showing the
 TypeScript input and generated Lua output. See [`examples/README.md`](examples/README.md) for
 details.
+
+## Benchmarks
+
+Microbenchmarks for `math-intrinsics`, `localizer`, `loop-rebase`, and `inline` live in the
+[`benchmark/`](benchmark/) directory and run via `npm run bench`. See
+[`benchmark/README.md`](benchmark/README.md) for measured speedups on PUC Lua 5.1 and LuaJIT.
+
+## FAQ
+
+### My `@inline` function isn't being inlined
+
+Check the [`inline` conditions](#inline). Common causes:
+
+- The function captures a module-scope variable (cross-module only — code 90003).
+- A parameter is destructured or has a default (code 90005).
+- The body has an early `return`, unscoped `break`, or `continue` (code 90007).
+- The call is at an expression position but the body has multiple statements (code 90010).
+
+Enable `strict: true` on the `inline` rule to promote the warning to a hard error and see exactly
+which condition failed.
+
+### A local shadowing a stdlib name got rewritten
+
+All rules that match identifiers (`conditional-compilation`, `debug-strip`, `localizer`,
+`math-intrinsics`) are **name-based**, not type-based, after TSTL has lowered the file. A local
+`print` will still be stripped by `debug-strip`. Rename the local or remove the global from the
+rule's match list.
+
+### `conditional-compilation` doesn't substitute my constant
+
+The identifier must be declared ambient:
+
+```ts
+declare const DEBUG: boolean; // substituted
+const DEBUG = false;          // not substituted — real runtime binding
+```
+
+The constants map key must match the identifier name exactly; aliasing through another `const` will
+not propagate.
+
+### My `localizer` rule doesn't hoist a chain rooted at a library global
+
+The default allowlist is stdlib-only. Add your library roots via `include`:
+
+```jsonc
+"localizer": { "include": ["go", "msg", "vmath"] }
+```
+
+See the [root filtering](#root-filtering) section for the full resolution formula.
+
+### `npm install` warns about peer dep version
+
+`typescript-to-lua >= 1.22.0` is the documented floor; CI tests against `1.34.0`. Older TSTL
+versions may work but are not verified — if you see plugin behavior that contradicts this README,
+upgrade TSTL first.
+
+### Can I use this on Lua 5.2 / 5.3 / 5.4?
+
+TSTL accepts those targets, and the plugin will compile without errors, but `math-intrinsics` and
+`localizer` are tuned for Lua 5.1 (PUC) and LuaJIT. Rewrites that are neutral on 5.1 may be
+slower on 5.3 (which has a native integer type and a dedicated `//` floor-divide operator). Benchmark
+before shipping, and disable specific rules if they regress.
 
 ## License
 
