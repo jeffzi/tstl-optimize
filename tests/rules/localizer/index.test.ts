@@ -3,8 +3,8 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { createVisitors } from "../../src/rules/localizer";
-import { compile, normalizeLua } from "../helpers";
+import { createVisitors } from "../../../src/rules/localizer";
+import { compile, normalizeLua } from "../../helpers";
 
 const MODULE_SCOPE = { pluginOptions: { rules: { localizer: { scope: "module" as const } } } };
 const FUNC_SCOPE = { pluginOptions: { rules: { localizer: { scope: "function" as const } } } };

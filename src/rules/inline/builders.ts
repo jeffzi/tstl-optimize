@@ -38,6 +38,7 @@ export function createDiscardTemp(
     undefined,
     discardSymId,
   );
+  // Defensive only: all current callers pass expr; the bare-decl branch is unreachable in tests
   /* v8 ignore next */
   return tstl.createVariableDeclarationStatement([discardIdent], expr ? [expr] : undefined);
 }
@@ -218,6 +219,7 @@ export function inlineExpressionBody(
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
   for (let i = 0; i < target.params.length; i++) {
     const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    // Defensive only: canInline verified all param symbols resolve before we reach here
     /* v8 ignore next */
     if (!paramSymbol) return undefined;
     const symbolId = context.symbolIdMaps.get(paramSymbol);
@@ -358,6 +360,8 @@ export function buildReturnSiteInline(
     const { luaBody, luaReturn } = transformed;
 
     const mapped = buildParamMap(params, callNode.arguments, checker, context);
+    // Defensive only: buildParamMap only fails when a param symbol can't be resolved,
+    // which canInlineStatements would have rejected first
     /* v8 ignore next */
     if (!mapped) return undefined;
     const { tempDecls, paramMap } = mapped;

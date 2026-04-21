@@ -2,14 +2,14 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { createVisitors, mapLuaStatements } from "../../src/rules/inline";
-import { isPureAtVoidSite } from "../../src/rules/inline/eligibility";
+import { createVisitors, mapLuaStatements } from "../../../src/rules/inline";
+import { isPureAtVoidSite } from "../../../src/rules/inline/eligibility";
 import {
   compile,
   compileMultiFileWithDiagnostics,
   compileWithDiagnostics,
   normalizeLua,
-} from "../helpers";
+} from "../../helpers";
 
 describe("inline", () => {
   describe("void-site purity", () => {

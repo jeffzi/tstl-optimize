@@ -1,7 +1,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { compile, normalizeLua } from "../helpers";
+import { compile, normalizeLua } from "../../helpers";
 
 describe("localizer: parameter shadowing", () => {
   it("hoists outer scope property chain when nested function shadows the chain root with parameter", () => {

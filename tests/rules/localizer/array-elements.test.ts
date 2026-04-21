@@ -21,28 +21,29 @@ describe("replaceArrayElements", () => {
       // "arr" is NOT in the hoisted map — covers the false branch of `if (ident)`
       replaceArrayElements(statements, new Map(), new Set(["i"]));
 
-      expect(tstl.isTableIndexExpression((stmt as tstl.ExpressionStatement).expression)).toBe(true);
+      expect(tstl.isTableIndexExpression(stmt.expression)).toBe(true);
     });
   });
 
   describe("stmt hook — ForStatement with non-matching control variable", () => {
-    it("does not skip a ForStatement whose control variable is not a loop variable", () => {
+    it("replaces arr[i] inside body when ForStatement control variable is not a loop variable", () => {
       // ForStatement with control "j" — not in loopVarNames {"i"}.
-      // The stmt handler must not call control.skip(), so the walker recurses into the body.
-      const innerAccess = arrIndex("arr", "i");
-      const forBody = tstl.createBlock([tstl.createExpressionStatement(innerAccess)]);
+      // The stmt handler must not call control.skip(), so the walker recurses into the body
+      // and replaces arr[i] with ____arr.
+      const innerStmt = tstl.createExpressionStatement(arrIndex("arr", "i"));
       const forStmt = tstl.createForStatement(
-        forBody,
+        tstl.createBlock([innerStmt]),
         id("j"),
         tstl.createNumericLiteral(1),
         tstl.createNumericLiteral(10),
       );
 
       const hoisted = new Map([["arr", id("____arr")]]);
-      const statements: tstl.Statement[] = [forStmt];
+      replaceArrayElements([forStmt], hoisted, new Set(["i"]));
 
-      // No error thrown — ForStatement is processed, walker recurses into body
-      expect(() => replaceArrayElements(statements, hoisted, new Set(["i"]))).not.toThrow();
+      // Walker recursed into the body and replaced arr[i] with the hoisted identifier
+      expect(tstl.isIdentifier(innerStmt.expression)).toBe(true);
+      expect(tstl.isIdentifier(innerStmt.expression) && innerStmt.expression.text).toBe("____arr");
     });
   });
 
@@ -56,8 +57,7 @@ describe("replaceArrayElements", () => {
       replaceArrayElements(statements, new Map(), new Set(["i"]));
 
       // LHS is still a table index expression (not replaced)
-      const resultStmt = statements[0] as tstl.AssignmentStatement;
-      expect(tstl.isTableIndexExpression(resultStmt.left[0])).toBe(true);
+      expect(tstl.isTableIndexExpression(assignStmt.left[0])).toBe(true);
     });
   });
 });

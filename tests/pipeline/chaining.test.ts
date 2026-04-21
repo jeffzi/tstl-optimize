@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compile, normalizeLua } from "./helpers";
+import { compile, normalizeLua } from "../helpers";
 
 describe("index chaining", () => {
   it("chains multiple rules for the same SyntaxKind", () => {
@@ -19,9 +19,7 @@ describe("index chaining", () => {
       },
     };
     const lua = normalizeLua(compile(code, options));
-    // math-intrinsics should transform Math.floor
     expect(lua).toContain("val - val % 1");
-    // inline should transform f()
     expect(lua).toContain("y = 1");
   });
 });
@@ -122,8 +120,8 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("value - value % 1"); // Math.floor transformed via inline + math-intrinsics
-    expect(lua).not.toContain("helper("); // function was inlined
+    expect(lua).toContain("value - value % 1");
+    expect(lua).not.toContain("helper(");
     expect(lua).toContain("math.ceil"); // Math.ceil preserved (not in math-intrinsics)
   });
 
@@ -155,14 +153,16 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("x");
-    expect(lua).toContain("y");
-    expect(lua).toContain("z");
-    expect(lua).toContain("result");
+    // math-intrinsics transforms Math.floor(n) → n - n % 1
+    expect(lua).toContain("n - n % 1");
+    // math-intrinsics + constant-folding collapses Math.floor(5.5) → 5
+    expect(lua).toContain("y + 5");
+    // all Math.* calls are rewritten to lowercase math.*
+    expect(lua).not.toContain("Math.");
   });
 });
 
-describe("index chaining — mockedContext.superTransformStatements fallback with SourceFile", () => {
+describe("index chaining — SourceFile statement fallback chains through superTransformStatements", () => {
   it("invokes superTransformStatements fallback when SourceFile visitor chains statements", () => {
     const code = `
       declare const val: number;
@@ -238,8 +238,10 @@ describe("index chaining — mockedContext.superTransformStatements fallback wit
 
     const lua = normalizeLua(compile(code, options));
 
-    // Localizer should hoist obj.x since it appears multiple times
-    expect(lua).toContain("obj.x");
+    // localizer at default (function) scope does not hoist module-level chains;
+    // both call sites emit the original property access unchanged.
+    expect(lua).toContain("math.floor(obj.x)");
+    expect(lua).toContain("math.ceil(obj.x)");
   });
 });
 
@@ -343,7 +345,8 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("result"); // result variable preserved in output
-    expect(lua).toContain("doubled"); // doubled variable preserved in output
+    // math-intrinsics is disabled → Math.floor stays as math.floor(obj.prop)
+    expect(lua).toContain("math.floor(obj.prop)");
+    expect(lua).toContain("result + result");
   });
 });

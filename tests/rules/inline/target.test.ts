@@ -71,13 +71,14 @@ describe("declarationHasLuaMultiReturnReturnType", () => {
   });
 
   describe("when the declaration is not initialized with an inlineable function", () => {
-    it("returns false when initializer is a numeric literal", () => {
-      const varDecl = createVariableDeclaration("x", ts.factory.createNumericLiteral(42));
-      expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(false);
-    });
-
-    it("returns false when there is no initializer", () => {
-      const varDecl = createVariableDeclaration("x", undefined);
+    it.each([
+      {
+        caseName: "initializer is a numeric literal",
+        initializer: ts.factory.createNumericLiteral(42),
+      },
+      { caseName: "there is no initializer", initializer: undefined },
+    ])("returns false when $caseName", ({ initializer }) => {
+      const varDecl = createVariableDeclaration("x", initializer);
       expect(declarationHasLuaMultiReturnReturnType(varDecl)).toBe(false);
     });
   });

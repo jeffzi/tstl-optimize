@@ -24,15 +24,7 @@ function isAmbientTopLevelDeclaration(
 }
 
 function isStripSafeGlobalDeclaration(declaration: ts.Declaration): boolean {
-  if (
-    ts.isVariableDeclaration(declaration) ||
-    ts.isBindingElement(declaration) ||
-    ts.isParameter(declaration)
-  ) {
-    if (!ts.isVariableDeclaration(declaration)) {
-      return false;
-    }
-
+  if (ts.isVariableDeclaration(declaration)) {
     const statement = declaration.parent.parent;
     return ts.isVariableStatement(statement) && isAmbientTopLevelDeclaration(statement);
   }

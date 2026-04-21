@@ -3,10 +3,10 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it, vi } from "vitest";
-import { resolveConditionalCompilationConfig } from "../../src/config";
-import { createVisitors, evaluateCondition } from "../../src/rules/conditional-compilation";
-import { arbSafeString } from "../arbitraries";
-import { compile, compileWithDiagnostics, normalizeLua } from "../helpers";
+import { resolveConditionalCompilationConfig } from "../../../src/config";
+import { createVisitors, evaluateCondition } from "../../../src/rules/conditional-compilation";
+import { arbSafeString } from "../../arbitraries";
+import { compile, compileWithDiagnostics, normalizeLua } from "../../helpers";
 
 // Lua global not in TypeScript's lib — declare it so TS does not error on test sources.
 const PRINT_DECL = "declare function print(...args: unknown[]): void;";
@@ -1672,8 +1672,6 @@ describe("conditional-compilation when property-based inputs vary", () => {
 
 describe("conditional-compilation — switch with nested control flow", () => {
   it("collapses a switch case whose body contains an if with no break in either arm", () => {
-    // Targets containsConditionalCaseBreak line 172 (continue after if-arm analysis
-    // finds no conditional break in either branch).
     const lua = compile(
       `
         ${PRINT_DECL}

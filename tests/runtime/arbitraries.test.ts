@@ -28,10 +28,17 @@ describe("isValidDeclarationIdentifier", () => {
 
 describe("arbIdent", () => {
   it("never produces a TypeScript reserved word", () => {
-    const samples = fc.sample(arbIdent, 200);
-    const reserved = ["if", "for", "while", "return", "class", "function", "const", "let", "var"];
-    for (const keyword of reserved) {
-      expect(samples).not.toContain(keyword);
-    }
+    const reserved = new Set([
+      "if",
+      "for",
+      "while",
+      "return",
+      "class",
+      "function",
+      "const",
+      "let",
+      "var",
+    ]);
+    fc.assert(fc.property(arbIdent, (name) => !reserved.has(name)));
   });
 });

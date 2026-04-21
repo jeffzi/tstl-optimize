@@ -168,14 +168,6 @@ describe("optimize rule interactions", () => {
       expect(normalized).not.toContain("process(msg)");
     });
 
-    // BUG (skipped): when conditional-compilation eliminates the entire function body before
-    // the inline param-map is built, `buildParamMap` cannot find the parameter's Lua SymbolId
-    // (it was never registered because the branch was stripped before transformation).
-    // The inline is abandoned and the call site keeps `maybeLog(msg)`, but
-    // `canEraseInlineDeclaration` already erased the function declaration — producing
-    // a call to an undefined Lua function.
-    // Fix needed: re-emit the declaration when the Lua-phase inline fails due to a
-    // symbol-map miss, or make `canEraseInlineDeclaration` aware of this failure mode.
     it("removes entire inlined body and arg temp when all statements are dead branches", () => {
       const lua = compile(
         `

@@ -248,7 +248,7 @@ export function isNonStdlibCall(expr: tstl.Expression): boolean {
 /**
  * Check if any call expression exists in the loop body (not inside nested function bodies).
  */
-export function hasCallExpression(statements: tstl.Statement[]): boolean {
+export function hasCallExpression(statements: readonly tstl.Statement[]): boolean {
   let found = false;
   walkStatements(statements, {
     shallow: true,
@@ -393,7 +393,7 @@ export function statementAssignsToChain(stmt: tstl.Statement, chain: string): bo
  * Check if statements contain a call to a non-stdlib function.
  * Calls to stdlib functions (math.ceil, etc.) are known to be safe and don't mutate globals.
  */
-function hasNonStdlibCall(statements: tstl.Statement[]): boolean {
+function hasNonStdlibCall(statements: readonly tstl.Statement[]): boolean {
   let found = false;
   walkStatements(statements, {
     shallow: true,
@@ -414,12 +414,15 @@ function hasNonStdlibCall(statements: tstl.Statement[]): boolean {
   return found;
 }
 
-export function hasTopLevelChainAccess(statements: tstl.Statement[], chain: string): boolean {
+export function hasTopLevelChainAccess(
+  statements: readonly tstl.Statement[],
+  chain: string,
+): boolean {
   return statements.some((statement) => statementTouchesChain(statement, chain, true));
 }
 
 export function hasInterveningCallForChain(
-  statements: tstl.Statement[],
+  statements: readonly tstl.Statement[],
   chain: string,
   shallow: boolean,
 ): boolean {
@@ -517,17 +520,14 @@ export function hasInterveningCallForChain(
  * Detect control-flow exits that escape the current scope. Nested loops only propagate
  * return/goto because break is scoped to the inner loop.
  */
-function hasScopeExit(statements: tstl.Statement[], includeBreak: boolean): boolean {
+function hasScopeExit(statements: readonly tstl.Statement[], includeBreak: boolean): boolean {
   for (const stmt of statements) {
     if (tstl.isReturnStatement(stmt) || tstl.isGotoStatement(stmt)) return true;
     if (includeBreak && tstl.isBreakStatement(stmt)) return true;
 
     if (tstl.isIfStatement(stmt)) {
       if (hasScopeExit(stmt.ifBlock.statements, includeBreak)) return true;
-      if (
-        stmt.elseBlock &&
-        hasScopeExit(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], includeBreak)
-      ) {
+      if (stmt.elseBlock && hasScopeExit(getElseBranchStatements(stmt.elseBlock), includeBreak)) {
         return true;
       }
       continue;

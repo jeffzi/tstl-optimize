@@ -44,7 +44,7 @@ interface WalkerHooks {
 }
 
 /** Walk a Lua statement list, calling hooks for each expression and statement. */
-export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks): void {
+export function walkStatements(statements: readonly tstl.Statement[], hooks: WalkerHooks): void {
   const { expr: exprHook, stmt: stmtHook, shallow } = hooks;
   let stopped = false;
   let skipped = false;
@@ -296,7 +296,7 @@ export function walkStatements(statements: tstl.Statement[], hooks: WalkerHooks)
     }
   }
 
-  function walkStmts(stmts: tstl.Statement[]): void {
+  function walkStmts(stmts: readonly tstl.Statement[]): void {
     for (const stmt of stmts) {
       if (stopped) return;
       walkStmt(stmt);

@@ -1,7 +1,7 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { getElseBranchStatements, isLuaRhsPure } from "../../ast/lua-ast";
+import { isLuaRhsPure } from "../../ast/lua-ast";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import type { RuleFactory } from "../../config";
 import { collectReadSymbols, findFirstAccessKind } from "./access";
@@ -97,13 +97,6 @@ function eliminateDeadLocals(
   recurseIntoNestedScopes(statements);
 }
 
-/**
- * Recursively processes nested scopes to eliminate dead locals in each scope.
- *
- * Finds FunctionExpression nodes in stored positions (variable/assignment RHS, call
- * arguments, table field values, IIFE callees) within all reachable statement lists,
- * including compound statement bodies (do, if, while, for, etc.).
- */
 function recurseIntoNestedScopes(statements: tstl.Statement[]): void {
   walkStatements(statements, {
     shallow: true,
@@ -123,7 +116,7 @@ function recurseIntoNestedScopes(statements: tstl.Statement[]): void {
         if (tstl.isIfStatement(stmt.elseBlock)) {
           recurseIntoNestedScopes([stmt.elseBlock]);
         } else {
-          eliminateDeadLocals(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], true);
+          eliminateDeadLocals(stmt.elseBlock.statements, true);
         }
       }
       continue;

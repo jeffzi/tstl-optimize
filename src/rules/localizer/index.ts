@@ -121,7 +121,10 @@ function processFile(
   }
 }
 
-function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingContext): void {
+function processFunctionBodies(
+  statements: readonly tstl.Statement[],
+  ctx: ProcessingContext,
+): void {
   const { threshold, alreadyHoisted, context, isRootAllowed, reservedNames } = ctx;
   const scopeReservedNames = mergeNameSets(
     reservedNames,
@@ -171,7 +174,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       processFunctionBodies(stmt.ifBlock.statements, ctx);
       // Hoist chains inside else-block independently
       if (stmt.elseBlock) {
-        const elseBranchStatements = getElseBranchStatements(stmt.elseBlock) as tstl.Statement[];
+        const elseBranchStatements = getElseBranchStatements(stmt.elseBlock);
         hoistScope(
           elseBranchStatements,
           threshold,
@@ -184,7 +187,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
           undefined,
           stmt,
         );
-        processFunctionBodies(getElseBranchStatements(stmt.elseBlock) as tstl.Statement[], ctx);
+        processFunctionBodies(getElseBranchStatements(stmt.elseBlock), ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)
@@ -209,7 +212,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context, loopReservedNames);
       processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: loopReservedNames });
       if (preLoopDecls.length > 0) {
-        statements.splice(j, 0, ...preLoopDecls);
+        (statements as tstl.Statement[]).splice(j, 0, ...preLoopDecls);
         j += preLoopDecls.length;
       }
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {

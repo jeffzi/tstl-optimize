@@ -1,7 +1,7 @@
 import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 import { hasSideEffects, SideEffectOptions } from "../../ast/ts-ast";
-import { hasCrossModuleFreeVariable } from "./cross-module";
+import { hasCrossModuleFreeVariable, isDescendant } from "./cross-module";
 import { InlineDiagnosticCode } from "./diagnostics";
 import type {
   ExpressionInlineTarget,
@@ -179,15 +179,6 @@ function analyzeParamUsage(
   paramSymbol: ts.Symbol,
   checker: ts.TypeChecker,
 ): { isCaptured: boolean; isWritten: boolean; count: number } {
-  const isDescendant = (node: ts.Node, ancestor: ts.Node): boolean => {
-    let current: ts.Node | undefined = node;
-    while (current !== undefined) {
-      if (current === ancestor) return true;
-      current = current.parent;
-    }
-    return false;
-  };
-
   const isCapturedByNestedFunction = (node: ts.Identifier): boolean => {
     let current: ts.Node | undefined = node.parent;
     while (current !== undefined) {

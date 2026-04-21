@@ -45,7 +45,10 @@ export function isRootShadowedInActiveScopes(
  * We track shadowed roots via shadowStack and exclude chains with BOTH outer and inner reads
  * when the inner reads are shadowed (Concern B2 scenario).
  */
-export function collectScopeInfo(statements: tstl.Statement[], shallow: boolean): ScopeInfo {
+export function collectScopeInfo(
+  statements: readonly tstl.Statement[],
+  shallow: boolean,
+): ScopeInfo {
   const chainCounts = new Map<string, number>();
   const scopeDefs = new Set<string>();
   const shadowStack: Array<Set<string>> = []; // Stack of shadowed param names as we enter/exit nested funcs

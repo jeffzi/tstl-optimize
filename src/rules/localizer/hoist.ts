@@ -46,7 +46,7 @@ function isAnyPrefixBound(chain: string, scopeDefs: ReadonlySet<string>): boolea
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
 export function replaceChains(
-  statements: tstl.Statement[],
+  statements: readonly tstl.Statement[],
   hoisted: Map<string, tstl.Identifier>,
   shallow: boolean,
 ): void {
@@ -91,7 +91,7 @@ export function replaceChains(
  * and prepend declarations. Returns the set of newly hoisted chain strings.
  */
 export function hoistScope(
-  statements: tstl.Statement[],
+  statements: readonly tstl.Statement[],
   threshold: number,
   shallow: boolean,
   alreadyHoisted: ReadonlySet<string>,
@@ -144,9 +144,9 @@ export function hoistScope(
   }
 
   if (toHoist.size > 0) {
-    const targetStatements = elseBranchOwner
+    const targetStatements: tstl.Statement[] = elseBranchOwner
       ? getMutableElseBranchStatements(elseBranchOwner)
-      : statements;
+      : (statements as tstl.Statement[]);
     replaceChains(targetStatements, toHoist, shallow);
     if (inBodyDecls.length > 0) targetStatements.unshift(...inBodyDecls);
     if (outDecls) outDecls.push(...liftableDecls);
@@ -171,7 +171,7 @@ export function hoistScope(
         );
         // Process else-block independently
         if (stmt.elseBlock) {
-          const elseBranchStatements = getElseBranchStatements(stmt.elseBlock) as tstl.Statement[];
+          const elseBranchStatements = getElseBranchStatements(stmt.elseBlock);
           hoistScope(
             elseBranchStatements,
             threshold,

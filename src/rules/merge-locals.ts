@@ -47,9 +47,6 @@ function functionBodyReferencesAnyOf(
   return false;
 }
 
-/**
- * Check if a statement contains any identifier reference matching `names`.
- */
 function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<string>): boolean {
   if (names.size === 0) {
     return false;
@@ -134,9 +131,6 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
   return false;
 }
 
-/**
- * Recursively scan an expression tree for identifier references matching `names`.
- */
 function expressionReferencesAnyOf(expr: tstl.Expression, names: ReadonlySet<string>): boolean {
   if (names.size === 0) {
     return false;
@@ -280,7 +274,6 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
   statements.push(...result);
 }
 
-/** Shallow-walk statements to find FunctionExpressions and merge their bodies. */
 function mergeFunctionBodiesShallow(statements: tstl.Statement[]): void {
   walkStatements(statements, {
     expr: (expr: tstl.Expression) => {

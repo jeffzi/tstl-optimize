@@ -263,6 +263,8 @@ export const createVisitors: RuleFactory = (checker, config) => {
       // When a top-level statement is a Block, recurse into it and strip its
       // direct breaks — but never descend into loops or nested switches, since
       // their breaks belong to those constructs and must be preserved.
+      function stripCaseBreaks(statement: ts.Block): ts.Block;
+      function stripCaseBreaks(statement: ts.Statement): ts.Statement | undefined;
       function stripCaseBreaks(statement: ts.Statement): ts.Statement | undefined {
         if (ts.isBreakStatement(statement)) {
           return undefined;
@@ -294,9 +296,6 @@ export const createVisitors: RuleFactory = (checker, config) => {
             !ts.isSwitchStatement(statement)
           ) {
             const strippedBlock = stripCaseBreaks(statement);
-            if (strippedBlock === undefined || !ts.isBlock(strippedBlock)) {
-              continue;
-            }
 
             if (shouldPreserveFoldedBlock(strippedBlock, node)) {
               result.push(strippedBlock);

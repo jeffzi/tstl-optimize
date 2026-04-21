@@ -12,6 +12,7 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, it } from "vitest";
+import { PRINT_DECL } from "./arbitraries";
 import { assertExpectedRuntimes, detectRuntimes, runtimeEqual } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -25,9 +26,6 @@ it("has expected Lua runtimes available", () => {
 // ---------------------------------------------------------------------------
 // Helpers shared across fixtures
 // ---------------------------------------------------------------------------
-
-/** Declare print so fixtures can call it without TypeScript errors. */
-const PRINT_DECL = "declare function print(s: unknown): void;";
 
 // ---------------------------------------------------------------------------
 // inline — 5 fixtures
@@ -331,7 +329,7 @@ describe("conditional-compilation", () => {
   // Runtime CC fixtures must use a falsy default: `declare const X` is nil at runtime
   // in the baseline build, so only nil/false defaults keep baseline and optimized paths
   // converged. Non-falsy defaults (strings, numbers) would make the optimized build take a
-  // different branch than the baseline — see tests/rules/conditional-compilation.test.ts
+  // different branch than the baseline — see tests/rules/conditional-compilation/index.test.ts
   // for static coverage of non-falsy-default paths.
 
   it("surviving branch executes side effects in the correct order", () => {

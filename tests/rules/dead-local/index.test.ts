@@ -3,8 +3,8 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { createVisitors } from "../../src/rules/dead-local";
-import { compile, normalizeLua } from "../helpers";
+import { createVisitors } from "../../../src/rules/dead-local";
+import { compile, normalizeLua } from "../../helpers";
 
 function expectLuaSnippets(
   lua: string,
@@ -466,7 +466,7 @@ describe("dead-local", () => {
     });
   });
 
-  describe("additional read-shape coverage", () => {
+  describe("when locals are read through complex expressions", () => {
     it("preserves locals read through conditional and parenthesized expressions", () => {
       const lua = compile(`
         function f(flag: boolean) {
@@ -529,39 +529,35 @@ describe("dead-local", () => {
     });
   });
 
-  describe("public visitor coverage", () => {
+  describe("when superTransformNode returns a non-file result", () => {
     it("returns non-file transform results unchanged", () => {
       const visitors = Reflect.apply(createVisitors, undefined, []);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
         node: ts.SourceFile,
-        context: tstl.TransformationContext,
+        context: { superTransformNode(node: ts.Node): unknown },
       ) => tstl.Expression;
       const nonFile = tstl.createBooleanLiteral(true);
 
       const transformed = Reflect.apply(visitor, undefined, [
         {} as ts.SourceFile,
-        {
-          superTransformNode: () => nonFile,
-        } as unknown as tstl.TransformationContext,
+        { superTransformNode: () => nonFile },
       ]);
 
       expect(transformed).toBe(nonFile);
     });
   });
 
-  describe("raw Lua visitor coverage", () => {
+  describe("when transforming pre-built Lua AST nodes", () => {
     function runSourceFileVisitor(node: tstl.Node): tstl.Node {
       const visitors = Reflect.apply(createVisitors, undefined, []);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
         node: ts.SourceFile,
-        context: tstl.TransformationContext,
+        context: { superTransformNode(node: ts.Node): unknown },
       ) => tstl.File;
 
       return Reflect.apply(visitor, undefined, [
         {} as ts.SourceFile,
-        {
-          superTransformNode: () => node,
-        } as unknown as tstl.TransformationContext,
+        { superTransformNode: () => node },
       ]);
     }
 
@@ -679,7 +675,7 @@ describe("dead-local", () => {
     });
   });
 
-  describe("dead-local properties", () => {
+  describe("property-based invariants", () => {
     const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
 
     it("preserves side-effectful RHS even when the local is unused (any call count)", () => {

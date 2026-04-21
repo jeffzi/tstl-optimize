@@ -85,7 +85,7 @@ function makeMultiReturnFailingChecker(): ts.TypeChecker {
 
 describe("buildObjectDestructureInline", () => {
   describe("when buildParamMap cannot resolve a parameter symbol", () => {
-    it("returns undefined (covers the !shared early-return guard)", () => {
+    it("returns undefined", () => {
       const pattern = ts.factory.createObjectBindingPattern([
         ts.factory.createBindingElement(
           undefined,
@@ -110,7 +110,7 @@ describe("buildObjectDestructureInline", () => {
 
 describe("buildArrayDestructureInline", () => {
   describe("when the return type is LuaMultiReturn but buildParamMap cannot resolve a symbol", () => {
-    it("returns undefined (covers the !mapped early-return guard inside isMultiReturn block)", () => {
+    it("returns undefined", () => {
       const pattern = ts.factory.createArrayBindingPattern([
         ts.factory.createBindingElement(
           undefined,
@@ -139,7 +139,7 @@ describe("buildArrayDestructureInline", () => {
   });
 
   describe("when the return type is not LuaMultiReturn and buildParamMap cannot resolve a symbol", () => {
-    it("returns undefined (covers the !shared early-return guard in the non-multiReturn path)", () => {
+    it("returns undefined", () => {
       const pattern = ts.factory.createArrayBindingPattern([
         ts.factory.createBindingElement(
           undefined,
