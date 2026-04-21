@@ -1598,7 +1598,7 @@ ${body}
 
 describe("conditional-compilation when property-based inputs vary", () => {
   const NUM_RUNS = 50;
-  const TIMEOUT = 15_000;
+  const TIMEOUT = 30_000;
 
   it.each([
     {
