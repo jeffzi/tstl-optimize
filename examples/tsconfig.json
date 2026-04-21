@@ -1,3 +1,6 @@
+// Type-check only — the plugin is not invoked here. Example .lua files are
+// produced by scripts/examples.ts via tstl.transpileVirtualProject. See
+// ../README.md#usage for a runnable end-to-end tsconfig.
 {
   "compilerOptions": {
     "strict": true,
