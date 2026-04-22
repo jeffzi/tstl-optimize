@@ -31,7 +31,7 @@ index 501b24b..2b98a0d 100644
          if (specialBuilder === false) continue;
  
 @@ -165,6 +177,7 @@ export abstract class TestBuilder {
-         moduleResolution: ts.ModuleResolutionKind.Node10,
+         moduleResolution: ts.ModuleResolutionKind.Bundler,
          resolveJsonModule: true,
          sourceMap: true,
 +        ...(optimizePlugin ? { luaPlugins: [{ plugin: optimizePlugin }] } : {}),
