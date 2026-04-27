@@ -2,8 +2,9 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { buildParamMap, prepareReturnValueInline, transformInlineBodyAndReturn } from "./builders";
+import type { LiteralKind } from "./const-literal";
 import { substituteParams, substituteParamsInStatements } from "./lua-substitute";
-import type { ReturnValueInlineTarget } from "./target";
+import { type ReturnValueInlineTarget, returnsLuaMultiReturn } from "./target";
 
 interface DestructureShared {
   resultIdent: tstl.Identifier;
@@ -24,6 +25,7 @@ function buildDestructureShared(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): DestructureShared | undefined {
   const resultSymId = context.nextSymbolId();
   const resultIdent = tstl.createIdentifier(
@@ -33,7 +35,7 @@ function buildDestructureShared(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const prepared = prepareReturnValueInline(target, callNode, checker, context);
+  const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
@@ -52,23 +54,26 @@ export function buildObjectDestructureInline(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): tstl.Statement[] | undefined {
+  const bindings: { bindingName: ts.Identifier; keyNode: ts.Identifier }[] = [];
   for (const element of pattern.elements) {
     if (element.dotDotDotToken) return undefined;
     if (!ts.isIdentifier(element.name)) return undefined;
     if (element.initializer) return undefined;
+
+    const keyNode = element.propertyName ?? element.name;
+    if (!ts.isIdentifier(keyNode)) return undefined;
+
+    bindings.push({ bindingName: element.name, keyNode });
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context);
+  const shared = buildDestructureShared(target, callNode, checker, context, substitutions);
   if (!shared) return undefined;
   const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 
   const fieldDecls: tstl.VariableDeclarationStatement[] = [];
-  for (const element of pattern.elements) {
-    const bindingName = element.name as ts.Identifier;
-    const keyNode = element.propertyName ?? element.name;
-    if (!ts.isIdentifier(keyNode)) return undefined;
-
+  for (const { bindingName, keyNode } of bindings) {
     const bindingSymId = context.nextSymbolId();
     const localIdent = tstl.createIdentifier(bindingName.text, undefined, bindingSymId);
 
@@ -89,28 +94,24 @@ export function buildArrayDestructureInline(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): tstl.Statement[] | undefined {
+  const bindingNames: ts.Identifier[] = [];
   for (const element of pattern.elements) {
     if (ts.isOmittedExpression(element)) return undefined;
     if (element.dotDotDotToken) return undefined;
     if (!ts.isIdentifier(element.name)) return undefined;
     if (element.initializer) return undefined;
+
+    bindingNames.push(element.name);
   }
 
-  const signature = checker.getResolvedSignature(callNode);
-  // Defensive only: TSTL always resolves signatures for valid, type-checked call sites
-  /* v8 ignore next */
-  const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
-  const isMultiReturn =
-    returnType?.symbol?.name === "LuaMultiReturn" ||
-    returnType?.aliasSymbol?.name === "LuaMultiReturn";
+  const isMultiReturn = returnsLuaMultiReturn(target.declaration, callNode, checker);
 
-  const bindingIdents: tstl.Identifier[] = pattern.elements
-    .filter((e): e is ts.BindingElement => !ts.isOmittedExpression(e))
-    .map((element) => {
-      const bindingSymId = context.nextSymbolId();
-      return tstl.createIdentifier((element.name as ts.Identifier).text, undefined, bindingSymId);
-    });
+  const bindingIdents: tstl.Identifier[] = bindingNames.map((bindingName) => {
+    const bindingSymId = context.nextSymbolId();
+    return tstl.createIdentifier(bindingName.text, undefined, bindingSymId);
+  });
 
   if (isMultiReturn) {
     const { bodyStmts, params, declaration } = target;
@@ -132,6 +133,8 @@ export function buildArrayDestructureInline(
       target.returnExpr,
       declaration,
       context,
+      checker,
+      substitutions,
     );
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
@@ -158,7 +161,7 @@ export function buildArrayDestructureInline(
     return [...resultDecls, ...tempDecls, doEnd, finalDecl];
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context);
+  const shared = buildDestructureShared(target, callNode, checker, context, substitutions);
   if (!shared) return undefined;
   const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 

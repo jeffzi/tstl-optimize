@@ -12,10 +12,18 @@ import type { ReturnValueInlineTarget } from "../../../src/rules/inline/target";
 // through the TypeScript infrastructure used by prepareReturnValueInline.
 const SOURCE = "function f(x: number): number { return x; }";
 const sourceFile = ts.createSourceFile("test.ts", SOURCE, ts.ScriptTarget.Latest, true);
-const funcDecl = sourceFile.statements[0] as ts.FunctionDeclaration;
-// biome-ignore lint/style/noNonNullAssertion: test fixture has known structure
-const returnExpr = (funcDecl.body!.statements[0] as ts.ReturnStatement)
-  .expression! as ts.Expression;
+const firstStmt = sourceFile.statements[0];
+if (!ts.isFunctionDeclaration(firstStmt)) throw new Error("expected function declaration");
+const funcDecl = firstStmt;
+const firstBodyStmt = funcDecl.body?.statements[0];
+if (
+  firstBodyStmt === undefined ||
+  !ts.isReturnStatement(firstBodyStmt) ||
+  !firstBodyStmt.expression
+) {
+  throw new Error("expected return statement with expression");
+}
+const returnExpr = firstBodyStmt.expression;
 
 function makeTarget(): ReturnValueInlineTarget {
   return {

@@ -2,10 +2,12 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { hasSideEffects } from "../../ast/ts-ast";
-import { rejectIfCrossModuleFreeVar } from "./cross-module";
+import type { LiteralKind } from "./const-literal";
+import { classifyCrossModuleInline } from "./cross-module";
 import { createInlineWarning } from "./diagnostics";
 import { canInline, needsEagerArgumentTemps } from "./eligibility";
 import { needsParentheses, substituteParams, substituteParamsInStatements } from "./lua-substitute";
+import { rewriteWithConstSubstitutions } from "./rewrite-body";
 import type {
   ExpressionInlineTarget,
   ReturnValueInlineTarget,
@@ -55,14 +57,39 @@ export function buildParamMap(
     const paramSymbol = checker.getSymbolAtLocation(params[i].name);
     if (!paramSymbol) return undefined;
     const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
-    if (paramSymbolId === undefined) continue;
-    const luaArg = context.transformExpression(callArgs[i]);
+    const callArg = callArgs[i];
+    if (!callArg) return undefined;
+    if (paramSymbolId === undefined) {
+      if (hasSideEffects(callArg)) {
+        tempDecls.push(createDiscardTemp(context, context.transformExpression(callArg)));
+      }
+      continue;
+    }
+
     const tempId = context.nextSymbolId();
     const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
+    const luaArg = context.transformExpression(callArg);
+
     tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
     paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
   }
   return { tempDecls, paramMap };
+}
+
+function rewriteInlineNode<T extends ts.Node>(
+  node: T,
+  substitutions: Map<ts.Symbol, LiteralKind>,
+  checker: ts.TypeChecker,
+): T {
+  return rewriteWithConstSubstitutions(node, substitutions, checker);
+}
+
+function rewriteInlineStatements(
+  bodyStmts: readonly ts.Statement[],
+  substitutions: Map<ts.Symbol, LiteralKind>,
+  checker: ts.TypeChecker,
+): readonly ts.Statement[] {
+  return bodyStmts.map((stmt) => rewriteWithConstSubstitutions(stmt, substitutions, checker));
 }
 
 /** Transform body statements inside a fresh function scope so locals produce `local` in Lua. */
@@ -89,13 +116,17 @@ export function transformInlineBodyAndReturn(
   returnExpr: ts.Expression,
   declaration: ts.Node,
   context: tstl.TransformationContext,
+  checker: ts.TypeChecker,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): TransformedInlineFunction | undefined {
-  const returnStmt = createInlineReturnStatement(returnExpr);
+  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
+  const rewrittenReturnExpr = rewriteInlineNode(returnExpr, substitutions, checker);
+  const returnStmt = createInlineReturnStatement(rewrittenReturnExpr);
   context.pushScope(FUNCTION_SCOPE, declaration);
   let luaBody: tstl.Statement[];
   let luaReturnStmts: tstl.Statement[];
   try {
-    luaBody = bodyStmts.flatMap((s) => context.transformStatements(s));
+    luaBody = rewrittenBodyStmts.flatMap((s) => context.transformStatements(s));
     luaReturnStmts = context.transformStatements(returnStmt);
   } finally {
     context.popScope();
@@ -108,7 +139,7 @@ export function transformInlineBodyAndReturn(
 
 function createInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement {
   const parent = returnExpr.parent;
-  if (ts.isReturnStatement(parent) && parent.expression === returnExpr) {
+  if (parent && ts.isReturnStatement(parent) && parent.expression === returnExpr) {
     return parent;
   }
 
@@ -122,14 +153,18 @@ export function prepareReturnValueInline(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): PreparedReturnValueInline | undefined {
   const { bodyStmts, params, declaration, returnExpr } = target;
+
+  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
+  const rewrittenReturnExpr = rewriteInlineNode(returnExpr, substitutions, checker);
 
   // Transform body and return expression first so ALL param symbols are registered
   // in context.symbolIdMaps before buildParamMap looks them up. A param that only
   // appears in the return expression (not in body statements) would be missing otherwise.
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
-  const luaReturnExpr = context.transformExpression(returnExpr);
+  const luaBody = transformBodyStatements(rewrittenBodyStmts, declaration, context);
+  const luaReturnExpr = context.transformExpression(rewrittenReturnExpr);
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
@@ -147,11 +182,14 @@ export function buildDoEndBlock(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
+  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
+
   // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
-  const luaBody = transformBodyStatements(bodyStmts, declaration, context);
+  const luaBody = transformBodyStatements(rewrittenBodyStmts, declaration, context);
 
   // If a lower-priority rule (e.g. conditional-compilation) stripped the body
   // to nothing, the params were never referenced and may lack Lua SymbolIds.
@@ -197,11 +235,21 @@ export function inlineExpressionBody(
     return undefined;
   }
 
-  const luaBody = context.transformExpression(target.bodyExpr);
-
-  if (rejectIfCrossModuleFreeVar(callNode, target, [target.bodyExpr], checker, context, strict)) {
+  const classification = classifyCrossModuleInline(
+    callNode,
+    target,
+    [target.bodyExpr],
+    checker,
+    context,
+    strict,
+  );
+  if (classification.reject) {
     return undefined;
   }
+  const { substitutions } = classification;
+
+  const rewrittenExpr = rewriteInlineNode(target.bodyExpr, substitutions, checker);
+  const luaBody = context.transformExpression(rewrittenExpr);
 
   if (needsEagerArgumentTemps(target, callNode, checker)) {
     const mapped = buildParamMap(target.params, callNode.arguments, checker, context);
@@ -224,8 +272,7 @@ export function inlineExpressionBody(
     if (!paramSymbol) return undefined;
     const symbolId = context.symbolIdMaps.get(paramSymbol);
     if (symbolId === undefined) continue;
-    const luaArg = context.transformExpression(callNode.arguments[i]);
-    paramMap.set(symbolId, luaArg);
+    paramMap.set(symbolId, context.transformExpression(callNode.arguments[i]));
   }
 
   const substituted = substituteParams(luaBody, paramMap);
@@ -234,62 +281,55 @@ export function inlineExpressionBody(
     : substituted;
 }
 
+function getStatementBody(stmt: ts.Statement): readonly ts.Statement[] {
+  return ts.isBlock(stmt) ? stmt.statements : [stmt];
+}
+
 export function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: string): boolean {
   for (const stmt of bodyStmts) {
     if (ts.isVariableStatement(stmt)) {
       for (const decl of stmt.declarationList.declarations) {
         if (ts.isIdentifier(decl.name) && decl.name.text === name) return true;
       }
+      continue;
     }
     if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) return true;
     if (ts.isBlock(stmt) && bodyDeclaresLocal(stmt.statements, name)) return true;
     if (ts.isIfStatement(stmt)) {
-      const thenStatements = ts.isBlock(stmt.thenStatement)
-        ? stmt.thenStatement.statements
-        : [stmt.thenStatement];
-      if (bodyDeclaresLocal(thenStatements, name)) return true;
-      if (stmt.elseStatement) {
-        const elseStatements = ts.isBlock(stmt.elseStatement)
-          ? stmt.elseStatement.statements
-          : [stmt.elseStatement];
-        if (bodyDeclaresLocal(elseStatements, name)) return true;
+      if (bodyDeclaresLocal(getStatementBody(stmt.thenStatement), name)) return true;
+      if (stmt.elseStatement && bodyDeclaresLocal(getStatementBody(stmt.elseStatement), name)) {
+        return true;
       }
+      continue;
     }
     if (
-      (ts.isWhileStatement(stmt) ||
-        ts.isDoStatement(stmt) ||
-        ts.isForStatement(stmt) ||
-        ts.isForInStatement(stmt) ||
-        ts.isForOfStatement(stmt)) &&
-      bodyDeclaresLocal(
-        ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
-        name,
-      )
+      ts.isWhileStatement(stmt) ||
+      ts.isDoStatement(stmt) ||
+      ts.isForStatement(stmt) ||
+      ts.isForInStatement(stmt) ||
+      ts.isForOfStatement(stmt)
     ) {
-      return true;
+      if (bodyDeclaresLocal(getStatementBody(stmt.statement), name)) return true;
+      continue;
     }
     if (ts.isSwitchStatement(stmt)) {
       for (const clause of stmt.caseBlock.clauses) {
         if (bodyDeclaresLocal(clause.statements, name)) return true;
       }
+      continue;
     }
     if (ts.isTryStatement(stmt)) {
       if (bodyDeclaresLocal(stmt.tryBlock.statements, name)) return true;
       if (stmt.catchClause && bodyDeclaresLocal(stmt.catchClause.block.statements, name))
         return true;
       if (stmt.finallyBlock && bodyDeclaresLocal(stmt.finallyBlock.statements, name)) return true;
+      continue;
     }
     /* v8 ignore start */
-    if (
+    if (ts.isLabeledStatement(stmt)) {
       // Defensive only: current TSTL rejects labeled statements end-to-end, but
       // preserve their scope interactions if one reaches this analysis.
-      ts.isLabeledStatement(stmt) &&
-      bodyDeclaresLocal(
-        ts.isBlock(stmt.statement) ? stmt.statement.statements : [stmt.statement],
-        name,
-      )
-    ) {
-      return true;
+      if (bodyDeclaresLocal(getStatementBody(stmt.statement), name)) return true;
     }
     /* v8 ignore stop */
   }
@@ -302,6 +342,7 @@ export function buildVarDeclInline(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): tstl.Statement[] | undefined {
   const { bodyStmts } = target;
 
@@ -319,7 +360,7 @@ export function buildVarDeclInline(
   const resultIdent = tstl.createIdentifier(resultName, undefined, resultSymId);
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const prepared = prepareReturnValueInline(target, callNode, checker, context);
+  const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
@@ -346,6 +387,7 @@ export function buildReturnSiteInline(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
   const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
@@ -355,6 +397,8 @@ export function buildReturnSiteInline(
       target.returnExpr,
       declaration,
       context,
+      checker,
+      substitutions,
     );
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
@@ -373,7 +417,7 @@ export function buildReturnSiteInline(
     return [...tempDecls, ...substitutedBody, tstl.createReturnStatement(substitutedReturns)];
   }
 
-  const prepared = prepareReturnValueInline(target, callNode, checker, context);
+  const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 

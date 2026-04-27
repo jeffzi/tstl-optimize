@@ -129,18 +129,34 @@ export function mapLuaStatements(
       case tstl.SyntaxKind.VariableDeclarationStatement: {
         const varDecl = stmt as tstl.VariableDeclarationStatement;
         return tstl.createVariableDeclarationStatement(
-          // LHS identifiers in variable declarations are never parameters (canInline/canInlineStatements
-          // rejects writes to params), so recurse preserves their Identifier kind here.
-          varDecl.left.map((id) => recurse(id) as tstl.Identifier),
+          varDecl.left.map((id) => {
+            const mapped = recurse(id);
+            // canInline/canInlineStatements rejects writes to params, so LHS identifiers
+            // are never in paramMap and leafFn never substitutes them — kind is preserved.
+            /* v8 ignore next */
+            if (mapped.kind !== tstl.SyntaxKind.Identifier)
+              throw new Error("invariant: LHS identifier");
+            return mapped as tstl.Identifier;
+          }),
           varDecl.right?.map(recurse),
         );
       }
       case tstl.SyntaxKind.AssignmentStatement: {
         const assign = stmt as tstl.AssignmentStatement;
         return tstl.createAssignmentStatement(
-          // Assignment LHS expressions (Identifier | TableIndexExpression) are not params
-          // (isParamWritten rejects inline when params appear on LHS), so recurse is safe here.
-          assign.left.map((l) => recurse(l) as tstl.AssignmentLeftHandSideExpression),
+          assign.left.map((l) => {
+            const mapped = recurse(l);
+            // isParamWritten rejects inline when params appear on LHS, so assignment
+            // targets (Identifier | TableIndexExpression) are never substituted.
+            /* v8 ignore next */
+            if (
+              mapped.kind !== tstl.SyntaxKind.Identifier &&
+              mapped.kind !== tstl.SyntaxKind.TableIndexExpression
+            ) {
+              throw new Error("invariant: LHS assignment expression");
+            }
+            return mapped as tstl.AssignmentLeftHandSideExpression;
+          }),
           assign.right.map(recurse),
         );
       }

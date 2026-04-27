@@ -7,7 +7,8 @@ import {
   createDiscardTemp,
   inlineExpressionBody,
 } from "./builders";
-import { rejectIfCrossModuleFreeVar } from "./cross-module";
+import type { LiteralKind } from "./const-literal";
+import { classifyCrossModuleInline } from "./cross-module";
 import { buildArrayDestructureInline, buildObjectDestructureInline } from "./destructure-builders";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import {
@@ -17,7 +18,37 @@ import {
   isModuleScopeDeclaration,
   isPureAtVoidSite,
 } from "./eligibility";
+import type { ReturnValueInlineTarget } from "./target";
 import { getInlineTarget, hasInlineTag } from "./target";
+
+function validateAndClassifyReturnValueInline(
+  callNode: ts.CallExpression,
+  target: ReturnValueInlineTarget,
+  checker: ts.TypeChecker,
+  context: tstl.TransformationContext,
+  strict: boolean,
+): Map<ts.Symbol, LiteralKind> | undefined {
+  const canInlineResult = canInlineStatements(target, callNode, checker);
+  if (canInlineResult !== undefined) {
+    context.diagnostics.push(
+      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
+    );
+    return undefined;
+  }
+
+  const classification = classifyCrossModuleInline(
+    callNode,
+    target,
+    [...target.bodyStmts, target.returnExpr],
+    checker,
+    context,
+    strict,
+  );
+  if (classification.reject) {
+    return undefined;
+  }
+  return classification.substitutions;
+}
 
 export function handleCallExpression(
   node: ts.CallExpression,
@@ -70,48 +101,46 @@ export function handleVariableStatement(
   if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
 
   const callNode = decl.initializer;
-
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
 
   const { target } = result;
 
-  // Only handle statementsWithReturn targets here.
-  // expression-body targets are handled by the existing CallExpression visitor.
-  // statements (void-body) targets at var-decl sites fall through to superTransformStatements.
   if (target.kind !== "statementsWithReturn") return undefined;
 
-  const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
-    return undefined;
-  }
-
-  if (
-    rejectIfCrossModuleFreeVar(
-      callNode,
-      target,
-      [...target.bodyStmts, target.returnExpr],
-      checker,
-      context,
-      strict,
-    )
-  ) {
-    return undefined;
-  }
+  const substitutions = validateAndClassifyReturnValueInline(
+    callNode,
+    target,
+    checker,
+    context,
+    strict,
+  );
+  if (substitutions === undefined) return undefined;
 
   if (ts.isIdentifier(decl.name)) {
-    return buildVarDeclInline(decl.name, target, callNode, checker, context);
+    return buildVarDeclInline(decl.name, target, callNode, checker, context, substitutions);
   }
 
   if (ts.isObjectBindingPattern(decl.name)) {
-    return buildObjectDestructureInline(decl.name, target, callNode, checker, context);
+    return buildObjectDestructureInline(
+      decl.name,
+      target,
+      callNode,
+      checker,
+      context,
+      substitutions,
+    );
   }
 
   if (ts.isArrayBindingPattern(decl.name)) {
-    return buildArrayDestructureInline(decl.name, target, callNode, checker, context);
+    return buildArrayDestructureInline(
+      decl.name,
+      target,
+      callNode,
+      checker,
+      context,
+      substitutions,
+    );
   }
 
   return undefined;
@@ -126,36 +155,22 @@ export function handleReturnStatement(
   if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
 
   const callNode = node.expression;
-
   const result = getInlineTarget(callNode, checker);
   if (!result) return undefined;
 
   const { target } = result;
-
   if (target.kind !== "statementsWithReturn") return undefined;
 
-  const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
-    return undefined;
-  }
+  const substitutions = validateAndClassifyReturnValueInline(
+    callNode,
+    target,
+    checker,
+    context,
+    strict,
+  );
+  if (substitutions === undefined) return undefined;
 
-  if (
-    rejectIfCrossModuleFreeVar(
-      callNode,
-      target,
-      [...target.bodyStmts, target.returnExpr],
-      checker,
-      context,
-      strict,
-    )
-  ) {
-    return undefined;
-  }
-
-  return buildReturnSiteInline(target, callNode, checker, context);
+  return buildReturnSiteInline(target, callNode, checker, context, substitutions);
 }
 
 export function handleExpressionStatement(
@@ -205,13 +220,20 @@ export function handleExpressionStatement(
     return undefined;
   }
 
-  if (target.bodyStmts.length === 0) return [];
-
-  if (rejectIfCrossModuleFreeVar(callNode, target, target.bodyStmts, checker, context, strict)) {
+  const classification = classifyCrossModuleInline(
+    callNode,
+    target,
+    target.bodyStmts,
+    checker,
+    context,
+    strict,
+  );
+  if (classification.reject) {
     return undefined;
   }
+  const { substitutions } = classification;
 
-  return buildDoEndBlock(target, callNode, checker, context);
+  return buildDoEndBlock(target, callNode, checker, context, substitutions);
 }
 
 export function handleFunctionDeclaration(
