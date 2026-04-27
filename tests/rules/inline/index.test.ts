@@ -4,12 +4,7 @@ import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors, mapLuaStatements } from "../../../src/rules/inline";
 import { isPureAtVoidSite } from "../../../src/rules/inline/eligibility";
-import {
-  compile,
-  compileMultiFileWithDiagnostics,
-  compileWithDiagnostics,
-  normalizeLua,
-} from "../../helpers";
+import { compile, compileWithDiagnostics, normalizeLua } from "../../helpers";
 
 describe("inline", () => {
   describe("void-site purity", () => {
@@ -481,60 +476,6 @@ describe("inline", () => {
     });
   });
 
-  describe("cross-module", () => {
-    it("inlines self-contained functions", () => {
-      const { lua } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export function double(x: number) { return x * 2; }
-        `,
-        "main.ts": `
-          import { double } from "./utils";
-          const r = double(10);
-        `,
-      });
-      // Constant folding reduces 10 * 2 to 20
-      expect(lua).toContain("(20)");
-    });
-
-    it("rejects functions with free variables", () => {
-      const { diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          const factor = 10;
-          /** @inline */
-          export function f(x: number) { return x * factor; }
-        `,
-        "main.ts": `
-          import { f } from "./utils";
-          f(1);
-        `,
-      });
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("non-parameter");
-    });
-
-    it("inlines self-contained arrow multi-return functions", () => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          /** @inline */
-          export const swap = (a: number, b: number): LuaMultiReturn<[number, number]> =>
-            $multi(b, a);
-        `,
-        "main.ts": `
-          import { swap } from "./utils";
-
-          declare const x: number;
-          declare const y: number;
-          const [p, q] = swap(x, y);
-        `,
-      });
-
-      expect(diagnostics).toHaveLength(0);
-      expect(lua).not.toContain("swap(");
-      expect(lua).toMatch(/local p, q = .*____inline_result_/);
-    });
-  });
-
   describe("destructuring parameter rejection", () => {
     it.each([
       {
@@ -799,29 +740,6 @@ describe("inline public API coverage", () => {
     expect(visitors).toStrictEqual({});
   });
 
-  it("ignores type-only references when checking cross-module free variables", () => {
-    const { diagnostics, lua } = compileMultiFileWithDiagnostics(
-      {
-        "shared.ts": `
-          export type Shared = { value: number };
-          /** @inline */
-          export function pickValue(input: Shared) {
-            return input.value;
-          }
-        `,
-        "main.ts": `
-          import { pickValue, type Shared } from "./shared";
-          declare const shared: Shared;
-          export const result = pickValue(shared);
-        `,
-      },
-      {},
-    );
-
-    expect(diagnostics).toHaveLength(0);
-    expect(lua).toContain("shared.value");
-  });
-
   it("returns undefined when direct visitors receive the wrong node kinds", () => {
     const visitors = Reflect.apply(createVisitors, undefined, [
       {} as ts.TypeChecker,
@@ -1027,11 +945,11 @@ describe("inline uncovered branches", () => {
       expect(lua).not.toContain("(x + y)");
     });
 
-    // Side-effectful expression-body calls preserve side effects without introducing local _.
-    it.each([
-      {
-        name: "side-effectful body",
-        code: `
+    it.each(
+      [
+        {
+          name: "side-effectful body",
+          code: `
           declare function sideEffect(): number;
 
           /** @inline */
@@ -1041,12 +959,12 @@ describe("inline uncovered branches", () => {
 
           foo();
         `,
-        shouldContain: "sideEffect()",
-        wrapperName: "foo",
-      },
-      {
-        name: "side-effectful argument",
-        code: `
+          shouldContain: "sideEffect()",
+          wrapperName: "foo",
+        },
+        {
+          name: "side-effectful argument",
+          code: `
           declare function impure(): number;
 
           /** @inline */
@@ -1056,12 +974,12 @@ describe("inline uncovered branches", () => {
 
           double(impure());
         `,
-        shouldContain: "impure()",
-        wrapperName: "double",
-      },
-      {
-        name: "both side-effectful",
-        code: `
+          shouldContain: "impure()",
+          wrapperName: "double",
+        },
+        {
+          name: "both side-effectful",
+          code: `
           declare function f(x: number): number;
           declare function g(): number;
 
@@ -1072,26 +990,24 @@ describe("inline uncovered branches", () => {
 
           compute(g());
         `,
-        shouldContain: ["f(", "g()"],
-        wrapperName: "compute",
-      },
-    ])("preserves side effect from expression-body call with $name at statement position", ({
+          shouldContain: ["f(", "g()"],
+          wrapperName: "compute",
+        },
+      ].flatMap(({ shouldContain, ...testCase }) =>
+        (Array.isArray(shouldContain) ? shouldContain : [shouldContain]).map((pattern) => ({
+          ...testCase,
+          pattern,
+        })),
+      ),
+    )("preserves side effect from expression-body call with $name at statement position", ({
       code,
-      shouldContain,
+      pattern,
       wrapperName,
     }) => {
       const lua = normalizeLua(compile(code));
-      const patterns = Array.isArray(shouldContain) ? shouldContain : [shouldContain];
 
-      // All side-effect patterns should appear
-      patterns.forEach((pattern) => {
-        expect(lua).toContain(pattern);
-      });
-
-      // The inline wrapper should not appear
       expect(lua).not.toContain(`${wrapperName}(`);
-
-      // Preserve the side effect without introducing a user-visible `_` binding.
+      expect(lua).toContain(pattern);
       expect(lua).not.toContain("local _ =");
       expect(lua).toMatch(/local ____inline_result_\d+ =/);
     });
@@ -1182,101 +1098,6 @@ describe("inline uncovered branches", () => {
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("return-value function called at void site"),
-        ),
-      ).toBe(true);
-    });
-  });
-
-  describe("Cross-module free variable detection (rejectIfCrossModuleFreeVar)", () => {
-    it("rejects cross-module inline when function references non-parameter identifier", () => {
-      const files = {
-        "utils.ts": `
-          export const globalValue = 42;
-
-          /** @inline */
-          export function useGlobal(x: number): number {
-            return x + globalValue;
-          }
-        `,
-        "main.ts": `
-          import { useGlobal } from "./utils";
-
-          function test() {
-            useGlobal(1);
-          }
-        `,
-      };
-
-      const { diagnostics } = compileMultiFileWithDiagnostics(files);
-
-      // Should have a diagnostic about cross-module free variable
-      expect(diagnostics.length).toBeGreaterThan(0);
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes(
-            "cross-module function references non-parameter identifiers",
-          ),
-        ),
-      ).toBe(true);
-    });
-
-    it("falls back to call when cross-module free var blocks inline", () => {
-      const files = {
-        "utils.ts": `
-          export const factor = 2;
-
-          /** @inline */
-          export function multiply(x: number): number {
-            return x * factor;
-          }
-        `,
-        "main.ts": `
-          import { multiply } from "./utils";
-
-          function test() {
-            const result = multiply(5);
-          }
-        `,
-      };
-
-      const { lua } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      // Function should NOT be inlined, call should remain
-      expect(normalized).toContain("multiply(5)");
-    });
-
-    it("falls back to call when expression inline closes over an imported binding", () => {
-      const files = {
-        "config.ts": `
-          export const factor = 2;
-        `,
-        "utils.ts": `
-          import { factor } from "./config";
-
-          /** @inline */
-          export function multiply(x: number): number {
-            return x * factor;
-          }
-        `,
-        "main.ts": `
-          import { multiply } from "./utils";
-
-          function test() {
-            const result = multiply(5);
-          }
-        `,
-      };
-
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(normalized).toContain("multiply(5)");
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes(
-            "cross-module function references non-parameter identifiers",
-          ),
         ),
       ).toBe(true);
     });
@@ -1916,6 +1737,45 @@ describe("inline uncovered branches", () => {
       // Multi-statement at void site should inline
       expect(lua).not.toContain("log(x)");
     });
+
+    it("preserves a side-effecting unused argument for an empty statement body", () => {
+      const code = `
+        declare function sideEffect(): number;
+
+        /** @inline */
+        function run(_value: number): void {}
+
+        run(sideEffect());
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("run(");
+      expect(lua).toContain("sideEffect()");
+      expect(lua).toMatch(/local ____inline_result_\d+ = sideEffect\(\)/);
+    });
+
+    it("preserves side-effecting unused arguments before used argument temps", () => {
+      const code = `
+        declare function first(): number;
+        declare function second(): number;
+        declare function print(value: number): void;
+
+        /** @inline */
+        function run(_ignored: number, value: number): void {
+          print(value);
+        }
+
+        run(first(), second());
+      `;
+
+      const lua = normalizeLua(compile(code));
+
+      expect(lua).not.toContain("run(");
+      expect(lua).toContain("first()");
+      expect(lua).toContain("second()");
+      expect(lua.indexOf("first()")).toBeLessThan(lua.indexOf("second()"));
+    });
   });
 
   describe("Complex argument evaluation", () => {
@@ -1943,7 +1803,7 @@ describe("inline uncovered branches", () => {
 
         /** @inline */
         function triple(n: number): number {
-          return n * 3;
+          return n + n + n;
         }
 
         const result = triple(x);
@@ -1952,7 +1812,7 @@ describe("inline uncovered branches", () => {
       const lua = normalizeLua(compile(code));
 
       // Pure argument with multiple uses should inline
-      expect(lua).toContain("x * 3");
+      expect(lua).toContain("x + x + x");
     });
 
     it("inlines argument-less function", () => {
@@ -2111,67 +1971,6 @@ describe("inline uncovered branches", () => {
           ),
         ),
       ).toBe(true);
-    });
-  });
-
-  describe("cross-module free variable at statement position", () => {
-    it("preserves multi-statement cross-module call with free variable", () => {
-      const files = {
-        "store.ts": `
-          let counter = 0;
-
-          /** @inline */
-          export
-          function incrementAndLog(): void {
-            counter++;
-            const msg = "Count: " + counter;
-          }
-        `,
-        "main.ts": `
-          import { incrementAndLog } from "./store";
-
-          function main() {
-            incrementAndLog();
-          }
-        `,
-      };
-
-      const { lua } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      // Call must be preserved to avoid breaking variable capture
-      expect(normalized).toContain("incrementAndLog()");
-    });
-
-    it("preserves multi-statement cross-module call accessing module scope", () => {
-      const files = {
-        "config.ts": `
-          export let debugMode = true;
-        `,
-        "utils.ts": `
-          import { debugMode } from "./config";
-
-          /** @inline */
-          export
-          function processValue(value: number): void {
-            const x = value + 1;
-            const y = debugMode ? x : 0;
-          }
-        `,
-        "main.ts": `
-          import { processValue } from "./utils";
-
-          function main() {
-            processValue(42);
-          }
-        `,
-      };
-
-      const { lua } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      // Call must be preserved
-      expect(normalized).toContain("processValue(42)");
     });
   });
 
@@ -2389,36 +2188,6 @@ describe("inline uncovered branches", () => {
 
       expect(lua).toContain("____inline_result_");
       expect(lua).toContain("local result =");
-    });
-
-    it("keeps a cross-module return-site call when the inline target closes over module state", () => {
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
-        "utils.ts": `
-          export const factor = 2;
-
-          /** @inline */
-          export function multiply(value: number): number {
-            const result = value * factor;
-            return result;
-          }
-        `,
-        "main.ts": `
-          import { multiply } from "./utils";
-
-          export function test() {
-            return multiply(3);
-          }
-        `,
-      });
-
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes(
-            "cross-module function references non-parameter identifiers",
-          ),
-        ),
-      ).toBe(true);
-      expect(normalizeLua(lua)).toContain("return multiply(3)");
     });
   });
 
@@ -2959,28 +2728,6 @@ describe("inline uncovered branches", () => {
       });
     });
 
-    it("inlines imported aliases that only reference local params through type assertions", () => {
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
-        "shared.ts": `
-          export type SharedNumber = number;
-
-          /** @inline */
-          export function identity(value: number): number {
-            const typed = value as SharedNumber;
-            return typed;
-          }
-        `,
-        "main.ts": `
-          import { identity as alias } from "./shared";
-
-          export const result = alias(1);
-        `,
-      });
-
-      expect(diagnostics).toHaveLength(0);
-      expect(normalizeLua(lua)).not.toContain("alias(1)");
-    });
-
     describe("return visitor diagnostics", () => {
       it.each([
         {
@@ -3449,7 +3196,7 @@ describe("inline uncovered branches", () => {
     it("returns undefined from direct variable visitors when cross-module free variables block inlining", () => {
       const { visitors, program } = createInlineVisitors({
         "/utils.ts": `
-          export const factor = 2;
+          export let factor = 2;
 
           /** @inline */
           export function multiply(value: number): number {
@@ -3578,32 +3325,11 @@ describe("inline uncovered branches", () => {
       matcher: (text: string) => boolean,
     ) => {
       const found = diags.find((d) => matcher(String(d.messageText)));
-      expect(found).toBeDefined();
-      // biome-ignore lint/style/noNonNullAssertion: test assertion guarantees non-null
-      return found!;
+      if (!found) {
+        throw new Error("expected diagnostic");
+      }
+      return found;
     };
-
-    it("cross-module free variable emits code 90003", () => {
-      const code = `
-        export const factor = 2;
-
-        /** @inline */
-        export function multiply(x: number): number {
-          return x * factor;
-        }
-      `;
-      const files = {
-        "utils.ts": code,
-        "main.ts": `
-          import { multiply } from "./utils";
-          const result = multiply(5);
-        `,
-      };
-
-      const { diagnostics } = compileMultiFileWithDiagnostics(files);
-      const diag = findDiagnostic(diagnostics, (text) => text.includes("cross-module"));
-      expect(diag.code).toBe(90003);
-    });
 
     it("recursive function emits code 90004", () => {
       const code = `

@@ -27,7 +27,7 @@ function checkLuaSyntax(lua: string): void {
     );
   }
   if (result.status !== 0) {
-    const stderr = (result.stderr as string).trim();
+    const stderr = result.stderr.trim();
     throw new Error(`Emitted Lua failed luac -p syntax check:\n${stderr}\n\nEmitted Lua:\n${lua}`);
   }
 }
