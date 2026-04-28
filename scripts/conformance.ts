@@ -82,7 +82,11 @@ function main(): void {
   console.log("==> Running TSTL unit tests with tstl-optimize active...");
   run("npx", ["jest", "test/unit", "--no-coverage", "--forceExit", "--silent", ...argv.slice(2)], {
     cwd: conformanceDir,
-    env: { ...env, TSTL_OPTIMIZE_PLUGIN: pluginPath },
+    env: {
+      ...env,
+      TSTL_OPTIMIZE_PLUGIN: pluginPath,
+      NODE_OPTIONS: [env.NODE_OPTIONS, "--max-old-space-size=4096"].filter(Boolean).join(" "),
+    },
   });
 }
 
