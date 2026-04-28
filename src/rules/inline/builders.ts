@@ -352,9 +352,8 @@ export function buildVarDeclInline(
   const resultSymId = context.nextSymbolId();
 
   // When the inlined body declares a local with the same name as the call-site
-  // binding, the inner local would shadow the result variable inside the do...end
-  // block, turning the return assignment into a no-op. Use a collision-safe temp
-  // name in that case and re-bind the user's name after the do...end block.
+  // binding, use a collision-safe temp name inside the do...end block and rebind
+  // the original name after to avoid the inner local shadowing the result variable.
   const needsTempName = bodyDeclaresLocal(bodyStmts, nameIdent.text);
   const resultName = needsTempName ? `____inline_result_${resultSymId}` : nameIdent.text;
   const resultIdent = tstl.createIdentifier(resultName, undefined, resultSymId);
@@ -364,15 +363,18 @@ export function buildVarDeclInline(
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
-  const assignResult = tstl.createAssignmentStatement(
-    [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
-    [substitutedReturn],
-  );
+  const assignResult = tstl.createAssignmentStatement([resultIdent], [substitutedReturn]);
 
   const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
 
   if (needsTempName) {
+    // Register the call-site variable in symbolIdMaps before dead-local analysis.
+    // Without this, dead-local sees the binding as unread and removes it.
+    const nameSymbol = checker.getSymbolAtLocation(nameIdent);
+    /* v8 ignore next */
+    if (!nameSymbol) return undefined;
     const bindingSymId = context.nextSymbolId();
+    context.symbolIdMaps.set(nameSymbol, bindingSymId);
     const bindingDecl = tstl.createVariableDeclarationStatement(
       [tstl.createIdentifier(nameIdent.text, undefined, bindingSymId)],
       [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
