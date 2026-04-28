@@ -300,6 +300,35 @@ describe("inline", () => {
       expect(lua).toContain("do");
       expect(lua).toMatch(/local result = ____inline_result_\d+/);
     });
+
+    it("preserves binding declaration with correct symbol ID when body local collides", () => {
+      const lua = compile(`
+        /** @inline */
+        function add(a: { n: number; dense: number[] }, index: number): number {
+          const di = a.n;
+          a.dense[di] = index;
+          a.n = di + 1;
+          return di;
+        }
+        function spawn(a: { n: number; dense: number[]; entities: number[] }, index: number, id: number): void {
+          const di = add(a, index);
+          a.entities[di] = id;
+        }
+      `);
+
+      // Regression: binding must reuse call-site variable's symbol ID, otherwise
+      // dead-local removes it and outer code reads nil instead of the collision-safe value.
+      expect(lua).toMatch(/local di = ____inline_result_\d+/);
+      expect(lua).toMatch(/a\.entities\[di\b/);
+
+      // Verify the temp is reassigned back to di in the binding declaration
+      const collisionTempMatch = lua.match(/local di = (____inline_result_\d+)/);
+      expect(collisionTempMatch).not.toBeNull();
+      if (collisionTempMatch?.[1]) {
+        const tempName = collisionTempMatch[1];
+        expect(lua).toMatch(new RegExp(`\\bdi = ${tempName}\\b|local di = ${tempName}\\b`));
+      }
+    });
   });
 
   describe("switch with break in body", () => {
