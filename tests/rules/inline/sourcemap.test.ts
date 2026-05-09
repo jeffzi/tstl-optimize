@@ -331,7 +331,26 @@ const r = compute(
           const luaLineText = lua.split("\n")[resultLine - 1] ?? "";
           const rhsCol = rhsStartCol(luaLineText);
           const pos = await mappingFor(externalMap, resultLine, rhsCol);
-          return pos !== null && pos.line === CALL_TS_LINE && pos.column >= CALL_TS_COL;
+          if (pos === null || pos.line !== CALL_TS_LINE || pos.column < CALL_TS_COL) {
+            throw new Error(
+              [
+                "Expected inlined result RHS to map to the call expression.",
+                `bodyExpr: ${bodyExpr}`,
+                "source:",
+                source,
+                "lua:",
+                lua,
+                `resultLine: ${resultLine}`,
+                `luaLineText: ${luaLineText}`,
+                `rhsCol: ${rhsCol}`,
+                `expected: { line: ${CALL_TS_LINE}, column >= ${CALL_TS_COL} }`,
+                `actual: ${pos === null ? "null" : JSON.stringify(pos)}`,
+                "externalMap:",
+                externalMap,
+              ].join("\n"),
+            );
+          }
+          return true;
         }),
         { numRuns: 50 },
       );

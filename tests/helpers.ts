@@ -137,6 +137,7 @@ export interface SourceMapCompileResult {
 function extractSourceMapResult(
   result: tstl.TranspileVirtualProjectResult,
   luaFileSuffix: string,
+  options?: CompileOptions,
 ): SourceMapCompileResult {
   const errors = result.diagnostics.filter(
     (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
@@ -158,6 +159,10 @@ function extractSourceMapResult(
 
   const lua = file.lua;
   const externalMap = file.luaSourceMap;
+
+  if (!options?.skipLuaCheck) {
+    checkLuaSyntax(lua);
+  }
 
   const tracebackMatch = lua.match(/__TS__SourceMapTraceBack\([^,]+,\s*(\{[^}]*\})\)/);
   if (tracebackMatch === null) {
@@ -198,8 +203,12 @@ export function compileWithSourceMap(
     sourceMap: true,
     sourceMapTraceback: true,
   });
-  return extractSourceMapResult(result, "main.lua");
+  return extractSourceMapResult(result, "main.lua", options);
 }
+
+// A reusable empty source file stub for tests that need a ts.SourceFile context
+// but never inspect its content (e.g. visitor tests that assert on Lua output, not AST).
+export const EMPTY_SOURCE_FILE = ts.createSourceFile("empty.ts", "", ts.ScriptTarget.Latest, true);
 
 export function normalizeLua(lua: string): string {
   return lua

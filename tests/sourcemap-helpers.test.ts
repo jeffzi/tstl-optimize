@@ -18,6 +18,8 @@ const y = 2;
 const z = x + y;
 `.trim();
 
+const INVALID_LUA_SOURCE = "// @ts-ignore\nbreak;";
+
 describe("compileWithSourceMap", () => {
   it("returns lua, externalMap, and traceback that map emitted lines", async () => {
     const result = compileWithSourceMap(SIMPLE_SOURCE);
@@ -37,6 +39,14 @@ describe("compileWithSourceMap", () => {
     // Even empty source should have a __TS__SourceMapTraceBack call;
     // verify it doesn't throw for empty-ish source.
     expect(() => compileWithSourceMap("// comment only")).not.toThrow();
+  });
+
+  it("runs the Lua syntax check by default", () => {
+    expect(() => compileWithSourceMap(INVALID_LUA_SOURCE)).toThrow(/break outside loop/);
+  });
+
+  it("skips the Lua syntax check when skipLuaCheck is true", () => {
+    expect(() => compileWithSourceMap(INVALID_LUA_SOURCE, { skipLuaCheck: true })).not.toThrow();
   });
 });
 

@@ -4,10 +4,26 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../src/rules/merge-locals";
-import { compile, normalizeLua } from "../helpers";
+import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../helpers";
 
 function createLuaFile(statements: tstl.Statement[]): tstl.File {
   return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
+}
+
+function expectVariableDeclarationStatement(
+  node: tstl.Statement | undefined,
+): tstl.VariableDeclarationStatement {
+  if (!node || !tstl.isVariableDeclarationStatement(node)) {
+    throw new Error("Expected variable declaration statement");
+  }
+  return node;
+}
+
+function expectFunctionExpression(node: tstl.Expression | undefined): tstl.FunctionExpression {
+  if (!node || !tstl.isFunctionExpression(node)) {
+    throw new Error("Expected function expression");
+  }
+  return node;
 }
 
 function expectTrackedPairMerge(source: string, merged: boolean): string {
@@ -1352,7 +1368,7 @@ describe("merge-locals — upvalue capture detection", () => {
       ) => tstl.File;
 
       return Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
+        EMPTY_SOURCE_FILE,
         {
           superTransformNode: () => node,
         } as unknown as tstl.TransformationContext,
@@ -1360,8 +1376,8 @@ describe("merge-locals — upvalue capture detection", () => {
     }
 
     function extractInnerBody(file: tstl.File): tstl.Statement[] {
-      const outerDecl = file.statements[0] as tstl.VariableDeclarationStatement;
-      const outerFn = outerDecl.right?.[0] as tstl.FunctionExpression;
+      const outerDecl = expectVariableDeclarationStatement(file.statements[0]);
+      const outerFn = expectFunctionExpression(outerDecl.right?.[0]);
       return outerFn.body.statements;
     }
     function expectRawTrackedPair(options: {
@@ -1395,14 +1411,14 @@ describe("merge-locals — upvalue capture detection", () => {
       const statements = extractInnerBody(transformed);
 
       if (options.merged) {
-        const merged = statements[0] as tstl.VariableDeclarationStatement;
+        const merged = expectVariableDeclarationStatement(statements[0]);
         expect(statements).toHaveLength(1);
         expect(merged.left).toHaveLength(2);
-        expect((merged.left[0] as tstl.Identifier).text).toBe("a");
-        expect((merged.left[1] as tstl.Identifier).text).toBe("fn");
+        expect(merged.left[0]?.text).toBe("a");
+        expect(merged.left[1]?.text).toBe("fn");
       } else {
-        expect((statements[0] as tstl.VariableDeclarationStatement).left).toHaveLength(1);
-        expect((statements[1] as tstl.VariableDeclarationStatement).left).toHaveLength(1);
+        expect(expectVariableDeclarationStatement(statements[0]).left).toHaveLength(1);
+        expect(expectVariableDeclarationStatement(statements[1]).left).toHaveLength(1);
       }
 
       return statements;

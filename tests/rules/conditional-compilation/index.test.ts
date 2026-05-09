@@ -2,7 +2,7 @@ import fc from "fast-check";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: tstl has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConditionalCompilationConfig } from "../../../src/config";
 import { createVisitors, evaluateCondition } from "../../../src/rules/conditional-compilation";
 import { arbSafeString } from "../../arbitraries";
@@ -39,6 +39,29 @@ function parseExpression(source: string): ts.Expression {
   return initializer;
 }
 
+function parseIdentifierExpression(source: string): ts.Identifier {
+  const expression = parseExpression(source);
+  if (!ts.isIdentifier(expression)) {
+    throw new Error("Expected identifier expression.");
+  }
+  return expression;
+}
+
+function parseVariableDeclaration(source: string): ts.VariableDeclaration {
+  const file = ts.createSourceFile("decl.ts", source, ts.ScriptTarget.Latest, true);
+  const statement = file.statements[0];
+  if (!ts.isVariableStatement(statement)) {
+    throw new Error("Expected variable statement.");
+  }
+
+  const declaration = statement.declarationList.declarations[0];
+  if (!declaration) {
+    throw new Error("Expected variable declaration.");
+  }
+
+  return declaration;
+}
+
 function parseSwitchStatement(source: string): ts.SwitchStatement {
   const file = ts.createSourceFile("switch.ts", source, ts.ScriptTarget.Latest, true);
   let switchStatement: ts.SwitchStatement | undefined;
@@ -55,6 +78,23 @@ function parseSwitchStatement(source: string): ts.SwitchStatement {
   }
   return switchStatement;
 }
+
+function expectBooleanLiteral(
+  expression: tstl.Expression,
+  expectedValue: boolean,
+): asserts expression is tstl.BooleanLiteral {
+  if (!tstl.isBooleanLiteral(expression)) {
+    throw new Error("Expected boolean literal.");
+  }
+
+  expect(expression.kind).toBe(
+    expectedValue ? tstl.SyntaxKind.TrueKeyword : tstl.SyntaxKind.FalseKeyword,
+  );
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("evaluateCondition", () => {
   const constants = new Map<string, boolean | number | string>([
@@ -1408,7 +1448,7 @@ ${body}
         node: ts.Identifier,
         context: tstl.TransformationContext,
       ) => tstl.Expression;
-      const node = parseExpression("FLAG") as ts.Identifier;
+      const node = parseIdentifierExpression("FLAG");
 
       return Reflect.apply(visitor, undefined, [
         node,
@@ -1424,7 +1464,7 @@ ${body}
         getSymbolAtLocation: () => undefined,
       });
 
-      expect(tstl.isBooleanLiteral(result)).toBe(true);
+      expectBooleanLiteral(result, true);
     });
 
     it("folds configured identifiers when the checker returns a symbol without declarations", () => {
@@ -1432,20 +1472,17 @@ ${body}
         getSymbolAtLocation: () => ({ declarations: undefined }) as ts.Symbol,
       });
 
-      expect(tstl.isBooleanLiteral(result)).toBe(true);
+      expectBooleanLiteral(result, true);
     });
 
     it("does not fold when local declarations have conflicting initializers", () => {
-      const parseDecl = (src: string): ts.VariableDeclaration => {
-        const file = ts.createSourceFile("decl.ts", src, ts.ScriptTarget.Latest, true);
-        const stmt = file.statements[0] as ts.VariableStatement;
-        return stmt.declarationList.declarations[0];
-      };
-
       const result = foldIdentifierWithChecker({
         getSymbolAtLocation: () =>
           ({
-            declarations: [parseDecl("const FLAG = true;"), parseDecl("const FLAG = false;")],
+            declarations: [
+              parseVariableDeclaration("const FLAG = true;"),
+              parseVariableDeclaration("const FLAG = false;"),
+            ],
           }) as unknown as ts.Symbol,
       });
 

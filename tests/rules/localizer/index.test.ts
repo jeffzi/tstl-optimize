@@ -4,11 +4,15 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../../src/rules/localizer";
-import { compile, normalizeLua } from "../../helpers";
+import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../../helpers";
 
 const MODULE_SCOPE = { pluginOptions: { rules: { localizer: { scope: "module" as const } } } };
 const FUNC_SCOPE = { pluginOptions: { rules: { localizer: { scope: "function" as const } } } };
 const ALL_SCOPE = { pluginOptions: { rules: { localizer: { scope: "all" as const } } } };
+
+function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
+  return checker as unknown as ts.TypeChecker;
+}
 
 describe("localizer", () => {
   describe("when positive cases are hoisted", () => {
@@ -1649,7 +1653,7 @@ describe("localizer", () => {
   describe("public visitor coverage", () => {
     it("returns no visitors when the rule is disabled", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        {} as ts.TypeChecker,
+        asTypeChecker({}),
         { rules: { localizer: false } },
       ]);
 
@@ -1658,7 +1662,7 @@ describe("localizer", () => {
 
     it("falls back to superTransformStatements when the source-file transform is not a Lua file", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        {} as ts.TypeChecker,
+        asTypeChecker({}),
         { rules: { localizer: true } },
       ]);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
@@ -2634,10 +2638,6 @@ describe("localizer coverage", () => {
 });
 
 describe("localizer raw Lua visitor coverage", () => {
-  function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
-    return checker as unknown as ts.TypeChecker;
-  }
-
   function createLuaFile(statements: tstl.Statement[]): tstl.File {
     return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
   }
@@ -2663,7 +2663,7 @@ describe("localizer raw Lua visitor coverage", () => {
       superTransformNode: () => file,
       usedLuaLibFeatures: new Set(),
     } as unknown as tstl.TransformationContext;
-    return Reflect.apply(visitor, undefined, [{} as ts.SourceFile, mockContext]);
+    return Reflect.apply(visitor, undefined, [EMPTY_SOURCE_FILE, mockContext]);
   }
 
   function makeRepeatedArrayWrite(loopExtras: tstl.Statement[]): tstl.ForStatement {

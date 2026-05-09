@@ -81,6 +81,214 @@ describe("inline", () => {
       expect(lua).toContain("(a + 1) * 2");
     });
 
+    it.each([
+      {
+        desc: "identity body",
+        body: "x",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return x; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "transparent cast body",
+        body: "x as unknown",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return x as unknown; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "param multiplied",
+        body: "x * 2",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return x * 2; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "param added left",
+        body: "x + 1",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return x + 1; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "pure const + param right",
+        body: "1 + x",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return 1 + x; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "param property access",
+        body: "x.field",
+        fixture: `
+          /** @inline */
+          function f(x: { field: number }) { return x.field; }
+          declare function foo(): { field: number };
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "template literal pure span before param",
+        fixture: `
+          /** @inline */
+          function f(x: string) { return \`\${0}\` + x; }
+          declare function foo(): string;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "array literal with param at tail",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return [1, x]; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "nested array (pure) before param — array traversal returns undefined",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { precomputed: [1, 2], val: x }; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "nested object (pure) before param — inner object traversal returns undefined",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { meta: { a: 1 }, val: x }; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "method in object before param — method definition is pure",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { greet() { return 0; }, val: x }; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "conditional (neither branch has param or SE) before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return (flag ? 0 : 1) + x; }
+          declare const flag: boolean;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "function expression before param — closure definition is pure",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { fn: function() { return 0; }, val: x }; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "pure computed property key before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { ["key"]: 1, val: x }; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "negate param (pure prefix unary, not increment)",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return -x; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "param as element-access object",
+        fixture: `
+          /** @inline */
+          function f(x: number[]) { return x[0]; }
+          declare function foo(): number[];
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "param as element-access index (obj is free var)",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return obj[x]; }
+          declare const obj: Record<number, number>;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "param as call callee",
+        fixture: `
+          /** @inline */
+          function f(x: () => number) { return x(); }
+          declare function foo(): () => number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "template literal with param in span",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return \`\${x}!\`; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "tagged template with param in span",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return tag\`\${x}\`; }
+          declare function tag(s: TemplateStringsArray, ...values: number[]): string;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "new expression with param as arg (after pure arg)",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return new Foo(1, x); }
+          declare class Foo { constructor(n: number, m: number); }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+    ])("skips IIFE wrapper when body has no SE before param first use: $desc", ({ fixture }) => {
+      const lua = compile(fixture);
+      // Should NOT contain IIFE/eager-temp marker
+      expect(lua).not.toContain("____inline_arg_");
+      // The arg should appear directly in output
+      expect(lua).toContain("foo()");
+    });
+
     it("inlines side-effecting args used once", () => {
       const lua = compile(`
         /** @inline */
@@ -88,8 +296,9 @@ describe("inline", () => {
         declare function foo(): number;
         const r = double(foo());
       `);
-      expect(lua).toContain("____inline_arg_0 = foo()");
-      expect(lua).toContain("return ____inline_arg_0 * 2");
+      expect(lua).not.toContain("____inline_arg_");
+      expect(lua).toContain("foo()");
+      expect(lua).toContain("* 2");
     });
 
     it("compiles real const init to Lua code (property access example)", () => {
@@ -1991,6 +2200,152 @@ describe("inline uncovered branches", () => {
       expect(lua).toContain("____inline_arg_2 = s2()");
       expect(lua).toContain("return ____inline_arg_0 and ____inline_arg_1 or ____inline_arg_2");
     });
+
+    it.each([
+      {
+        desc: "postfix increment (i++) before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return i++ + x; }
+          declare let i: number;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "prefix increment (++i) before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return ++i + x; }
+          declare let i: number;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "property access on free variable before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return obj.prop + x; }
+          declare const obj: { prop: number };
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "element access before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return arr[0] + x; }
+          declare const arr: number[];
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "call expression before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return g() + x; }
+          declare function g(): number;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "spread element in call args before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return g(1, ...arr) + x; }
+          declare function g(...ns: number[]): number;
+          declare const arr: number[];
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "new expression in object literal before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { inst: new Foo(), val: x }; }
+          declare class Foo {}
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "tagged template literal (with span) before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return tag\`hello \${1} world\` + x; }
+          declare function tag(s: TemplateStringsArray, ...values: number[]): number;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "class expression in object literal before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { cls: class {}, val: x }; }
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "spread assignment in object literal before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { ...rest, val: x }; }
+          declare const rest: { a: number };
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "spread element in array literal before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return [...arr, x]; }
+          declare const arr: number[];
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "computed property with SE key before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { [g()]: 1, val: x }; }
+          declare function g(): string;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "tagged template with no-substitution literal before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return tag\`literal\` + x; }
+          declare function tag(s: TemplateStringsArray): number;
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+      {
+        desc: "new expression without args (no parens) before param",
+        fixture: `
+          /** @inline */
+          function f(x: number) { return { inst: new Foo, val: x }; }
+          declare class Foo {}
+          declare function foo(): number;
+          const r = f(foo());
+        `,
+      },
+    ])("retains IIFE wrapper when body has SE before param first use: $desc", ({ fixture }) => {
+      const lua = compile(fixture);
+      expect(lua).toContain("____inline_arg_");
+    });
   });
 
   describe("expression statement rejection", () => {
@@ -3150,21 +3505,17 @@ describe("inline uncovered branches", () => {
       const program = createTestProgram({
         "/main.ts": `
           declare function sideEffect(): number;
+          declare const cond: boolean;
 
           /** @inline */
-          const identity = (value: number) => value;
+          const f = (value: number) => cond ? value : 0;
 
-          identity(sideEffect());
+          f(sideEffect());
         `,
       });
       const sourceFile = program.getSourceFile("/main.ts");
-      const identityDecl = getStatement(
-        sourceFile,
-        1,
-        ts.isVariableStatement,
-        "variable statement",
-      );
-      const arrowInit = identityDecl.declarationList.declarations[0]?.initializer;
+      const fDecl = getStatement(sourceFile, 2, ts.isVariableStatement, "variable statement");
+      const arrowInit = fDecl.declarationList.declarations[0]?.initializer;
       if (!arrowInit || !ts.isArrowFunction(arrowInit)) {
         throw new Error("expected arrow function initializer");
       }
@@ -3200,7 +3551,7 @@ describe("inline uncovered branches", () => {
       ) => unknown;
       const callExprStmt = getStatement(
         sourceFile,
-        2,
+        3,
         ts.isExpressionStatement,
         "expression statement",
       );

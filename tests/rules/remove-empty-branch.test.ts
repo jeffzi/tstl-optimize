@@ -3,7 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../src/rules/remove-empty-branch";
-import { compile, normalizeLua } from "../helpers";
+import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../helpers";
 
 const opts = {
   pluginOptions: {
@@ -533,7 +533,7 @@ describe("remove-empty-branch rule", () => {
 
       expect(() =>
         Reflect.apply(visitor, undefined, [
-          {} as ts.SourceFile,
+          EMPTY_SOURCE_FILE,
           { superTransformNode: () => nonFile } as unknown as tstl.TransformationContext,
         ]),
       ).toThrow("expected SourceFile transform to produce a Lua file");

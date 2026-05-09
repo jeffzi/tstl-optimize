@@ -3,7 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../src/rules/constant-folding";
-import { compile, normalizeLua } from "../helpers";
+import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../helpers";
 
 describe("constant-folding", () => {
   function createLuaFile(statements: tstl.Statement[]): tstl.File {
@@ -403,7 +403,7 @@ describe("constant-folding", () => {
       ) => tstl.File | tstl.Expression;
 
       return Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
+        EMPTY_SOURCE_FILE,
         {
           superTransformNode: () => file,
         } as unknown as tstl.TransformationContext,
@@ -424,12 +424,22 @@ describe("constant-folding", () => {
         ),
       ]);
 
-      const transformed = runSourceFileVisitor(file) as tstl.File;
-      const rhs = (transformed.statements[0] as tstl.VariableDeclarationStatement).right?.[0];
+      const transformed = runSourceFileVisitor(file);
+      if (!tstl.isFile(transformed)) {
+        throw new Error("Expected source-file visitor to return a Lua file");
+      }
 
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isNumericLiteral(rhs!)).toBe(true);
-      expect((rhs as tstl.NumericLiteral).value).toBe(3);
+      const declaration = transformed.statements[0];
+      if (!declaration || !tstl.isVariableDeclarationStatement(declaration)) {
+        throw new Error("Expected transformed statement to be a variable declaration");
+      }
+
+      const rhs = declaration.right?.[0];
+      if (!rhs || !tstl.isNumericLiteral(rhs)) {
+        throw new Error("Expected folded RHS to be a numeric literal");
+      }
+
+      expect(rhs.value).toBe(3);
     });
 
     it("preserves unsupported unary folds", () => {
