@@ -4,10 +4,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that optimizes Lua output
-with configurable rules. Primary targets are **Lua 5.1 (PUC)** and **LuaJIT**; other TSTL targets
-(5.2-5.4) compile without errors but are not tuned — treat optimizations as best-effort there. Every
-rule is independently toggleable. All rules are on by default **except** `conditional-compilation`
-and `debug-strip`, which are off because they remove code.
+with configurable rules. Primary targets are **Lua 5.1 (PUC)** and **LuaJIT**. Other TSTL targets
+(5.2-5.4) compile without errors but are not tuned, so treat optimizations as best-effort there.
+Every rule is independently toggleable. All rules are on by default **except**
+`conditional-compilation` and `debug-strip`, which are off because they remove code.
 
 ```typescript
 // TypeScript input
@@ -65,7 +65,7 @@ Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
 
 ## Usage
 
-A minimal working `tsconfig.json` — the plugin auto-detects `target` from `luaTarget`:
+A minimal working `tsconfig.json` follows. The plugin auto-detects `target` from `luaTarget`:
 
 ```jsonc
 {
@@ -593,7 +593,8 @@ Argument temporaries are always hoisted before the `do...end` block to preserve 
 evaluation order of the original call's arguments. Variables declared inside `do...end` do not leak
 into the caller's scope.
 
-A multi-statement `@inline` function with an empty body is removed at statement sites without emitting a diagnostic — no `do...end` block is generated.
+A multi-statement `@inline` function with an empty body is removed at statement sites without
+emitting a diagnostic. No `do...end` block is generated.
 
 #### Call-site limitations
 
@@ -621,7 +622,11 @@ bail(n); // warns: @inline ignored — early return in body
 
 #### Rule interaction
 
-Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside inlined bodies the same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations as the rest of the file.
+Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined
+body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as
+it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside inlined bodies the
+same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations
+as the rest of the file.
 
 ### `localizer`
 
@@ -729,7 +734,7 @@ in `include`:
 
 ### `debug-strip`
 
-Strips debug and profiling calls from the Lua output. **Off by default** — enable it explicitly,
+Strips debug and profiling calls from the Lua output. **Off by default**; enable it explicitly,
 since it removes code rather than optimizing it. Set `"debug-strip": true` for defaults, or pass an
 object to customize which calls the rule strips.
 
