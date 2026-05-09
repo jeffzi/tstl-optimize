@@ -29,7 +29,7 @@ describe("shouldPreserveFoldedBlock", () => {
 
 describe("containsConditionalCaseBreak", () => {
   describe("when else-clause directly contains a break", () => {
-    it("returns true when the else-clause directly contains a break", () => {
+    it("returns true", () => {
       const stmt = ts.factory.createIfStatement(
         ts.factory.createTrue(),
         ts.factory.createBlock([]),
@@ -40,19 +40,19 @@ describe("containsConditionalCaseBreak", () => {
   });
 
   describe("when input contains a labeled statement", () => {
-    it("returns true — the break inside the label is conditional from the switch perspective", () => {
-      const labeledStmt = ts.factory.createLabeledStatement(
-        ts.factory.createIdentifier("outer"),
-        ts.factory.createBreakStatement(),
-      );
-      expect(containsConditionalCaseBreak([labeledStmt])).toBe(true);
-    });
-
-    it("returns true when labeled statement wraps a block with a break", () => {
-      const breakInBlock = ts.factory.createBlock([ts.factory.createBreakStatement()]);
+    it.each([
+      {
+        name: "direct break",
+        makeBody: () => ts.factory.createBreakStatement(),
+      },
+      {
+        name: "block wrapping a break",
+        makeBody: () => ts.factory.createBlock([ts.factory.createBreakStatement()]),
+      },
+    ])("returns true when body is $name", ({ makeBody }) => {
       const labeledStmt = ts.factory.createLabeledStatement(
         ts.factory.createIdentifier("lbl"),
-        breakInBlock,
+        makeBody(),
       );
       expect(containsConditionalCaseBreak([labeledStmt])).toBe(true);
     });

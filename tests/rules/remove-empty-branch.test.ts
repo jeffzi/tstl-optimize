@@ -15,10 +15,6 @@ const opts = {
   },
 };
 
-function createLuaFile(statements: tstl.Statement[]): tstl.File {
-  return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
-}
-
 function expectCompiledLua(source: string, expected: string, options = opts): void {
   const lines = expected.split("\n");
   const contentLines = lines.filter((line) => line.trim().length > 0);
@@ -491,121 +487,56 @@ describe("remove-empty-branch rule", () => {
     });
   });
 
+  describe("parenthesized conditions in if-statements", () => {
+    it("removes an empty if-statement whose condition is a double-parenthesized local", () => {
+      // Exercises the isSafeEmptyBranchCondition parenthesized-expression path.
+      // TypeScript double-parens `if ((x)) {}` produce a ParenthesizedExpression in Lua AST.
+      const source = `
+        function test() {
+          const x = true;
+          if ((x)) {}
+        }
+      `;
+      expectCompiledLua(
+        source,
+        `
+          function test()
+          local x = true
+          end
+        `,
+      );
+    });
+
+    it("preserves an empty if-statement whose condition is a double-parenthesized global", () => {
+      // A parenthesized identifier without a symbolId is a global — must not be removed.
+      const source = `
+        declare const GLOBAL: boolean;
+        if ((GLOBAL)) {}
+      `;
+      expect(normalizeLua(compile(source, opts))).toMatchInlineSnapshot(`
+        "if GLOBAL then
+        end"
+      `);
+    });
+  });
+
   describe("direct source-file visitor coverage", () => {
-    it("removes raw Lua if-statements with parenthesized local conditions", () => {
-      const localSymbolId = 1 as tstl.SymbolId;
-      const file = createLuaFile([
-        tstl.createVariableDeclarationStatement(
-          [tstl.createIdentifier("flag", undefined, localSymbolId)],
-          [tstl.createBooleanLiteral(true)],
-        ),
-        tstl.createIfStatement(
-          tstl.createParenthesizedExpression(
-            tstl.createIdentifier("flag", undefined, localSymbolId),
-          ),
-          tstl.createBlock([]),
-        ),
-      ]);
+    it("throws when the source-file transform does not produce a file", () => {
+      // This defensive path (superTransformNode returning a non-File) cannot be
+      // triggered through compile() because TSTL always returns a File for SourceFile.
       const visitors = Reflect.apply(createVisitors, undefined, []);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
         node: ts.SourceFile,
         context: tstl.TransformationContext,
-      ) => tstl.File;
-
-      const transformed = Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
-        {
-          superTransformNode: () => file,
-        } as unknown as tstl.TransformationContext,
-      ]);
-
-      expect(transformed.statements).toHaveLength(1);
-      expect(tstl.isVariableDeclarationStatement(transformed.statements[0])).toBe(true);
-    });
-
-    it("preserves raw Lua if-statements with parenthesized global identifier conditions", () => {
-      const file = createLuaFile([
-        tstl.createIfStatement(
-          tstl.createParenthesizedExpression(tstl.createIdentifier("flag")),
-          tstl.createBlock([]),
-        ),
-      ]);
-      const visitors = Reflect.apply(createVisitors, undefined, []);
-      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
-        node: ts.SourceFile,
-        context: tstl.TransformationContext,
-      ) => tstl.File;
-
-      const transformed = Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
-        {
-          superTransformNode: () => file,
-        } as unknown as tstl.TransformationContext,
-      ]);
-
-      expect(transformed.statements).toHaveLength(1);
-      expect(tstl.isIfStatement(transformed.statements[0])).toBe(true);
-    });
-
-    it("parenthesizes promoted compound conditions before negating them", () => {
-      const file = createLuaFile([
-        tstl.createIfStatement(
-          tstl.createBinaryExpression(
-            tstl.createIdentifier("a"),
-            tstl.createIdentifier("b"),
-            tstl.SyntaxKind.AndOperator,
-          ),
-          tstl.createBlock([]),
-          tstl.createBlock([tstl.createExpressionStatement(tstl.createNumericLiteral(1))]),
-        ),
-      ]);
-      const visitors = Reflect.apply(createVisitors, undefined, []);
-      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
-        node: ts.SourceFile,
-        context: tstl.TransformationContext,
-      ) => tstl.File;
-
-      const transformed = Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
-        {
-          superTransformNode: () => file,
-        } as unknown as tstl.TransformationContext,
-      ]);
-
-      expect(transformed.statements).toHaveLength(1);
-      const rewritten = transformed.statements[0];
-      expect(tstl.isIfStatement(rewritten)).toBe(true);
-      if (!tstl.isIfStatement(rewritten)) {
-        throw new Error("expected promoted statement to remain an if");
-      }
-      expect(tstl.isUnaryExpression(rewritten.condition)).toBe(true);
-      if (!tstl.isUnaryExpression(rewritten.condition)) {
-        throw new Error("expected promoted condition to be unary");
-      }
-      expect(rewritten.condition.operator).toBe(tstl.SyntaxKind.NotOperator);
-      expect(tstl.isParenthesizedExpression(rewritten.condition.operand)).toBe(true);
-      if (!tstl.isParenthesizedExpression(rewritten.condition.operand)) {
-        throw new Error("expected promoted compound operand to be parenthesized");
-      }
-      expect(tstl.isBinaryExpression(rewritten.condition.operand.expression)).toBe(true);
-    });
-
-    it("returns non-file transform results unchanged", () => {
-      const visitors = Reflect.apply(createVisitors, undefined, []);
-      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
-        node: ts.SourceFile,
-        context: tstl.TransformationContext,
-      ) => tstl.Expression;
+      ) => unknown;
       const nonFile = tstl.createBooleanLiteral(true);
 
-      const transformed = Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
-        {
-          superTransformNode: () => nonFile,
-        } as unknown as tstl.TransformationContext,
-      ]);
-
-      expect(transformed).toBe(nonFile);
+      expect(() =>
+        Reflect.apply(visitor, undefined, [
+          {} as ts.SourceFile,
+          { superTransformNode: () => nonFile } as unknown as tstl.TransformationContext,
+        ]),
+      ).toThrow("expected SourceFile transform to produce a Lua file");
     });
   });
 });

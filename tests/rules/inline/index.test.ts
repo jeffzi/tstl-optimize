@@ -4,6 +4,7 @@ import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors, mapLuaStatements } from "../../../src/rules/inline";
 import { isPureAtVoidSite } from "../../../src/rules/inline/eligibility";
+import { walkLuaExpression, walkLuaNodes } from "../../../src/rules/inline/lua-substitute";
 import { compile, compileWithDiagnostics, normalizeLua } from "../../helpers";
 
 describe("inline", () => {
@@ -89,6 +90,18 @@ describe("inline", () => {
       `);
       expect(lua).toContain("____inline_arg_0 = foo()");
       expect(lua).toContain("return ____inline_arg_0 * 2");
+    });
+
+    it("compiles real const init to Lua code (property access example)", () => {
+      const lua = compile(`
+        /** @inline */
+        function mul(x: number): number { return x * x; }
+        const stats = { atk: { base: 100 } };
+        const atkSquared = mul(stats.atk.base);
+      `);
+      // stats table must be defined in Lua output (main fix: const initializer generates code)
+      expect(lua).toContain("stats = {");
+      expect(lua).toContain("base = 100");
     });
   });
 
@@ -740,24 +753,92 @@ describe("inline public API coverage", () => {
           : undefined,
     );
 
-    const methodCall = (statements[0] as tstl.ExpressionStatement)
-      .expression as tstl.MethodCallExpression;
-    const conditional = (statements[1] as tstl.VariableDeclarationStatement)
-      .right?.[0] as tstl.ConditionalExpression;
-    const loopBody = (statements[2] as tstl.ForStatement).body.statements;
-    const loopReturn = loopBody[0] as tstl.ReturnStatement;
+    const stmt0 = statements[0];
+    const stmt1 = statements[1];
+    const stmt2 = statements[2];
+    if (
+      !stmt0 ||
+      !tstl.isExpressionStatement(stmt0) ||
+      !tstl.isMethodCallExpression(stmt0.expression)
+    ) {
+      throw new Error("expected stmt0 to be ExpressionStatement(MethodCallExpression)");
+    }
+    if (
+      !stmt1 ||
+      !tstl.isVariableDeclarationStatement(stmt1) ||
+      !stmt1.right?.[0] ||
+      !tstl.isConditionalExpression(stmt1.right[0])
+    ) {
+      throw new Error(
+        "expected stmt1 to be VariableDeclarationStatement with ConditionalExpression RHS",
+      );
+    }
+    if (!stmt2 || !tstl.isForStatement(stmt2)) {
+      throw new Error("expected stmt2 to be ForStatement");
+    }
+
+    const methodCall = stmt0.expression;
+    const conditional = stmt1.right[0];
+    const loopBody = stmt2.body.statements;
+    const loopReturn = loopBody[0];
+    if (!loopReturn || !tstl.isReturnStatement(loopReturn)) {
+      throw new Error("expected loopReturn to be ReturnStatement");
+    }
+
     const methodParam = methodCall.params[0];
-    const loopExpression = loopReturn.expressions[0];
+    const loopExpression = loopReturn.expressions?.[0];
     if (!methodParam || !loopExpression) {
       throw new Error("expected mapped inline nodes");
     }
 
-    expect(tstl.isIdentifier(methodParam)).toBe(true);
-    expect((methodParam as tstl.Identifier).text).toBe("mapped");
-    expect(tstl.isIdentifier(conditional.condition)).toBe(true);
-    expect((conditional.condition as tstl.Identifier).text).toBe("mapped");
-    expect(tstl.isIdentifier(loopExpression)).toBe(true);
-    expect((loopExpression as tstl.Identifier).text).toBe("mapped");
+    expect(tstl.isIdentifier(methodParam) && methodParam.text).toBe("mapped");
+    expect(tstl.isIdentifier(conditional.condition) && conditional.condition.text).toBe("mapped");
+    expect(tstl.isIdentifier(loopExpression) && loopExpression.text).toBe("mapped");
+  });
+
+  it("walkLuaNodes visits conditional and for-loop nodes", () => {
+    const visited: tstl.SyntaxKind[] = [];
+    const record = (n: tstl.Node) => visited.push(n.kind);
+
+    walkLuaNodes(
+      [
+        tstl.createVariableDeclarationStatement(
+          [tstl.createIdentifier("v")],
+          [
+            tstl.createConditionalExpression(
+              tstl.createIdentifier("c"),
+              tstl.createNumericLiteral(1),
+              tstl.createNumericLiteral(2),
+            ),
+          ],
+        ),
+        tstl.createForStatement(
+          tstl.createBlock([tstl.createExpressionStatement(tstl.createIdentifier("body"))]),
+          tstl.createIdentifier("i"),
+          tstl.createNumericLiteral(0),
+          tstl.createNumericLiteral(3),
+        ),
+      ],
+      record,
+    );
+
+    expect(visited).toContain(tstl.SyntaxKind.ConditionalExpression);
+    expect(visited).toContain(tstl.SyntaxKind.ForStatement);
+  });
+
+  it("walkLuaExpression visits conditional expression nodes", () => {
+    const visited: tstl.SyntaxKind[] = [];
+    walkLuaExpression(
+      tstl.createConditionalExpression(
+        tstl.createIdentifier("c"),
+        tstl.createNumericLiteral(1),
+        tstl.createNumericLiteral(2),
+      ),
+      (n) => visited.push(n.kind),
+    );
+
+    expect(visited).toContain(tstl.SyntaxKind.ConditionalExpression);
+    expect(visited).toContain(tstl.SyntaxKind.NumericLiteral);
   });
 
   it("returns no visitors when inline is disabled", () => {
@@ -776,8 +857,15 @@ describe("inline public API coverage", () => {
     ]);
     const context = {} as tstl.TransformationContext;
     const sourceFile = ts.createSourceFile("inline.ts", "foo();", ts.ScriptTarget.Latest, true);
-    const expressionStatement = sourceFile.statements[0] as ts.ExpressionStatement;
-    const callNode = expressionStatement.expression as ts.CallExpression;
+    const stmt0 = sourceFile.statements[0];
+    if (!stmt0 || !ts.isExpressionStatement(stmt0)) {
+      throw new Error("expected expression statement");
+    }
+    const expressionStatement = stmt0;
+    if (!ts.isCallExpression(expressionStatement.expression)) {
+      throw new Error("expected call expression");
+    }
+    const callNode = expressionStatement.expression;
 
     expect(
       Reflect.apply(Reflect.get(visitors, ts.SyntaxKind.CallExpression), undefined, [
@@ -2413,6 +2501,10 @@ describe("inline uncovered branches", () => {
         popScope: () => {},
         transformExpression: () => tstl.createIdentifier("mapped"),
         transformStatements: () => [],
+        // superTransformStatements is called by the @inline comment-strip path when a
+        // non-erasable declaration keeps its @inline tag. Return an empty array — the
+        // call-path is what's being tested, not the TSTL default transform result.
+        superTransformStatements: () => [],
         ...overrides,
       } as unknown as tstl.TransformationContext;
     }
@@ -2421,10 +2513,38 @@ describe("inline uncovered branches", () => {
       return value as tstl.SymbolId;
     }
 
+    /**
+     * Returns `sourceFile.statements[index]` narrowed to `T` via `guard`, or
+     * throws if the statement is missing or has the wrong kind.
+     */
+    function getStatement<T extends ts.Statement>(
+      sourceFile: ts.SourceFile,
+      index: number,
+      guard: (node: ts.Statement) => node is T,
+      label: string,
+    ): T {
+      const stmt = sourceFile.statements[index];
+      if (!stmt || !guard(stmt)) throw new Error(`expected ${label} at statements[${index}]`);
+      return stmt;
+    }
+
+    /**
+     * Returns `block.statements[0]` narrowed to `T` via `guard`, or throws.
+     */
+    function getFirstBodyStatement<T extends ts.Statement>(
+      block: ts.Block,
+      guard: (node: ts.Statement) => node is T,
+      label: string,
+    ): T {
+      const stmt = block.statements[0];
+      if (!stmt || !guard(stmt)) throw new Error(`expected ${label} as first body statement`);
+      return stmt;
+    }
+
     function isReturnStatementNode(
       node: ts.Statement | readonly ts.Statement[],
     ): node is ts.ReturnStatement {
-      return !Array.isArray(node) && ts.isReturnStatement(node as unknown as ts.Node);
+      return "kind" in node && node.kind === ts.SyntaxKind.ReturnStatement;
     }
 
     type StatementVisitorKind = ts.SyntaxKind.ExpressionStatement | ts.SyntaxKind.VariableStatement;
@@ -2473,16 +2593,20 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         visitorContext: tstl.TransformationContext,
       ) => unknown;
-      const runBody = (sourceFile.statements[functionStatementIndex] as ts.FunctionDeclaration)
-        .body;
+      const fnStmt = sourceFile.statements[functionStatementIndex];
+      if (!fnStmt || !ts.isFunctionDeclaration(fnStmt)) {
+        throw new Error("expected function declaration");
+      }
+      const runBody = fnStmt.body;
       if (!runBody) {
         throw new Error("expected run body");
       }
+      const returnStmt = runBody.statements[0];
+      if (!returnStmt || !ts.isReturnStatement(returnStmt)) {
+        throw new Error("expected return statement");
+      }
 
-      return Reflect.apply(visitor, undefined, [
-        runBody.statements[0] as ts.ReturnStatement,
-        context,
-      ]);
+      return Reflect.apply(visitor, undefined, [returnStmt, context]);
     }
 
     it("accepts inline config objects with per-rule strict overrides", () => {
@@ -2517,12 +2641,14 @@ describe("inline uncovered branches", () => {
         context: tstl.TransformationContext,
       ) => unknown;
 
+      // The declaration is kept (not erased); the visitor strips the @inline comment
+      // rather than returning undefined, so the result is an array of statements.
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[1] as ts.VariableStatement,
-        {} as tstl.TransformationContext,
+        getStatement(sourceFile, 1, ts.isVariableStatement, "variable statement"),
+        createDirectContext(),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(Array.isArray(result)).toBe(true);
     });
 
     it("preserves inline-tagged variable call sites when the initializer is not a function", () => {
@@ -2539,7 +2665,12 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+      const expressionStatement = getStatement(
+        sourceFile,
+        1,
+        ts.isExpressionStatement,
+        "expression statement",
+      );
 
       const result = Reflect.apply(visitor, undefined, [
         expressionStatement.expression,
@@ -2567,7 +2698,7 @@ describe("inline uncovered branches", () => {
       ) => unknown;
 
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[1] as ts.VariableStatement,
+        getStatement(sourceFile, 1, ts.isVariableStatement, "variable statement"),
         {} as tstl.TransformationContext,
       ]);
 
@@ -2588,12 +2719,13 @@ describe("inline uncovered branches", () => {
         context: tstl.TransformationContext,
       ) => unknown;
 
+      // Declaration is kept but @inline comment is stripped; visitor returns statements.
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[0] as ts.VariableStatement,
-        {} as tstl.TransformationContext,
+        getStatement(sourceFile, 0, ts.isVariableStatement, "variable statement"),
+        createDirectContext(),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(Array.isArray(result)).toBe(true);
     });
 
     it("erases an inline function declaration when all remaining call sites are fully inlined", () => {
@@ -2613,7 +2745,7 @@ describe("inline uncovered branches", () => {
       ) => unknown;
 
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[0] as ts.FunctionDeclaration,
+        getStatement(sourceFile, 0, ts.isFunctionDeclaration, "function declaration"),
       ]);
 
       expect(result).toStrictEqual([]);
@@ -2630,7 +2762,8 @@ describe("inline uncovered branches", () => {
         `,
       });
       const sourceFile = program.getSourceFile("/main.ts");
-      const outerBody = (sourceFile.statements[0] as ts.FunctionDeclaration).body;
+      const outerFn = getStatement(sourceFile, 0, ts.isFunctionDeclaration, "outer function");
+      const outerBody = outerFn.body;
       if (!outerBody) {
         throw new Error("expected outer function body");
       }
@@ -2639,12 +2772,13 @@ describe("inline uncovered branches", () => {
         context: tstl.TransformationContext,
       ) => unknown;
 
+      // Declaration is kept (not at module scope, can't be erased) but @inline is stripped.
       const result = Reflect.apply(visitor, undefined, [
-        outerBody.statements[0] as ts.VariableStatement,
+        getFirstBodyStatement(outerBody, ts.isVariableStatement, "variable statement"),
         createDirectContext(),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(Array.isArray(result)).toBe(true);
     });
 
     it("preserves nested inline function declarations outside module scope", () => {
@@ -2660,19 +2794,23 @@ describe("inline uncovered branches", () => {
         `,
       });
       const sourceFile = program.getSourceFile("/main.ts");
-      const outerBody = (sourceFile.statements[0] as ts.FunctionDeclaration).body;
+      const outerFn2 = getStatement(sourceFile, 0, ts.isFunctionDeclaration, "outer function");
+      const outerBody = outerFn2.body;
       if (!outerBody) {
         throw new Error("expected outer function body");
       }
       const visitor = Reflect.get(visitors, ts.SyntaxKind.FunctionDeclaration) as (
         node: ts.Node,
+        context: tstl.TransformationContext,
       ) => unknown;
 
+      // Declaration is kept (not at module scope) but @inline comment is stripped.
       const result = Reflect.apply(visitor, undefined, [
-        outerBody.statements[0] as ts.FunctionDeclaration,
+        getFirstBodyStatement(outerBody, ts.isFunctionDeclaration, "inner function declaration"),
+        createDirectContext(),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(Array.isArray(result)).toBe(true);
     });
 
     it("keeps an inline function declaration when it is referenced in a non-call position", () => {
@@ -2689,13 +2827,16 @@ describe("inline uncovered branches", () => {
       const sourceFile = program.getSourceFile("/main.ts");
       const visitor = Reflect.get(visitors, ts.SyntaxKind.FunctionDeclaration) as (
         node: ts.Node,
+        context: tstl.TransformationContext,
       ) => unknown;
 
+      // Declaration is kept (referenced as value, can't be erased) but @inline is stripped.
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[0] as ts.FunctionDeclaration,
+        getStatement(sourceFile, 0, ts.isFunctionDeclaration, "function declaration"),
+        createDirectContext(),
       ]);
 
-      expect(result).toBeUndefined();
+      expect(Array.isArray(result)).toBe(true);
     });
 
     describe("statement-position visitor diagnostics", () => {
@@ -2824,7 +2965,7 @@ describe("inline uncovered branches", () => {
       // `buildParamMap`, which fails because the mocked `symbolIdMaps` has no
       // entry for the parameter symbol.
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[1] as ts.ExpressionStatement,
+        getStatement(sourceFile, 1, ts.isExpressionStatement, "expression statement"),
         createDirectContext({
           transformStatements: () => [tstl.createReturnStatement([])],
         }),
@@ -2847,7 +2988,12 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+      const expressionStatement = getStatement(
+        sourceFile,
+        1,
+        ts.isExpressionStatement,
+        "expression statement",
+      );
 
       const result = Reflect.apply(visitor, undefined, [
         expressionStatement.expression,
@@ -2887,10 +3033,15 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+      const exprStmt = getStatement(
+        sourceFile,
+        1,
+        ts.isExpressionStatement,
+        "expression statement",
+      );
       const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
 
-      const result = Reflect.apply(visitor, undefined, [expressionStatement.expression, context]);
+      const result = Reflect.apply(visitor, undefined, [exprStmt.expression, context]);
 
       expect(result).toBeUndefined();
       expect(
@@ -2933,10 +3084,15 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const expressionStatement = sourceFile.statements[1] as ts.ExpressionStatement;
+      const exprStmt2 = getStatement(
+        sourceFile,
+        1,
+        ts.isExpressionStatement,
+        "expression statement",
+      );
 
       const result = Reflect.apply(visitor, undefined, [
-        expressionStatement.expression,
+        exprStmt2.expression,
         createDirectContext(),
       ]);
 
@@ -2978,7 +3134,7 @@ describe("inline uncovered branches", () => {
       const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
 
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[1] as ts.ExpressionStatement,
+        getStatement(sourceFile, 1, ts.isExpressionStatement, "expression statement"),
         context,
       ]);
 
@@ -3002,10 +3158,17 @@ describe("inline uncovered branches", () => {
         `,
       });
       const sourceFile = program.getSourceFile("/main.ts");
-      const paramDecl = (
-        (sourceFile.statements[1] as ts.VariableStatement).declarationList.declarations[0]
-          ?.initializer as ts.ArrowFunction
-      ).parameters[0];
+      const identityDecl = getStatement(
+        sourceFile,
+        1,
+        ts.isVariableStatement,
+        "variable statement",
+      );
+      const arrowInit = identityDecl.declarationList.declarations[0]?.initializer;
+      if (!arrowInit || !ts.isArrowFunction(arrowInit)) {
+        throw new Error("expected arrow function initializer");
+      }
+      const paramDecl = arrowInit.parameters[0];
       if (!paramDecl) {
         throw new Error("expected inline parameter");
       }
@@ -3035,10 +3198,15 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const expressionStatement = sourceFile.statements[2] as ts.ExpressionStatement;
+      const callExprStmt = getStatement(
+        sourceFile,
+        2,
+        ts.isExpressionStatement,
+        "expression statement",
+      );
 
       const result = Reflect.apply(visitor, undefined, [
-        expressionStatement.expression,
+        callExprStmt.expression,
         createDirectContext({
           symbolIdMaps: new Map<ts.Symbol, tstl.SymbolId>([[paramSymbol, 1 as tstl.SymbolId]]),
           transformExpression: (node) =>
@@ -3129,7 +3297,7 @@ describe("inline uncovered branches", () => {
       ) => unknown;
 
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[2] as ts.VariableStatement,
+        getStatement(sourceFile, 2, ts.isVariableStatement, "variable statement"),
         createDirectContext({
           transformExpression: () => tstl.createNumericLiteral(1),
           transformStatements: (node) =>
@@ -3161,7 +3329,12 @@ describe("inline uncovered branches", () => {
         `,
       });
       const sourceFile = program.getSourceFile("/main.ts");
-      const pairDecl = sourceFile.statements[1] as ts.FunctionDeclaration;
+      const pairDecl = getStatement(
+        sourceFile,
+        1,
+        ts.isFunctionDeclaration,
+        "function declaration",
+      );
       const paramDecl = pairDecl.parameters[0];
       if (!paramDecl) {
         throw new Error("expected pair parameter");
@@ -3176,7 +3349,7 @@ describe("inline uncovered branches", () => {
       ) => unknown;
 
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[2] as ts.VariableStatement,
+        getStatement(sourceFile, 2, ts.isVariableStatement, "variable statement"),
         createDirectContext({
           symbolIdMaps: new Map<ts.Symbol, tstl.SymbolId>([[paramSymbol, toSymbolId(1)]]),
           transformExpression: () => tstl.createNumericLiteral(1),
@@ -3209,13 +3382,14 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const runBody = (sourceFile.statements[1] as ts.FunctionDeclaration).body;
+      const runFn = getStatement(sourceFile, 1, ts.isFunctionDeclaration, "run function");
+      const runBody = runFn.body;
       if (!runBody) {
         throw new Error("expected run body");
       }
 
       const result = Reflect.apply(visitor, undefined, [
-        runBody.statements[0] as ts.ReturnStatement,
+        getFirstBodyStatement(runBody, ts.isReturnStatement, "return statement"),
         createDirectContext({ transformExpression: () => tstl.createNumericLiteral(1) }),
       ]);
 
@@ -3247,7 +3421,7 @@ describe("inline uncovered branches", () => {
       const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
 
       const result = Reflect.apply(visitor, undefined, [
-        sourceFile.statements[1] as ts.VariableStatement,
+        getStatement(sourceFile, 1, ts.isVariableStatement, "variable statement"),
         context,
       ]);
 
@@ -3274,7 +3448,12 @@ describe("inline uncovered branches", () => {
         `,
       });
       const sourceFile = program.getSourceFile("/main.ts");
-      const variableStatement = sourceFile.statements[1] as ts.VariableStatement;
+      const variableStatement = getStatement(
+        sourceFile,
+        1,
+        ts.isVariableStatement,
+        "variable statement",
+      );
       const declaration = variableStatement.declarationList.declarations[0];
       if (!declaration) {
         throw new Error("expected variable declaration");
@@ -3315,11 +3494,12 @@ describe("inline uncovered branches", () => {
         node: ts.Node,
         context: tstl.TransformationContext,
       ) => unknown;
-      const runBody = (sourceFile.statements[2] as ts.FunctionDeclaration).body;
+      const runFn = getStatement(sourceFile, 2, ts.isFunctionDeclaration, "run function");
+      const runBody = runFn.body;
       if (!runBody) {
         throw new Error("expected run body");
       }
-      const pairDecl = sourceFile.statements[1] as ts.FunctionDeclaration;
+      const pairDecl = getStatement(sourceFile, 1, ts.isFunctionDeclaration, "pair function");
       const paramDecl = pairDecl.parameters[0];
       if (!paramDecl) {
         throw new Error("expected pair parameter");
@@ -3340,7 +3520,7 @@ describe("inline uncovered branches", () => {
       } as unknown as tstl.TransformationContext;
 
       const result = Reflect.apply(visitor, undefined, [
-        runBody.statements[0] as ts.ReturnStatement,
+        getFirstBodyStatement(runBody, ts.isReturnStatement, "return statement"),
         context,
       ]);
 

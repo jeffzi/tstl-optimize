@@ -71,7 +71,7 @@ describe("optimize rule interactions", () => {
         const r = fastFloor(v);
       `);
       const normalizedLua = normalizeLua(lua);
-      expect(normalizedLua).toContain("r =");
+      expect(normalizedLua).not.toContain("fastFloor(v)");
       expect(normalizedLua).toContain("math.floor(v)");
       expect(normalizedLua).toContain("v - v % 1");
     });
@@ -183,7 +183,7 @@ describe("optimize rule interactions", () => {
         ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH", default: false } }),
       );
       const normalized = normalizeLua(lua);
-      expect(normalized).not.toContain("do");
+      expect(normalized).not.toMatch(/\bdo\b/);
       expect(normalized).not.toContain("____inline_arg_");
       expect(normalized).not.toContain("maybeLog");
       expect(normalized).not.toContain("doLog");

@@ -487,10 +487,12 @@ describe("constant-folding", () => {
       expect(tstl.isReturnStatement(transformed.statements[0]!)).toBe(true);
     });
 
-    it("returns non-file transform results unchanged", () => {
+    it("throws when the source-file transform does not produce a file", () => {
       const nonFile = tstl.createBooleanLiteral(true);
 
-      expect(runSourceFileVisitor(nonFile)).toBe(nonFile);
+      expect(() => runSourceFileVisitor(nonFile)).toThrow(
+        "expected SourceFile transform to produce a Lua file",
+      );
     });
   });
 });

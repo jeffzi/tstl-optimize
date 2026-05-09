@@ -75,6 +75,24 @@ function findRuntimeByLabel(runtimes: LuaRuntime[], label: string) {
   return runtimes.find((r) => r.label === label);
 }
 
+/**
+ * Mock `spawnSync` so only binaries listed in `respondTo` produce a version
+ * string; all others fail with ENOENT.  Keyed by binary name, not probe order,
+ * so the test survives changes to RUNTIME_CANDIDATES.
+ */
+function mockProbes(respondTo: Record<string, string>): void {
+  vi.mocked(spawnSync).mockImplementation(((cmd: string) => {
+    const version = respondTo[cmd];
+    return {
+      ...BASE_SPAWN_SYNC_RESULT,
+      stdout: version ?? "",
+      stderr: "",
+      status: version !== undefined ? 0 : null,
+      error: version !== undefined ? undefined : new Error("ENOENT"),
+    };
+  }) as unknown as typeof spawnSync);
+}
+
 // ---------------------------------------------------------------------------
 // Setup / teardown
 // ---------------------------------------------------------------------------
@@ -132,35 +150,7 @@ describe("detectRuntimes", () => {
   describe("luajit identity checks", () => {
     it("does not classify plain lua as luajit when only lua responds", () => {
       stubAllRuntimeEnvsEmpty();
-      vi.mocked(spawnSync)
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "",
-          stderr: "",
-          status: null,
-          error: new Error("ENOENT"),
-        })
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "",
-          stderr: "",
-          status: null,
-          error: new Error("ENOENT"),
-        })
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "",
-          stderr: "",
-          status: null,
-          error: new Error("ENOENT"),
-        })
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "Lua 5.4.7",
-          stderr: "",
-          status: 0,
-          error: undefined,
-        });
+      mockProbes({ lua: "Lua 5.4.7" });
 
       const runtimes = detectRuntimes();
 
@@ -169,35 +159,7 @@ describe("detectRuntimes", () => {
 
     it("accepts a lua fallback when it identifies itself as LuaJIT", () => {
       stubAllRuntimeEnvsEmpty();
-      vi.mocked(spawnSync)
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "",
-          stderr: "",
-          status: null,
-          error: new Error("ENOENT"),
-        })
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "",
-          stderr: "",
-          status: null,
-          error: new Error("ENOENT"),
-        })
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "",
-          stderr: "",
-          status: null,
-          error: new Error("ENOENT"),
-        })
-        .mockReturnValueOnce({
-          ...BASE_SPAWN_SYNC_RESULT,
-          stdout: "LuaJIT 2.1.0-beta3",
-          stderr: "",
-          status: 0,
-          error: undefined,
-        });
+      mockProbes({ lua: "LuaJIT 2.1.0-beta3" });
 
       const runtimes = detectRuntimes();
 

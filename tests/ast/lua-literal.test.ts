@@ -3,6 +3,36 @@ import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createLiteral, createNegativeLiteral, getLiteralValue } from "../../src/ast/lua-literal";
 
+/**
+ * Asserts that an expression is a ParenthesizedExpression and returns it.
+ * Fails the test if the type check fails.
+ */
+function assertParenthesized(expr: tstl.Expression): asserts expr is tstl.ParenthesizedExpression {
+  if (!tstl.isParenthesizedExpression(expr)) {
+    throw new Error(`Expected ParenthesizedExpression, got ${expr.kind}`);
+  }
+}
+
+/**
+ * Asserts that an expression is a UnaryExpression and returns it.
+ * Fails the test if the type check fails.
+ */
+function assertUnary(expr: tstl.Expression): asserts expr is tstl.UnaryExpression {
+  if (!tstl.isUnaryExpression(expr)) {
+    throw new Error(`Expected UnaryExpression, got ${expr.kind}`);
+  }
+}
+
+/**
+ * Asserts that an expression is a NumericLiteral and returns it.
+ * Fails the test if the type check fails.
+ */
+function assertNumeric(expr: tstl.Expression): asserts expr is tstl.NumericLiteral {
+  if (!tstl.isNumericLiteral(expr)) {
+    throw new Error(`Expected NumericLiteral, got ${expr.kind}`);
+  }
+}
+
 describe("getLiteralValue", () => {
   it.each([
     {
@@ -52,56 +82,50 @@ describe("createNegativeLiteral", () => {
   it("creates ParenthesizedExpression wrapping UnaryExpression with Math.abs", () => {
     const result = createNegativeLiteral(-5);
 
-    expect(tstl.isParenthesizedExpression(result)).toBe(true);
+    assertParenthesized(result);
+    assertUnary(result.expression);
+    assertNumeric(result.expression.operand);
 
-    const parens = result as tstl.ParenthesizedExpression;
-    expect(tstl.isUnaryExpression(parens.expression)).toBe(true);
-
-    const unary = parens.expression as tstl.UnaryExpression;
-    expect(unary.operator).toBe(tstl.SyntaxKind.NegationOperator);
-    expect(tstl.isNumericLiteral(unary.operand)).toBe(true);
-
-    expect((unary.operand as tstl.NumericLiteral).value).toBe(5);
+    expect(result.expression.operator).toBe(tstl.SyntaxKind.NegationOperator);
+    expect(result.expression.operand.value).toBe(5);
   });
 });
 
 describe("createLiteral", () => {
   it("creates NumericLiteral for number", () => {
     const result = createLiteral(42);
-    expect(tstl.isNumericLiteral(result)).toBe(true);
-    expect((result as tstl.NumericLiteral).value).toBe(42);
+    assertNumeric(result);
+    expect(result.value).toBe(42);
   });
 
   it("creates StringLiteral for string", () => {
     const result = createLiteral("test");
-    expect(tstl.isStringLiteral(result)).toBe(true);
-    expect((result as tstl.StringLiteral).value).toBe("test");
+    if (!tstl.isStringLiteral(result)) {
+      throw new Error(`Expected StringLiteral, got ${result.kind}`);
+    }
+    expect(result.value).toBe("test");
   });
 
   it("creates BooleanLiteral for boolean", () => {
     const result = createLiteral(true);
-    expect(
-      result.kind === tstl.SyntaxKind.TrueKeyword || result.kind === tstl.SyntaxKind.FalseKeyword,
-    ).toBe(true);
+    const isBooleanLiteral =
+      result.kind === tstl.SyntaxKind.TrueKeyword || result.kind === tstl.SyntaxKind.FalseKeyword;
+    expect(isBooleanLiteral).toBe(true);
   });
 
   it("creates plain NumericLiteral for negative number without wrapNegativeNumber", () => {
     const result = createLiteral(-10);
-    expect(tstl.isNumericLiteral(result)).toBe(true);
-    expect((result as tstl.NumericLiteral).value).toBe(-10);
+    assertNumeric(result);
+    expect(result.value).toBe(-10);
   });
 
   it("creates ParenthesizedExpression for negative number with wrapNegativeNumber: true", () => {
     const result = createLiteral(-10, { wrapNegativeNumber: true });
-    expect(tstl.isParenthesizedExpression(result)).toBe(true);
+    assertParenthesized(result);
+    assertUnary(result.expression);
+    assertNumeric(result.expression.operand);
 
-    const parens = result as tstl.ParenthesizedExpression;
-    expect(tstl.isUnaryExpression(parens.expression)).toBe(true);
-
-    const unary = parens.expression as tstl.UnaryExpression;
-    expect(unary.operator).toBe(tstl.SyntaxKind.NegationOperator);
-    expect(tstl.isNumericLiteral(unary.operand)).toBe(true);
-
-    expect((unary.operand as tstl.NumericLiteral).value).toBe(10);
+    expect(result.expression.operator).toBe(tstl.SyntaxKind.NegationOperator);
+    expect(result.expression.operand.value).toBe(10);
   });
 });

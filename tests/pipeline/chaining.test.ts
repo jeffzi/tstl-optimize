@@ -26,6 +26,9 @@ describe("index chaining", () => {
 
 describe("index chaining — SourceFile visitor fallback", () => {
   it("chains statement visitors when two rules both handle ExpressionStatement", () => {
+    // conditional-compilation and constant-folding both register for ExpressionStatement.
+    // math-intrinsics is active via defaults and produces "val - val % 1", proving
+    // the full chain ran without any rule being silenced by another.
     const code = `
       declare const val: number;
 
@@ -44,7 +47,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
     const lua = normalizeLua(compile(code, options));
 
     expect(lua).toContain("val - val % 1");
-    expect(lua).toContain("doubled");
+    expect(lua).toContain("doubled =");
   });
 
   it.each([
@@ -266,8 +269,8 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
     const lua = normalizeLua(compile(code, options));
 
     expect(lua).toContain("val - val % 1");
-    expect(lua).toContain("x");
-    expect(lua).toContain("y");
+    expect(lua).toContain("x =");
+    expect(lua).toContain("y =");
   });
 
   it("handles visitor cleanup when three+ rules transform same kinds", () => {

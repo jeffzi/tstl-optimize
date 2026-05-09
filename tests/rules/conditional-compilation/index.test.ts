@@ -105,10 +105,12 @@ describe("evaluateCondition", () => {
 });
 
 describe("resolveConditionalCompilationConfig", () => {
-  it("returns false for disabled or missing config", () => {
-    expect(resolveConditionalCompilationConfig(undefined)).toBe(false);
-    expect(resolveConditionalCompilationConfig(false)).toBe(false);
-    expect(resolveConditionalCompilationConfig({ enabled: false, constants: {} })).toBe(false);
+  it.each([
+    { name: "undefined", input: undefined },
+    { name: "false", input: false as const },
+    { name: "{ enabled: false }", input: { enabled: false, constants: {} } as const },
+  ])("returns false for $name", ({ input }) => {
+    expect(resolveConditionalCompilationConfig(input)).toBe(false);
   });
 
   it("returns empty map for boolean true", () => {
@@ -442,28 +444,26 @@ describe("conditional-compilation", () => {
       IS_ENABLED: { env: "X", default: false },
     });
 
-    it("folds non-null assertion on boolean constant", () => {
-      const src = `${PRINT_DECL} declare const IS_DEBUG: boolean; if (IS_DEBUG!) { print(1); } else { print(2); }`;
-
+    it.each([
+      {
+        name: "non-null assertion on truthy constant",
+        src: `${PRINT_DECL} declare const IS_DEBUG: boolean; if (IS_DEBUG!) { print(1); } else { print(2); }`,
+        expected: "print(1)",
+      },
+      {
+        name: "type assertion on truthy constant",
+        src: `${PRINT_DECL} declare const IS_DEBUG: boolean; if (<any>IS_DEBUG) { print(1); } else { print(2); }`,
+        expected: "print(1)",
+      },
+      {
+        name: "parenthesized non-null assertion on falsy constant",
+        src: `${PRINT_DECL} declare const IS_ENABLED: boolean; if ((IS_ENABLED!)) { print(1); } else { print(2); }`,
+        expected: "print(2)",
+      },
+    ])("folds $name", ({ src, expected }) => {
       const lua = normalizeLua(compile(src, opts));
 
-      expect(lua).toBe("print(1)");
-    });
-
-    it("folds type assertion on boolean constant", () => {
-      const src = `${PRINT_DECL} declare const IS_DEBUG: boolean; if (<any>IS_DEBUG) { print(1); } else { print(2); }`;
-
-      const lua = normalizeLua(compile(src, opts));
-
-      expect(lua).toBe("print(1)");
-    });
-
-    it("folds parenthesized non-null assertion on boolean constant", () => {
-      const src = `${PRINT_DECL} declare const IS_ENABLED: boolean; if ((IS_ENABLED!)) { print(1); } else { print(2); }`;
-
-      const lua = normalizeLua(compile(src, opts));
-
-      expect(lua).toBe("print(2)");
+      expect(lua).toBe(expected);
     });
   });
 
@@ -475,7 +475,7 @@ describe("conditional-compilation", () => {
       expect(lua).toContain("if true then");
     });
 
-    it("interacts with other rules correctly", () => {
+    it("applies math-intrinsics then constant-folding inside the kept branch", () => {
       const lua = compile(
         `${PRINT_DECL} declare const DEBUG: boolean; if (DEBUG) { print(Math.floor(1.5)); }`,
         {
@@ -494,7 +494,7 @@ describe("conditional-compilation", () => {
 
     it("returns no visitors when the rule is disabled at creation time", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        {} as ts.TypeChecker,
+        asTypeChecker({}),
         { rules: { "conditional-compilation": false }, strict: false },
       ]);
 
@@ -852,7 +852,7 @@ ${body}
       VAL_1: { env: "VAL_1", default: 1 },
     });
 
-    it("preserves loop with break inside nested block", () => {
+    it("preserves return inside a doubly-nested block when folding", () => {
       const code = `
         ${PRINT_DECL}
         function test() {
@@ -860,6 +860,16 @@ ${body}
             { return 1; }
           }
         }
+      `;
+
+      const lua = normalizeLua(compile(code, opts));
+
+      expect(lua).toContain("return 1");
+    });
+
+    it("preserves break inside a while loop with a nested block when folding", () => {
+      const code = `
+        ${PRINT_DECL}
         function test2() {
           while(true) {
             if (true) {
@@ -871,7 +881,6 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("return 1");
       expect(lua).toContain("break");
     });
 
@@ -1085,11 +1094,15 @@ ${body}
       expect(lua).not.toContain("print(1)");
     });
 
-    it("folds if-condition with inequality check against constant", () => {
+    it.each([
+      { operator: "!==", condition: "VAL_1 !== 2" },
+      { operator: "==", condition: "VAL_1 == 1" },
+      { operator: "!=", condition: "VAL_1 != 2" },
+    ])("folds if-condition with $operator operator against constant", ({ condition }) => {
       const code = `
         ${PRINT_DECL}
         declare const VAL_1: number;
-        if (VAL_1 !== 2) {
+        if (${condition}) {
           print(1);
         } else {
           print(2);
@@ -1154,40 +1167,6 @@ ${body}
       expect(lua).toContain("print(2)");
       expect(lua).not.toContain("print(1)");
       expect(lua).not.toContain("if");
-    });
-
-    it("folds if-condition with loose equality check against constant", () => {
-      const code = `
-        ${PRINT_DECL}
-        declare const VAL_1: number;
-        if (VAL_1 == 1) {
-          print(1);
-        } else {
-          print(2);
-        }
-      `;
-
-      const lua = normalizeLua(compile(code, opts));
-
-      expect(lua).toContain("print(1)");
-      expect(lua).not.toContain("print(2)");
-    });
-
-    it("folds if-condition with loose inequality check against constant", () => {
-      const code = `
-        ${PRINT_DECL}
-        declare const VAL_1: number;
-        if (VAL_1 != 2) {
-          print(1);
-        } else {
-          print(2);
-        }
-      `;
-
-      const lua = normalizeLua(compile(code, opts));
-
-      expect(lua).toContain("print(1)");
-      expect(lua).not.toContain("print(2)");
     });
 
     it("folds negative statically-known top-level const initializers", () => {
@@ -1406,7 +1385,7 @@ ${body}
     });
   });
 
-  describe("public visitor coverage", () => {
+  describe("when visitors are called directly with a partial type checker", () => {
     function createRuleVisitors(checker: Partial<ts.TypeChecker>): tstl.Visitors {
       return Reflect.apply(createVisitors, undefined, [
         asTypeChecker(checker),
@@ -1800,7 +1779,7 @@ describe("conditional-compilation — interaction with other rules", () => {
     // !DEBUG is true → live branch kept; inline substitutes doubled(21), then constant-folding
     // evaluates 21 * 2 → 42. The call site must be eliminated regardless.
     expect(lua).not.toContain("doubled(");
-    // Result is either the inlined expression or its constant-folded form.
-    expect(lua.includes("21 * 2") || lua.includes("42")).toBe(true);
+    // The inline rule substitutes the call; constant-folding may further reduce 21 * 2 → 42.
+    expect(lua).toMatch(/21 \* 2|42/);
   });
 });

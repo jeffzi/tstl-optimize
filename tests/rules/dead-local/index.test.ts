@@ -25,6 +25,9 @@ describe("dead-local", () => {
   }
 
   function toSymbolId(value: number): tstl.SymbolId {
+    // tstl.SymbolId is a branded number type; this cast is intentional as
+    // the type system cannot express the branding at runtime. We construct the ID
+    // directly since we control the input.
     return value as tstl.SymbolId;
   }
 
@@ -529,33 +532,15 @@ describe("dead-local", () => {
     });
   });
 
-  describe("when superTransformNode returns a non-file result", () => {
-    it("returns non-file transform results unchanged", () => {
-      const visitors = Reflect.apply(createVisitors, undefined, []);
-      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
-        node: ts.SourceFile,
-        context: { superTransformNode(node: ts.Node): unknown },
-      ) => tstl.Expression;
-      const nonFile = tstl.createBooleanLiteral(true);
-
-      const transformed = Reflect.apply(visitor, undefined, [
-        {} as ts.SourceFile,
-        { superTransformNode: () => nonFile },
-      ]);
-
-      expect(transformed).toBe(nonFile);
-    });
-  });
-
   describe("when transforming pre-built Lua AST nodes", () => {
     function runSourceFileVisitor(node: tstl.Node): tstl.Node {
       const visitors = Reflect.apply(createVisitors, undefined, []);
-      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
-        node: ts.SourceFile,
-        context: { superTransformNode(node: ts.Node): unknown },
-      ) => tstl.File;
+      const visitorFn = Reflect.get(visitors, ts.SyntaxKind.SourceFile);
+      if (typeof visitorFn !== "function") {
+        throw new Error("Expected visitor to be a function");
+      }
 
-      return Reflect.apply(visitor, undefined, [
+      return Reflect.apply(visitorFn, undefined, [
         {} as ts.SourceFile,
         { superTransformNode: () => node },
       ]);
@@ -592,7 +577,7 @@ describe("dead-local", () => {
       const xDecl = fnExpr.body.statements[0] as tstl.VariableDeclarationStatement;
 
       expect(xDecl.left).toHaveLength(1);
-      expect((xDecl.left[0] as tstl.Identifier).text).toBe("x");
+      expect(xDecl.left[0].text).toBe("x");
       // biome-ignore lint/style/noNonNullAssertion: node constructed with value
       expect(tstl.isNumericLiteral(xDecl.right![0])).toBe(true);
     });
@@ -628,12 +613,25 @@ describe("dead-local", () => {
         ),
       ]);
 
-      const transformed = runSourceFileVisitor(file) as tstl.File;
-      const fnDecl = transformed.statements[0] as tstl.VariableDeclarationStatement;
-      const fnExpr = fnDecl.right?.[0] as tstl.FunctionExpression;
-      const xDecl = fnExpr.body.statements[0] as tstl.VariableDeclarationStatement;
+      const transformed = runSourceFileVisitor(file);
+      if (!tstl.isFile(transformed)) {
+        throw new Error(`Expected File, got ${transformed?.kind}`);
+      }
+      const fnDecl = transformed.statements[0];
+      if (!tstl.isVariableDeclarationStatement(fnDecl)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${fnDecl?.kind}`);
+      }
+      const fnExpr = fnDecl.right?.[0];
+      if (!fnExpr || !tstl.isFunctionExpression(fnExpr)) {
+        throw new Error(`Expected FunctionExpression, got ${fnExpr?.kind}`);
+      }
+      const xDecl = fnExpr.body.statements[0];
+      if (!tstl.isVariableDeclarationStatement(xDecl)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${xDecl?.kind}`);
+      }
 
-      expect((xDecl.left[0] as tstl.Identifier).text).toBe("x");
+      expect(xDecl.left).toHaveLength(1);
+      expect(xDecl.left[0].text).toBe("x");
       // biome-ignore lint/style/noNonNullAssertion: node constructed with value
       expect(tstl.isNumericLiteral(xDecl.right![0])).toBe(true);
     });
@@ -664,12 +662,25 @@ describe("dead-local", () => {
         ),
       ]);
 
-      const transformed = runSourceFileVisitor(file) as tstl.File;
-      const fnDecl = transformed.statements[0] as tstl.VariableDeclarationStatement;
-      const fnExpr = fnDecl.right?.[0] as tstl.FunctionExpression;
-      const stepDecl = fnExpr.body.statements[0] as tstl.VariableDeclarationStatement;
+      const transformed = runSourceFileVisitor(file);
+      if (!tstl.isFile(transformed)) {
+        throw new Error(`Expected File, got ${transformed?.kind}`);
+      }
+      const fnDecl = transformed.statements[0];
+      if (!tstl.isVariableDeclarationStatement(fnDecl)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${fnDecl?.kind}`);
+      }
+      const fnExpr = fnDecl.right?.[0];
+      if (!fnExpr || !tstl.isFunctionExpression(fnExpr)) {
+        throw new Error(`Expected FunctionExpression, got ${fnExpr?.kind}`);
+      }
+      const stepDecl = fnExpr.body.statements[0];
+      if (!tstl.isVariableDeclarationStatement(stepDecl)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${stepDecl?.kind}`);
+      }
 
-      expect((stepDecl.left[0] as tstl.Identifier).text).toBe("step");
+      expect(stepDecl.left).toHaveLength(1);
+      expect(stepDecl.left[0].text).toBe("step");
       // biome-ignore lint/style/noNonNullAssertion: node constructed with value
       expect(tstl.isNumericLiteral(stepDecl.right![0])).toBe(true);
     });

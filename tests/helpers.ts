@@ -40,6 +40,7 @@ export interface CompileResult {
 function transpile(
   files: Record<string, string>,
   options?: CompileOptions,
+  tstlExtra?: Partial<tstl.CompilerOptions>,
 ): tstl.TranspileVirtualProjectResult {
   const {
     pluginOptions,
@@ -60,6 +61,7 @@ function transpile(
     target: ts.ScriptTarget.ESNext,
     lib: ["lib.esnext.d.ts"],
     types: ["@typescript-to-lua/language-extensions"],
+    ...tstlExtra,
   });
 }
 
@@ -110,6 +112,93 @@ export function compileMultiFileWithDiagnostics(
 
 export function compileWithDiagnostics(source: string, options?: CompileOptions): CompileResult {
   return compileMultiFileWithDiagnostics({ "main.ts": source }, options);
+}
+
+/**
+ * Mapping from Lua line numbers (1-based) to TypeScript line numbers (1-based),
+ * extracted from the `__TS__SourceMapTraceBack(...)` call emitted by TSTL.
+ */
+export type TracebackTable = Record<number, number>;
+
+export interface SourceMapCompileResult {
+  lua: string;
+  /** Raw JSON of the external `.lua.map` sourcemap. */
+  externalMap: string;
+  /**
+   * Parsed `{ [luaLine: number]: tsLine }` from the inline
+   * `__TS__SourceMapTraceBack(...)` call.
+   *
+   * An empty object is valid and expected for source files with no statements.
+   * A missing call (i.e. the option didn't apply) causes this function to throw.
+   */
+  traceback: TracebackTable;
+}
+
+function extractSourceMapResult(
+  result: tstl.TranspileVirtualProjectResult,
+  luaFileSuffix: string,
+): SourceMapCompileResult {
+  const errors = result.diagnostics.filter(
+    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
+  );
+  if (errors.length > 0) {
+    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+    throw new Error(msgs);
+  }
+
+  const file = result.transpiledFiles.find((f) => f.outPath.endsWith(luaFileSuffix));
+  if (file === undefined || file.lua === undefined) {
+    throw new Error(`compileWithSourceMap: no Lua output for ${luaFileSuffix}`);
+  }
+  if (file.luaSourceMap === undefined) {
+    throw new Error(
+      "compileWithSourceMap: no luaSourceMap in output — check that sourceMap:true was passed",
+    );
+  }
+
+  const lua = file.lua;
+  const externalMap = file.luaSourceMap;
+
+  const tracebackMatch = lua.match(/__TS__SourceMapTraceBack\([^,]+,\s*(\{[^}]*\})\)/);
+  if (tracebackMatch === null) {
+    throw new Error(
+      "compileWithSourceMap: no __TS__SourceMapTraceBack(...) call found in Lua output — " +
+        "check that sourceMapTraceback:true was applied",
+    );
+  }
+
+  // TSTL emits: {["4"] = 1, ["5"] = 2}
+  // Convert to valid JSON:  {"4": 1, "5": 2}
+  const tableJson = tracebackMatch[1]
+    .replace(/\["(\d+)"\]/g, '"$1"') // ["4"] → "4"
+    .replace(/\s*=\s*/g, ": ") // = → :
+    .replace(/,\s*\}/, "}"); // trailing comma guard
+  const traceback = JSON.parse(tableJson) as Record<string, number>;
+
+  const tracebackTable: TracebackTable = {};
+  for (const [k, v] of Object.entries(traceback)) {
+    tracebackTable[Number(k)] = v;
+  }
+
+  return { lua, externalMap, traceback: tracebackTable };
+}
+
+/**
+ * Compile a single TypeScript source string to Lua with `sourceMap: true` and
+ * `sourceMapTraceback: true`.
+ *
+ * Throws loudly when the external map or the traceback call is absent in the output,
+ * because silent absence is the failure mode this helper is built to prevent.
+ */
+export function compileWithSourceMap(
+  source: string,
+  options?: CompileOptions,
+): SourceMapCompileResult {
+  const result = transpile({ "main.ts": source }, options, {
+    sourceMap: true,
+    sourceMapTraceback: true,
+  });
+  return extractSourceMapResult(result, "main.lua");
 }
 
 export function normalizeLua(lua: string): string {

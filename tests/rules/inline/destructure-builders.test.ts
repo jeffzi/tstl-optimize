@@ -7,14 +7,19 @@ import {
   buildObjectDestructureInline,
 } from "../../../src/rules/inline/destructure-builders";
 import type { ReturnValueInlineTarget } from "../../../src/rules/inline/target";
+import { findNode, makeChecker } from "./helpers";
 
 // Real source file so all nodes have parent pointers and symbols resolve correctly
 // through the TypeScript infrastructure used by prepareReturnValueInline.
 const SOURCE = "function f(x: number): number { return x; }";
-const sourceFile = ts.createSourceFile("test.ts", SOURCE, ts.ScriptTarget.Latest, true);
+const { checker: fixtureChecker, sourceFile } = makeChecker(SOURCE);
 const firstStmt = sourceFile.statements[0];
 if (!ts.isFunctionDeclaration(firstStmt)) throw new Error("expected function declaration");
 const funcDecl = firstStmt;
+if (!funcDecl.name) throw new Error("expected function name");
+const maybeResolvedSymbol = fixtureChecker.getSymbolAtLocation(funcDecl.name);
+if (!maybeResolvedSymbol) throw new Error("expected function symbol");
+const resolvedSymbol = maybeResolvedSymbol;
 const firstBodyStmt = funcDecl.body?.statements[0];
 if (
   firstBodyStmt === undefined ||
@@ -32,7 +37,7 @@ function makeTarget(): ReturnValueInlineTarget {
     returnExpr,
     params: funcDecl.parameters,
     declaration: funcDecl,
-    resolvedSymbol: {} as ts.Symbol,
+    resolvedSymbol,
   };
 }
 
@@ -44,12 +49,18 @@ function makeCallNode(): ts.CallExpression {
 
 // Checker that returns undefined for every symbol lookup, causing buildParamMap to fail.
 function makeFailingChecker(overrides: Partial<ts.TypeChecker> = {}): ts.TypeChecker {
-  return {
-    getSymbolAtLocation: () => undefined,
-    getResolvedSignature: () => undefined,
-    getReturnTypeOfSignature: () => undefined,
-    ...overrides,
-  } as unknown as ts.TypeChecker;
+  return new Proxy(fixtureChecker, {
+    get(target, property, receiver) {
+      const override = overrides[property as keyof ts.TypeChecker];
+      if (override !== undefined) return override;
+      if (property === "getSymbolAtLocation") return () => undefined;
+      if (property === "getResolvedSignature") return () => undefined;
+      if (property === "getReturnTypeOfSignature") return () => undefined;
+
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 // Minimal context sufficient for prepareReturnValueInline / transformInlineBodyAndReturn.
@@ -82,12 +93,20 @@ function makeContextWithReturn(): tstl.TransformationContext {
 // Checker that reports the call returns LuaMultiReturn, but has no symbols for
 // parameter lookups so buildParamMap fails inside the isMultiReturn block.
 function makeMultiReturnFailingChecker(): ts.TypeChecker {
+  const { checker, sourceFile: multiReturnSourceFile } = makeChecker(`
+    type LuaMultiReturn<T extends unknown[]> = T & { __brand: never };
+    declare function pair(): LuaMultiReturn<[number, number]>;
+    pair();
+  `);
+  const call = findNode(multiReturnSourceFile, ts.isCallExpression);
+  if (!call) throw new Error("expected LuaMultiReturn call");
+  const signature = checker.getResolvedSignature(call);
+  if (!signature) throw new Error("expected LuaMultiReturn signature");
+  const returnType = checker.getReturnTypeOfSignature(signature);
+
   return makeFailingChecker({
-    getResolvedSignature: () => ({}) as unknown as ts.Signature,
-    getReturnTypeOfSignature: () =>
-      ({
-        aliasSymbol: { name: "LuaMultiReturn" } as ts.Symbol,
-      }) as unknown as ts.Type,
+    getResolvedSignature: () => signature,
+    getReturnTypeOfSignature: () => returnType,
   });
 }
 

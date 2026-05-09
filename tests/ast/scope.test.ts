@@ -33,26 +33,34 @@ function makeAccess(table: string, ...fields: string[]): tstl.TableIndexExpressi
 }
 
 describe("luaPropertyChain", () => {
-  it("returns dotted chain for string-keyed access at any depth", () => {
-    expect(luaPropertyChain(makeAccess("math", "cos"))).toBe("math.cos");
-    expect(luaPropertyChain(makeAccess("config", "graphics", "width"))).toBe(
-      "config.graphics.width",
-    );
+  it.each([
+    { chain: "math.cos", access: () => makeAccess("math", "cos") },
+    {
+      chain: "config.graphics.width",
+      access: () => makeAccess("config", "graphics", "width"),
+    },
+  ])("returns dotted chain $chain for string-keyed access", ({ chain, access }) => {
+    expect(luaPropertyChain(access())).toBe(chain);
   });
 
-  it("returns undefined for numeric index at any position", () => {
-    const directNumeric = tstl.createTableIndexExpression(
-      tstl.createIdentifier("arr"),
-      tstl.createNumericLiteral(1),
-    );
-    expect(luaPropertyChain(directNumeric)).toBeUndefined();
-
-    // arr[1].field — intermediate numeric breaks the chain
-    const nestedNumeric = tstl.createTableIndexExpression(
-      directNumeric,
-      tstl.createStringLiteral("field"),
-    );
-    expect(luaPropertyChain(nestedNumeric)).toBeUndefined();
+  it.each([
+    {
+      name: "direct numeric index",
+      build: () =>
+        tstl.createTableIndexExpression(tstl.createIdentifier("arr"), tstl.createNumericLiteral(1)),
+    },
+    {
+      name: "intermediate numeric index in nested chain",
+      build: () => {
+        const directNumeric = tstl.createTableIndexExpression(
+          tstl.createIdentifier("arr"),
+          tstl.createNumericLiteral(1),
+        );
+        return tstl.createTableIndexExpression(directNumeric, tstl.createStringLiteral("field"));
+      },
+    },
+  ])("returns undefined for $name", ({ build }) => {
+    expect(luaPropertyChain(build())).toBeUndefined();
   });
 
   it("returns undefined when base is not an identifier", () => {
@@ -63,7 +71,7 @@ describe("luaPropertyChain", () => {
 });
 
 describe("when counting property chain occurrences in statements", () => {
-  it("counts matching chains at any depth", () => {
+  it("counts multiple occurrences of the same shallow chain", () => {
     const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(
         tstl.createIdentifier("x"),
@@ -76,20 +84,23 @@ describe("when counting property chain occurrences in statements", () => {
     ];
 
     expect(countPropertyAccess(statements, "math.cos")).toBe(2);
+  });
 
-    // Deep chain: config.graphics.width
-    const deep: tstl.Statement[] = [
+  it("counts a single occurrence of a deep chain", () => {
+    const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(
         tstl.createIdentifier("w"),
         makeAccess("config", "graphics", "width"),
       ),
     ];
-    expect(countPropertyAccess(deep, "config.graphics.width")).toBe(1);
+    expect(countPropertyAccess(statements, "config.graphics.width")).toBe(1);
   });
 
-  it("returns zero for empty list or non-matching chains", () => {
+  it("returns zero for an empty statement list", () => {
     expect(countPropertyAccess([], "math.cos")).toBe(0);
+  });
 
+  it("returns zero when no statement matches the chain", () => {
     const statements: tstl.Statement[] = [
       tstl.createVariableDeclarationStatement(
         tstl.createIdentifier("x"),

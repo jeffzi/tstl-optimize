@@ -54,8 +54,9 @@ describe("rewriteWithConstSubstitutions", () => {
       throw new Error("expected property assignment");
     }
 
-    expect(ts.isComputedPropertyName(property.name)).toBe(true);
-    if (!ts.isComputedPropertyName(property.name)) return;
+    if (!ts.isComputedPropertyName(property.name)) {
+      throw new Error("expected computed property name");
+    }
     expect(ts.isStringLiteral(property.name.expression)).toBe(true);
     expect(ts.isNumericLiteral(property.initializer)).toBe(true);
   });

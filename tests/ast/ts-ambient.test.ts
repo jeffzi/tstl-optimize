@@ -11,14 +11,33 @@ function getTopLevelDeclaration(
   code: string,
 ): ts.VariableStatement | ts.FunctionDeclaration | ts.ModuleDeclaration {
   if (code.includes("namespace")) {
-    const moduleDecl = sourceFile.statements[0] as ts.ModuleDeclaration;
-    const moduleBody = moduleDecl.body as ts.ModuleBlock;
-    return moduleBody.statements[0] as ts.VariableStatement;
+    const first = sourceFile.statements[0];
+    if (!first || !ts.isModuleDeclaration(first)) {
+      throw new Error(
+        `Expected ModuleDeclaration, got ${first ? ts.SyntaxKind[first.kind] : "nothing"}`,
+      );
+    }
+    if (!first.body || !ts.isModuleBlock(first.body)) {
+      throw new Error("Expected ModuleBlock body");
+    }
+    const inner = first.body.statements[0];
+    if (!inner || !ts.isVariableStatement(inner)) {
+      throw new Error(
+        `Expected VariableStatement, got ${inner ? ts.SyntaxKind[inner.kind] : "nothing"}`,
+      );
+    }
+    return inner;
   }
-  return sourceFile.statements[0] as
-    | ts.VariableStatement
-    | ts.FunctionDeclaration
-    | ts.ModuleDeclaration;
+  const first = sourceFile.statements[0];
+  if (
+    !first ||
+    (!ts.isVariableStatement(first) &&
+      !ts.isFunctionDeclaration(first) &&
+      !ts.isModuleDeclaration(first))
+  ) {
+    throw new Error("Expected VariableStatement | FunctionDeclaration | ModuleDeclaration");
+  }
+  return first;
 }
 
 describe("isExplicitAmbientTopLevelDeclaration", () => {
