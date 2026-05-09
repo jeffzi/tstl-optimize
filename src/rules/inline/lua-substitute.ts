@@ -6,7 +6,7 @@ import { deepCloneExpression } from "../../ast/deep-clone";
  * Recursively transform a Lua expression tree. `leafFn` is called on each node;
  * if it returns a value, that replaces the node (no further recursion).
  * Otherwise the default recursion rebuilds the node with mapped children.
- * Does not recurse into nested function bodies — they have their own scope.
+ * Recurses into nested function bodies (e.g. IIFEs from eager-argument evaluation).
  */
 export function mapLuaExpression(
   node: tstl.Expression,
@@ -17,66 +17,54 @@ export function mapLuaExpression(
 
   const recurse = (n: tstl.Expression) => mapLuaExpression(n, leafFn);
 
-  switch (node.kind) {
-    case tstl.SyntaxKind.BinaryExpression: {
-      const bin = node as tstl.BinaryExpression;
-      return tstl.createBinaryExpression(recurse(bin.left), recurse(bin.right), bin.operator);
-    }
-    case tstl.SyntaxKind.UnaryExpression: {
-      const un = node as tstl.UnaryExpression;
-      return tstl.createUnaryExpression(recurse(un.operand), un.operator);
-    }
-    case tstl.SyntaxKind.CallExpression: {
-      const call = node as tstl.CallExpression;
-      return tstl.createCallExpression(recurse(call.expression), call.params.map(recurse));
-    }
-    case tstl.SyntaxKind.MethodCallExpression: {
-      const method = node as tstl.MethodCallExpression;
-      return tstl.createMethodCallExpression(
-        recurse(method.prefixExpression),
-        method.name,
-        method.params.map(recurse),
-      );
-    }
-    case tstl.SyntaxKind.TableIndexExpression: {
-      const tbl = node as tstl.TableIndexExpression;
-      return tstl.createTableIndexExpression(recurse(tbl.table), recurse(tbl.index));
-    }
-    case tstl.SyntaxKind.ParenthesizedExpression:
-      return tstl.createParenthesizedExpression(
-        recurse((node as tstl.ParenthesizedExpression).expression),
-      );
-    case tstl.SyntaxKind.TableExpression: {
-      const tblExpr = node as tstl.TableExpression;
-      return tstl.createTableExpression(
-        tblExpr.fields.map((field) =>
-          tstl.createTableFieldExpression(
-            recurse(field.value),
-            field.key ? recurse(field.key) : undefined,
-          ),
-        ),
-      );
-    }
-    case tstl.SyntaxKind.ConditionalExpression: {
-      const cond = node as tstl.ConditionalExpression;
-      return tstl.createConditionalExpression(
-        recurse(cond.condition),
-        recurse(cond.whenTrue),
-        recurse(cond.whenFalse),
-      );
-    }
-    case tstl.SyntaxKind.FunctionExpression: {
-      const func = node as tstl.FunctionExpression;
-      return tstl.createFunctionExpression(
-        tstl.createBlock(mapLuaStatements(func.body.statements, leafFn)),
-        func.params,
-        func.dots,
-        func.flags,
-      );
-    }
-    default:
-      return node;
+  if (tstl.isBinaryExpression(node)) {
+    return tstl.createBinaryExpression(recurse(node.left), recurse(node.right), node.operator);
   }
+  if (tstl.isUnaryExpression(node)) {
+    return tstl.createUnaryExpression(recurse(node.operand), node.operator);
+  }
+  if (tstl.isCallExpression(node)) {
+    return tstl.createCallExpression(recurse(node.expression), node.params.map(recurse));
+  }
+  if (tstl.isMethodCallExpression(node)) {
+    return tstl.createMethodCallExpression(
+      recurse(node.prefixExpression),
+      node.name,
+      node.params.map(recurse),
+    );
+  }
+  if (tstl.isTableIndexExpression(node)) {
+    return tstl.createTableIndexExpression(recurse(node.table), recurse(node.index));
+  }
+  if (tstl.isParenthesizedExpression(node)) {
+    return tstl.createParenthesizedExpression(recurse(node.expression));
+  }
+  if (tstl.isTableExpression(node)) {
+    return tstl.createTableExpression(
+      node.fields.map((field) =>
+        tstl.createTableFieldExpression(
+          recurse(field.value),
+          field.key ? recurse(field.key) : undefined,
+        ),
+      ),
+    );
+  }
+  if (tstl.isConditionalExpression(node)) {
+    return tstl.createConditionalExpression(
+      recurse(node.condition),
+      recurse(node.whenTrue),
+      recurse(node.whenFalse),
+    );
+  }
+  if (tstl.isFunctionExpression(node)) {
+    return tstl.createFunctionExpression(
+      tstl.createBlock(mapLuaStatements(node.body.statements, leafFn)),
+      node.params,
+      node.dots,
+      node.flags,
+    );
+  }
+  return node;
 }
 
 export function substituteParams(
@@ -84,9 +72,8 @@ export function substituteParams(
   paramMap: Map<tstl.SymbolId, tstl.Expression>,
 ): tstl.Expression {
   return mapLuaExpression(node, (n) => {
-    if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
-    const id = n as tstl.Identifier;
-    const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
+    if (!tstl.isIdentifier(n)) return undefined;
+    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
     return mapped ? deepCloneExpression(mapped) : undefined;
   });
 }
@@ -121,90 +108,75 @@ export function mapLuaStatements(
   }
 
   return statements.map((stmt): tstl.Statement => {
-    switch (stmt.kind) {
-      case tstl.SyntaxKind.DoStatement: {
-        const doStmt = stmt as tstl.DoStatement;
-        return tstl.createDoStatement(recurseStmts(doStmt.statements));
-      }
-      case tstl.SyntaxKind.VariableDeclarationStatement: {
-        const varDecl = stmt as tstl.VariableDeclarationStatement;
-        return tstl.createVariableDeclarationStatement(
-          varDecl.left.map((id) => {
-            const mapped = recurse(id);
-            // canInline/canInlineStatements rejects writes to params, so LHS identifiers
-            // are never in paramMap and leafFn never substitutes them — kind is preserved.
-            /* v8 ignore next */
-            if (mapped.kind !== tstl.SyntaxKind.Identifier)
-              throw new Error("invariant: LHS identifier");
-            return mapped as tstl.Identifier;
-          }),
-          varDecl.right?.map(recurse),
-        );
-      }
-      case tstl.SyntaxKind.AssignmentStatement: {
-        const assign = stmt as tstl.AssignmentStatement;
-        return tstl.createAssignmentStatement(
-          assign.left.map((l) => {
-            const mapped = recurse(l);
-            // isParamWritten rejects inline when params appear on LHS, so assignment
-            // targets (Identifier | TableIndexExpression) are never substituted.
-            /* v8 ignore next */
-            if (
-              mapped.kind !== tstl.SyntaxKind.Identifier &&
-              mapped.kind !== tstl.SyntaxKind.TableIndexExpression
-            ) {
-              throw new Error("invariant: LHS assignment expression");
-            }
-            return mapped as tstl.AssignmentLeftHandSideExpression;
-          }),
-          assign.right.map(recurse),
-        );
-      }
-      case tstl.SyntaxKind.IfStatement:
-        return mapIfStatement(stmt as tstl.IfStatement);
-      case tstl.SyntaxKind.WhileStatement: {
-        const whileStmt = stmt as tstl.WhileStatement;
-        return tstl.createWhileStatement(
-          tstl.createBlock(recurseStmts(whileStmt.body.statements)),
-          recurse(whileStmt.condition),
-        );
-      }
-      case tstl.SyntaxKind.RepeatStatement: {
-        const repeatStmt = stmt as tstl.RepeatStatement;
-        return tstl.createRepeatStatement(
-          tstl.createBlock(recurseStmts(repeatStmt.body.statements)),
-          recurse(repeatStmt.condition),
-        );
-      }
-      case tstl.SyntaxKind.ForStatement: {
-        const forStmt = stmt as tstl.ForStatement;
-        return tstl.createForStatement(
-          tstl.createBlock(recurseStmts(forStmt.body.statements)),
-          forStmt.controlVariable,
-          recurse(forStmt.controlVariableInitializer),
-          recurse(forStmt.limitExpression),
-          forStmt.stepExpression ? recurse(forStmt.stepExpression) : undefined,
-        );
-      }
-      case tstl.SyntaxKind.ForInStatement: {
-        const forIn = stmt as tstl.ForInStatement;
-        return tstl.createForInStatement(
-          tstl.createBlock(recurseStmts(forIn.body.statements)),
-          forIn.names,
-          forIn.expressions.map(recurse),
-        );
-      }
-      case tstl.SyntaxKind.ReturnStatement: {
-        const ret = stmt as tstl.ReturnStatement;
-        return tstl.createReturnStatement(ret.expressions.map(recurse));
-      }
-      case tstl.SyntaxKind.ExpressionStatement: {
-        const exprStmt = stmt as tstl.ExpressionStatement;
-        return tstl.createExpressionStatement(recurse(exprStmt.expression));
-      }
-      default:
-        return tstl.cloneNode(stmt);
+    if (tstl.isDoStatement(stmt)) {
+      return tstl.createDoStatement(recurseStmts(stmt.statements));
     }
+    if (tstl.isVariableDeclarationStatement(stmt)) {
+      return tstl.createVariableDeclarationStatement(
+        stmt.left.map((id) => {
+          const mapped = recurse(id);
+          // canInline/canInlineStatements rejects writes to params, so LHS identifiers
+          // are never in paramMap and leafFn never substitutes them.
+          /* v8 ignore next */
+          if (!tstl.isIdentifier(mapped)) throw new Error("invariant: LHS identifier");
+          return mapped;
+        }),
+        stmt.right?.map(recurse),
+      );
+    }
+    if (tstl.isAssignmentStatement(stmt)) {
+      return tstl.createAssignmentStatement(
+        stmt.left.map((left) => {
+          const mapped = recurse(left);
+          // isParamWritten rejects inline when params appear on LHS, so assignment
+          // targets (Identifier | TableIndexExpression) are never substituted.
+          /* v8 ignore next */
+          if (!tstl.isIdentifier(mapped) && !tstl.isTableIndexExpression(mapped)) {
+            throw new Error("invariant: LHS assignment expression");
+          }
+          return mapped;
+        }),
+        stmt.right.map(recurse),
+      );
+    }
+    if (tstl.isIfStatement(stmt)) {
+      return mapIfStatement(stmt);
+    }
+    if (tstl.isWhileStatement(stmt)) {
+      return tstl.createWhileStatement(
+        tstl.createBlock(recurseStmts(stmt.body.statements)),
+        recurse(stmt.condition),
+      );
+    }
+    if (tstl.isRepeatStatement(stmt)) {
+      return tstl.createRepeatStatement(
+        tstl.createBlock(recurseStmts(stmt.body.statements)),
+        recurse(stmt.condition),
+      );
+    }
+    if (tstl.isForStatement(stmt)) {
+      return tstl.createForStatement(
+        tstl.createBlock(recurseStmts(stmt.body.statements)),
+        stmt.controlVariable,
+        recurse(stmt.controlVariableInitializer),
+        recurse(stmt.limitExpression),
+        stmt.stepExpression ? recurse(stmt.stepExpression) : undefined,
+      );
+    }
+    if (tstl.isForInStatement(stmt)) {
+      return tstl.createForInStatement(
+        tstl.createBlock(recurseStmts(stmt.body.statements)),
+        stmt.names,
+        stmt.expressions.map(recurse),
+      );
+    }
+    if (tstl.isReturnStatement(stmt)) {
+      return tstl.createReturnStatement(stmt.expressions.map(recurse));
+    }
+    if (tstl.isExpressionStatement(stmt)) {
+      return tstl.createExpressionStatement(recurse(stmt.expression));
+    }
+    return tstl.cloneNode(stmt);
   });
 }
 
@@ -213,11 +185,147 @@ export function substituteParamsInStatements(
   paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>,
 ): tstl.Statement[] {
   return mapLuaStatements(statements, (n) => {
-    if (n.kind !== tstl.SyntaxKind.Identifier) return undefined;
-    const id = n as tstl.Identifier;
-    const mapped = id.symbolId !== undefined ? paramMap.get(id.symbolId) : undefined;
+    if (!tstl.isIdentifier(n)) return undefined;
+    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
     return mapped ? deepCloneExpression(mapped) : undefined;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Position walk infrastructure
+//
+// These walk the Lua AST without rebuilding it (unlike mapLuaExpression /
+// mapLuaStatements) so callers can mutate positions in place.  FunctionExpression
+// bodies ARE visited — synthetic IIFEs used by the eager-argument path need
+// their positions stamped just like any other inlined node.
+// ---------------------------------------------------------------------------
+
+function walkExpr(node: tstl.Expression, visit: (n: tstl.Node) => void): void {
+  visit(node);
+  if (tstl.isBinaryExpression(node)) {
+    walkExpr(node.left, visit);
+    walkExpr(node.right, visit);
+  } else if (tstl.isUnaryExpression(node)) {
+    walkExpr(node.operand, visit);
+  } else if (tstl.isCallExpression(node)) {
+    walkExpr(node.expression, visit);
+    for (const param of node.params) walkExpr(param, visit);
+  } else if (tstl.isMethodCallExpression(node)) {
+    walkExpr(node.prefixExpression, visit);
+    for (const param of node.params) walkExpr(param, visit);
+  } else if (tstl.isTableIndexExpression(node)) {
+    walkExpr(node.table, visit);
+    walkExpr(node.index, visit);
+  } else if (tstl.isParenthesizedExpression(node)) {
+    walkExpr(node.expression, visit);
+  } else if (tstl.isTableExpression(node)) {
+    for (const field of node.fields) {
+      visit(field);
+      if (field.key) walkExpr(field.key, visit);
+      walkExpr(field.value, visit);
+    }
+  } else if (tstl.isConditionalExpression(node)) {
+    walkExpr(node.condition, visit);
+    walkExpr(node.whenTrue, visit);
+    walkExpr(node.whenFalse, visit);
+  } else if (tstl.isFunctionExpression(node)) {
+    visit(node.body);
+    walkStmtList(node.body.statements, visit);
+  }
+}
+
+function walkStmt(stmt: tstl.Statement, visit: (n: tstl.Node) => void): void {
+  visit(stmt);
+  if (tstl.isDoStatement(stmt)) {
+    walkStmtList(stmt.statements, visit);
+  } else if (tstl.isVariableDeclarationStatement(stmt)) {
+    for (const id of stmt.left) walkExpr(id, visit);
+    if (stmt.right) for (const right of stmt.right) walkExpr(right, visit);
+  } else if (tstl.isAssignmentStatement(stmt)) {
+    for (const left of stmt.left) walkExpr(left, visit);
+    for (const right of stmt.right) walkExpr(right, visit);
+  } else if (tstl.isIfStatement(stmt)) {
+    walkExpr(stmt.condition, visit);
+    visit(stmt.ifBlock);
+    walkStmtList(stmt.ifBlock.statements, visit);
+    if (stmt.elseBlock) {
+      if (tstl.isIfStatement(stmt.elseBlock)) {
+        walkStmt(stmt.elseBlock, visit);
+      } else {
+        visit(stmt.elseBlock);
+        walkStmtList(stmt.elseBlock.statements, visit);
+      }
+    }
+  } else if (tstl.isWhileStatement(stmt)) {
+    walkExpr(stmt.condition, visit);
+    visit(stmt.body);
+    walkStmtList(stmt.body.statements, visit);
+  } else if (tstl.isRepeatStatement(stmt)) {
+    walkExpr(stmt.condition, visit);
+    visit(stmt.body);
+    walkStmtList(stmt.body.statements, visit);
+  } else if (tstl.isForStatement(stmt)) {
+    walkExpr(stmt.controlVariable, visit);
+    walkExpr(stmt.controlVariableInitializer, visit);
+    walkExpr(stmt.limitExpression, visit);
+    if (stmt.stepExpression) walkExpr(stmt.stepExpression, visit);
+    visit(stmt.body);
+    walkStmtList(stmt.body.statements, visit);
+  } else if (tstl.isForInStatement(stmt)) {
+    for (const id of stmt.names) walkExpr(id, visit);
+    for (const expression of stmt.expressions) walkExpr(expression, visit);
+    visit(stmt.body);
+    walkStmtList(stmt.body.statements, visit);
+  } else if (tstl.isReturnStatement(stmt)) {
+    for (const expression of stmt.expressions) walkExpr(expression, visit);
+  } else if (tstl.isExpressionStatement(stmt)) {
+    walkExpr(stmt.expression, visit);
+  }
+}
+
+function walkStmtList(stmts: readonly tstl.Statement[], visit: (n: tstl.Node) => void): void {
+  for (const s of stmts) walkStmt(s, visit);
+}
+
+const clearPos = (n: tstl.Node): void => {
+  n.line = undefined;
+  n.column = undefined;
+};
+
+/**
+ * Clear all source positions in a statement list (mutates in place).
+ * Called before parameter substitution so function-body positions are erased
+ * before the post-stamp pass attributes every unpositioned node to the call site.
+ */
+export function clearNodePositions(stmts: readonly tstl.Statement[]): void {
+  walkStmtList(stmts, clearPos);
+}
+
+/**
+ * Clear all source positions in an expression tree (mutates in place).
+ * Used for single-expression bodies (expression-body inlines, return expressions).
+ */
+export function clearExpressionPositions(expr: tstl.Expression): void {
+  walkExpr(expr, clearPos);
+}
+
+/**
+ * Walk all nodes in a statement list, calling `visit` on each node (mutating walk).
+ * Exported for position-stamping passes in builders.
+ */
+export function walkLuaNodes(
+  stmts: readonly tstl.Statement[],
+  visit: (n: tstl.Node) => void,
+): void {
+  walkStmtList(stmts, visit);
+}
+
+/**
+ * Walk all nodes in an expression tree, calling `visit` on each node (mutating walk).
+ * Exported for position-stamping passes in builders.
+ */
+export function walkLuaExpression(node: tstl.Expression, visit: (n: tstl.Node) => void): void {
+  walkExpr(node, visit);
 }
 
 export function needsParentheses(node: tstl.Expression): boolean {
