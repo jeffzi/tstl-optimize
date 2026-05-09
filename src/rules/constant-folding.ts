@@ -5,6 +5,7 @@ import { isLuaExprPure } from "../ast/lua-ast";
 import { createLiteral, getLiteralValue } from "../ast/lua-literal";
 import { Walk, walkStatements } from "../ast/lua-walker";
 import type { ConstantValue, RuleFactory } from "../config";
+import { getTransformedFile } from "./source-file";
 
 const UTF8_ENCODER = new TextEncoder();
 
@@ -210,9 +211,7 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => {
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context): tstl.File => {
       const nodes = context.superTransformNode(node);
-      const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-
-      if (!file || !tstl.isFile(file) || !file.statements) return file;
+      const file = getTransformedFile(nodes);
 
       // Fold constants via repeated bottom-up passes until stable (max 10 to bound
       // pathological cases — in practice 1–2 passes suffice for real code).

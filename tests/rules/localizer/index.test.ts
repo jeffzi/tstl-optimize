@@ -4,11 +4,15 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../../src/rules/localizer";
-import { compile, normalizeLua } from "../../helpers";
+import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../../helpers";
 
 const MODULE_SCOPE = { pluginOptions: { rules: { localizer: { scope: "module" as const } } } };
 const FUNC_SCOPE = { pluginOptions: { rules: { localizer: { scope: "function" as const } } } };
 const ALL_SCOPE = { pluginOptions: { rules: { localizer: { scope: "all" as const } } } };
+
+function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
+  return checker as unknown as ts.TypeChecker;
+}
 
 describe("localizer", () => {
   describe("when positive cases are hoisted", () => {
@@ -1649,7 +1653,7 @@ describe("localizer", () => {
   describe("public visitor coverage", () => {
     it("returns no visitors when the rule is disabled", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        {} as ts.TypeChecker,
+        asTypeChecker({}),
         { rules: { localizer: false } },
       ]);
 
@@ -1658,7 +1662,7 @@ describe("localizer", () => {
 
     it("falls back to superTransformStatements when the source-file transform is not a Lua file", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        {} as ts.TypeChecker,
+        asTypeChecker({}),
         { rules: { localizer: true } },
       ]);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile) as (
@@ -1673,14 +1677,12 @@ describe("localizer", () => {
       );
       const fallbackStatement = tstl.createExpressionStatement(tstl.createIdentifier("fallback"));
 
-      const result = Reflect.apply(visitor, undefined, [
-        sourceFile,
-        {
-          superTransformNode: () => fallbackStatement,
-          superTransformStatements: () => [fallbackStatement],
-          usedLuaLibFeatures: new Set(),
-        } as unknown as tstl.TransformationContext,
-      ]);
+      const mockContext = {
+        superTransformNode: () => fallbackStatement,
+        superTransformStatements: () => [fallbackStatement],
+        usedLuaLibFeatures: new Set(),
+      } as unknown as tstl.TransformationContext;
+      const result = Reflect.apply(visitor, undefined, [sourceFile, mockContext]);
 
       expect(tstl.isFile(result)).toBe(true);
       expect(result.statements).toHaveLength(1);
@@ -2636,10 +2638,6 @@ describe("localizer coverage", () => {
 });
 
 describe("localizer raw Lua visitor coverage", () => {
-  function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
-    return checker as unknown as ts.TypeChecker;
-  }
-
   function createLuaFile(statements: tstl.Statement[]): tstl.File {
     return tstl.createFile(statements, new Set<tstl.LuaLibFeature>(), "");
   }
@@ -2657,17 +2655,15 @@ describe("localizer raw Lua visitor coverage", () => {
       context: tstl.TransformationContext,
     ) => tstl.File;
 
-    return Reflect.apply(visitor, undefined, [
-      {} as ts.SourceFile,
-      {
-        nextSymbolId: (() => {
-          let current = 4000;
-          return () => current++;
-        })(),
-        superTransformNode: () => file,
-        usedLuaLibFeatures: new Set(),
-      } as unknown as tstl.TransformationContext,
-    ]);
+    const mockContext = {
+      nextSymbolId: (() => {
+        let current = 4000;
+        return () => current++;
+      })(),
+      superTransformNode: () => file,
+      usedLuaLibFeatures: new Set(),
+    } as unknown as tstl.TransformationContext;
+    return Reflect.apply(visitor, undefined, [EMPTY_SOURCE_FILE, mockContext]);
   }
 
   function makeRepeatedArrayWrite(loopExtras: tstl.Statement[]): tstl.ForStatement {
@@ -2875,43 +2871,48 @@ describe("localizer raw Lua visitor coverage", () => {
     const loop = transformed.statements[0] as tstl.ForStatement;
     const [decl, firstWrite, secondWrite, writeback] = loop.body.statements;
 
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isVariableDeclarationStatement(decl!)).toBe(true);
-    const tempIdent = (decl as tstl.VariableDeclarationStatement).left[0] as tstl.Identifier;
+    if (!decl || !tstl.isVariableDeclarationStatement(decl)) {
+      throw new Error("expected hoisted variable declaration");
+    }
+    const tempIdent = decl.left[0];
+    if (!tempIdent || !tstl.isIdentifier(tempIdent)) {
+      throw new Error("expected hoisted identifier");
+    }
     expect(tempIdent.text).toContain("____arr");
 
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isAssignmentStatement(firstWrite!)).toBe(true);
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isIdentifier((firstWrite as tstl.AssignmentStatement).left[0]!)).toBe(true);
-    expect(((firstWrite as tstl.AssignmentStatement).left[0] as tstl.Identifier).text).toBe(
-      tempIdent.text,
-    );
-    expect(
-      tstl.isIdentifier(
-        ((firstWrite as tstl.AssignmentStatement).right[0] as tstl.BinaryExpression).left,
-      ),
-    ).toBe(true);
+    if (!firstWrite || !tstl.isAssignmentStatement(firstWrite)) {
+      throw new Error("expected first array write assignment");
+    }
+    const firstLeft = firstWrite.left[0];
+    if (!firstLeft || !tstl.isIdentifier(firstLeft)) {
+      throw new Error("expected first array write to use hoisted identifier");
+    }
+    expect(firstLeft.text).toBe(tempIdent.text);
+    const firstRight = firstWrite.right[0];
+    if (!firstRight || !tstl.isBinaryExpression(firstRight)) {
+      throw new Error("expected first array write RHS to be binary expression");
+    }
+    expect(tstl.isIdentifier(firstRight.left)).toBe(true);
 
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isAssignmentStatement(secondWrite!)).toBe(true);
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isIdentifier((secondWrite as tstl.AssignmentStatement).left[0]!)).toBe(true);
-    expect(((secondWrite as tstl.AssignmentStatement).left[0] as tstl.Identifier).text).toBe(
-      tempIdent.text,
-    );
+    if (!secondWrite || !tstl.isAssignmentStatement(secondWrite)) {
+      throw new Error("expected second array write assignment");
+    }
+    const secondLeft = secondWrite.left[0];
+    if (!secondLeft || !tstl.isIdentifier(secondLeft)) {
+      throw new Error("expected second array write to use hoisted identifier");
+    }
+    expect(secondLeft.text).toBe(tempIdent.text);
 
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isAssignmentStatement(writeback!)).toBe(true);
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isTableIndexExpression((writeback as tstl.AssignmentStatement).left[0]!)).toBe(
-      true,
-    );
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isIdentifier((writeback as tstl.AssignmentStatement).right[0]!)).toBe(true);
-    expect(((writeback as tstl.AssignmentStatement).right[0] as tstl.Identifier).text).toBe(
-      tempIdent.text,
-    );
+    if (!writeback || !tstl.isAssignmentStatement(writeback)) {
+      throw new Error("expected writeback assignment");
+    }
+    const writebackLeft = writeback.left[0];
+    expect(tstl.isTableIndexExpression(writebackLeft)).toBe(true);
+    const writebackRight = writeback.right[0];
+    if (!writebackRight || !tstl.isIdentifier(writebackRight)) {
+      throw new Error("expected writeback to store hoisted identifier");
+    }
+    expect(writebackRight.text).toBe(tempIdent.text);
   });
 
   it("prepends hoist declarations before raw elseif conditions", () => {
@@ -3033,11 +3034,12 @@ describe("localizer raw Lua visitor coverage", () => {
       throw new Error("expected nested assignment");
     }
 
-    // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-    expect(tstl.isTableIndexExpression(nestedAssign.left[0]!)).toBe(true);
-    expect(tstl.isTableIndexExpression((nestedAssign.right[0] as tstl.BinaryExpression).left)).toBe(
-      true,
-    );
+    expect(tstl.isTableIndexExpression(nestedAssign.left[0])).toBe(true);
+    const nestedRight = nestedAssign.right[0];
+    if (!nestedRight || !tstl.isBinaryExpression(nestedRight)) {
+      throw new Error("expected nested assignment RHS to be binary expression");
+    }
+    expect(tstl.isTableIndexExpression(nestedRight.left)).toBe(true);
   });
 
   describe("localizer — interaction with other rules", () => {

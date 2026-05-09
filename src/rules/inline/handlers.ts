@@ -18,8 +18,23 @@ import {
   isModuleScopeDeclaration,
   isPureAtVoidSite,
 } from "./eligibility";
-import type { ReturnValueInlineTarget } from "./target";
+import type { InlineTarget, ReturnValueInlineTarget } from "./target";
 import { getInlineTarget, hasInlineTag } from "./target";
+
+function getCallInlineTarget(
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): InlineTarget | undefined {
+  return getInlineTarget(callNode, checker)?.target;
+}
+
+function getReturnValueInlineTarget(
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ReturnValueInlineTarget | undefined {
+  const target = getCallInlineTarget(callNode, checker);
+  return target?.kind === "statementsWithReturn" ? target : undefined;
+}
 
 function validateAndClassifyReturnValueInline(
   callNode: ts.CallExpression,
@@ -56,9 +71,8 @@ export function handleCallExpression(
   context: tstl.TransformationContext,
   strict: boolean,
 ): tstl.Expression | undefined {
-  const result = getInlineTarget(node, checker);
-  if (!result) return undefined;
-  const { target } = result;
+  const target = getCallInlineTarget(node, checker);
+  if (target === undefined) return undefined;
 
   if (target.kind === "statements" || target.kind === "statementsWithReturn") {
     // Suppress when the statement-level handler owns the diagnostic for this call site:
@@ -101,12 +115,8 @@ export function handleVariableStatement(
   if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
 
   const callNode = decl.initializer;
-  const result = getInlineTarget(callNode, checker);
-  if (!result) return undefined;
-
-  const { target } = result;
-
-  if (target.kind !== "statementsWithReturn") return undefined;
+  const target = getReturnValueInlineTarget(callNode, checker);
+  if (target === undefined) return undefined;
 
   const substitutions = validateAndClassifyReturnValueInline(
     callNode,
@@ -155,11 +165,8 @@ export function handleReturnStatement(
   if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
 
   const callNode = node.expression;
-  const result = getInlineTarget(callNode, checker);
-  if (!result) return undefined;
-
-  const { target } = result;
-  if (target.kind !== "statementsWithReturn") return undefined;
+  const target = getReturnValueInlineTarget(callNode, checker);
+  if (target === undefined) return undefined;
 
   const substitutions = validateAndClassifyReturnValueInline(
     callNode,
@@ -182,10 +189,8 @@ export function handleExpressionStatement(
   if (!ts.isCallExpression(node.expression)) return undefined;
   const callNode = node.expression;
 
-  const result = getInlineTarget(callNode, checker);
-  if (!result) return undefined;
-
-  const { target } = result;
+  const target = getCallInlineTarget(callNode, checker);
+  if (target === undefined) return undefined;
 
   if (target.kind === "expression") {
     const inlined = inlineExpressionBody(target, callNode, checker, context, strict);
@@ -234,6 +239,46 @@ export function handleExpressionStatement(
   const { substitutions } = classification;
 
   return buildDoEndBlock(target, callNode, checker, context, substitutions);
+}
+
+const INLINE_TAG_RE = /^\s*@inline\s*$/;
+
+/**
+ * Removes `@inline` entries from `leadingComments`, plus any orphaned LDoc separator (`"-"`)
+ * left behind when the `@inline` tag was the only content. Returns `undefined` when nothing
+ * remains so the printer emits no comment at all.
+ *
+ * TSTL's `Array<string | string[]>` comment type permits two shapes:
+ * - A top-level `string` entry — the printer emits it as `--{entry}`.
+ * - A top-level `string[]` entry — the printer emits it as a `--[[ … ]]` block comment.
+ *
+ * Both shapes are filtered:
+ * - Top-level `string` matching `INLINE_TAG_RE` → entry dropped.
+ * - Top-level `string[]` → inner strings matching `INLINE_TAG_RE` are removed; the nested
+ *   array is dropped entirely if it becomes empty or contains only blank/separator strings.
+ */
+export function filterInlineComments(
+  comments: Array<string | string[]> | undefined,
+): Array<string | string[]> | undefined {
+  if (comments === undefined) return undefined;
+
+  const withoutTag = comments
+    .map((c): string | string[] | undefined => {
+      if (typeof c === "string") {
+        return INLINE_TAG_RE.test(c) ? undefined : c;
+      }
+      // string[] — filter inner strings, drop the array if nothing meaningful survives
+      const inner = c.filter((s) => !INLINE_TAG_RE.test(s) && s !== "");
+      return inner.length === 0 ? undefined : inner;
+    })
+    .filter((c): c is string | string[] => c !== undefined);
+
+  // Drop orphaned LDoc separators ("-") that were only meaningful as the leading
+  // line of a JSDoc block whose sole content was the @inline tag.
+  if (withoutTag.every((c) => (typeof c === "string" ? c === "-" : c.length === 0))) {
+    return undefined;
+  }
+  return withoutTag.length === 0 ? undefined : withoutTag;
 }
 
 export function handleFunctionDeclaration(

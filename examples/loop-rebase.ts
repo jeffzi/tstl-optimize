@@ -13,7 +13,8 @@ for (const i of $range(0, count - 1)) {
 
 // --- Limitations ---
 
-// Not rebased: i is used directly (not as i + 1)
+// Not rebased: i is used as a raw value (not only as an array index),
+// so rebasing to 1-based would change the program's semantics
 const indices: number[] = [];
 for (const i of $range(0, count - 1)) {
   indices[i] = i;

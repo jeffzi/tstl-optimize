@@ -43,7 +43,27 @@ describe("replaceArrayElements", () => {
 
       // Walker recursed into the body and replaced arr[i] with the hoisted identifier
       expect(tstl.isIdentifier(innerStmt.expression)).toBe(true);
-      expect(tstl.isIdentifier(innerStmt.expression) && innerStmt.expression.text).toBe("____arr");
+      if (!tstl.isIdentifier(innerStmt.expression)) {
+        throw new Error("Expected identifier");
+      }
+      expect(innerStmt.expression.text).toBe("____arr");
+    });
+  });
+
+  describe("stmt hook — ForInStatement with matching name", () => {
+    it("does not replace arr[i] inside body when ForInStatement names include the loop variable", () => {
+      const innerStmt = tstl.createExpressionStatement(arrIndex("arr", "i"));
+      const forInStmt = tstl.createForInStatement(
+        tstl.createBlock([innerStmt]),
+        [id("i")],
+        [tstl.createNilLiteral()],
+      );
+
+      const hoisted = new Map([["arr", id("____arr")]]);
+      replaceArrayElements([forInStmt], hoisted, new Set(["i"]));
+
+      // Walker skips the body — arr[i] must not be replaced
+      expect(tstl.isTableIndexExpression(innerStmt.expression)).toBe(true);
     });
   });
 

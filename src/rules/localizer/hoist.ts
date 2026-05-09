@@ -1,5 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { withPositionFrom } from "../../ast/deep-clone";
 import { getElseBranchStatements, getMutableElseBranchStatements } from "../../ast/lua-ast";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import {
@@ -50,7 +51,7 @@ export function replaceChains(
   hoisted: Map<string, tstl.Identifier>,
   shallow: boolean,
 ): void {
-  const shadowStack: Array<Set<string>> = []; // Stack of shadowed roots as we enter/exit nested funcs
+  const shadowStack: Array<Set<string>> = [];
 
   walkStatements(statements, {
     shallow,
@@ -65,7 +66,7 @@ export function replaceChains(
           }
           const ident = hoisted.get(chain);
           if (ident) {
-            return Walk.replace(tstl.cloneIdentifier(ident));
+            return Walk.replace(tstl.cloneNode(ident));
           }
         }
       }
@@ -91,7 +92,7 @@ export function replaceChains(
  * and prepend declarations. Returns the set of newly hoisted chain strings.
  */
 export function hoistScope(
-  statements: readonly tstl.Statement[],
+  statements: tstl.Statement[],
   threshold: number,
   shallow: boolean,
   alreadyHoisted: ReadonlySet<string>,
@@ -102,7 +103,7 @@ export function hoistScope(
   extraBoundNames?: ReadonlySet<string>,
   elseBranchOwner?: tstl.IfStatement,
 ): Set<string> {
-  const { chainCounts, scopeDefs } = collectScopeInfo(statements, shallow);
+  const { chainCounts, scopeDefs, firstChainUse } = collectScopeInfo(statements, shallow);
   const unavailableNames = mergeNameSets(scopeDefs, reservedNames);
   const toHoist = new Map<string, tstl.Identifier>();
   const inBodyDecls: tstl.VariableDeclarationStatement[] = [];
@@ -135,7 +136,12 @@ export function hoistScope(
     toHoist.set(chain, ident);
     scopeDefs.add(hoistName);
     unavailableNames.add(hoistName);
-    const decl = tstl.createVariableDeclarationStatement(ident, buildChainExpression(chain));
+    const positionSource = firstChainUse.get(chain);
+    const decl = tstl.createVariableDeclarationStatement(
+      ident,
+      buildChainExpression(chain, positionSource),
+    );
+    if (positionSource) withPositionFrom(decl, positionSource);
     if (outDecls && !rootIsExternal) {
       liftableDecls.push(decl);
     } else {
@@ -146,7 +152,7 @@ export function hoistScope(
   if (toHoist.size > 0) {
     const targetStatements: tstl.Statement[] = elseBranchOwner
       ? getMutableElseBranchStatements(elseBranchOwner)
-      : (statements as tstl.Statement[]);
+      : statements;
     replaceChains(targetStatements, toHoist, shallow);
     if (inBodyDecls.length > 0) targetStatements.unshift(...inBodyDecls);
     if (outDecls) outDecls.push(...liftableDecls);

@@ -233,3 +233,20 @@ function cloneIfStatement(ifStmt: tstl.IfStatement): tstl.IfStatement {
 export function deepCloneStatements(stmts: tstl.Statement[]): tstl.Statement[] {
   return stmts.map(deepCloneStatement);
 }
+
+/** Copy `line` and `column` from source node to target node.
+ *
+ *  - If `source.line` is defined, copies it to `target.line`
+ *  - If `source.column` is defined, copies it to `target.column`
+ *  - Does NOT copy `flags`, `leadingComments`, or `trailingComments`
+ *  - Returns the mutated target (for chaining)
+ */
+export function withPositionFrom<T extends tstl.Node>(target: T, source: tstl.Node): T {
+  if (source.line !== undefined) {
+    target.line = source.line;
+  }
+  if (source.column !== undefined) {
+    target.column = source.column;
+  }
+  return target;
+}

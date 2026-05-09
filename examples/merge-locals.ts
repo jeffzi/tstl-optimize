@@ -33,14 +33,16 @@ function closureCapture(): () => number {
   return f;
 }
 
-// Limitation: impure initializer — not eligible for merge
+// Not merged: compute() has side effects — in local a, b = 1, compute(),
+// if the call throws, a would never be bound (Lua evaluates all RHS values
+// before any assignments in a multi-local)
 function impure(): number {
   const a = 1;
   const b = compute(); // impure — not merged with a
   return a + b;
 }
 
-// Limitation: module-scope locals are not merged
+// Not merged: module-scope declarations are not eligible (only function-scope)
 const x = 1;
 const y = 2;
 

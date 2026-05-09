@@ -4,6 +4,14 @@
  * Compiles each TypeScript file in the 'examples' directory using the tstl-optimize plugin.
  * Generates corresponding Lua files to demonstrate and verify optimization results.
  * Use the --check flag in CI to ensure examples stay in sync with the plugin logic.
+ *
+ * Known intentional warnings (not regressions):
+ *   - conditional-compilation.ts:94 — condition references compile-time constants but could not
+ *     be fully resolved; the fixture deliberately tests a mixed-constant branch.
+ *   - inline.ts:28 — @inline ignored: argument with side effects is used multiple times;
+ *     the fixture exercises the side-effects guard in the inline eligibility check.
+ *   - inline.ts:123 — @inline ignored: destructuring parameters are not supported;
+ *     the fixture documents the destructuring limitation.
  */
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,17 +36,20 @@ function getDiagnosticMessage(d: ts.Diagnostic): string {
 
 function compile(
   Plugin: PluginConstructor,
+  fileName: string,
   source: string,
   pluginOptions?: Record<string, unknown>,
-): { lua: string; warnings: ts.Diagnostic[] } {
+): { lua: string; luaSourceMap: string; warnings: ts.Diagnostic[] } {
+  const luaName = fileName.replace(/\.ts$/, ".lua");
   const result = tstl.transpileVirtualProject(
     {
       "globals.d.ts":
         "/** @noSelfInFile */\ndeclare function print(...args: unknown[]): void;\ndeclare const console: { log(...args: unknown[]): void };",
-      "main.ts": source,
+      [fileName]: source,
     },
     {
       noHeader: true,
+      sourceMap: true,
       luaPlugins: [{ plugin: new Plugin(pluginOptions) }],
       noImplicitSelf: true,
       luaTarget: tstl.LuaTarget.Lua51,
@@ -55,19 +66,31 @@ function compile(
     throw new Error(errors.map(getDiagnosticMessage).join("\n"));
   }
 
-  const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
+  const file = result.transpiledFiles.find((f) => f.outPath === luaName);
   if (!file?.lua) {
-    throw new Error("TSTL compilation failed: no main.lua generated");
+    throw new Error(`TSTL compilation failed: no ${luaName} generated`);
+  }
+  if (!file.luaSourceMap) {
+    throw new Error(`TSTL compilation failed: no sourcemap generated for ${luaName}`);
   }
 
   return {
     lua: file.lua,
+    luaSourceMap: file.luaSourceMap,
     warnings: result.diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Warning),
   };
 }
 
 function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
+}
+
+function readOptionalUtf8(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 // Patterns that indicate pipeline bugs committed into .lua output files.
@@ -122,14 +145,17 @@ async function main(): Promise<void> {
 
     const optsPath = resolve(examplesDir, name.replace(/\.ts$/, ".opts.json"));
     let pluginOptions: Record<string, unknown> | undefined;
-    try {
-      const raw: unknown = JSON.parse(readFileSync(optsPath, "utf8"));
-      if (isRecord(raw)) pluginOptions = raw;
-    } catch {
-      // sidecar opts file is optional
+    const optsJson = readOptionalUtf8(optsPath);
+    if (optsJson !== undefined) {
+      try {
+        const raw: unknown = JSON.parse(optsJson);
+        if (isRecord(raw)) pluginOptions = raw;
+      } catch {
+        // sidecar opts file is optional
+      }
     }
 
-    const { lua, warnings } = compile(OptimizePlugin, source, pluginOptions);
+    const { lua, luaSourceMap, warnings } = compile(OptimizePlugin, name, source, pluginOptions);
 
     for (const w of warnings) {
       const line =
@@ -141,13 +167,10 @@ async function main(): Promise<void> {
     }
 
     const luaPath = resolve(examplesDir, luaName);
+    const mapName = `${luaName}.map`;
+    const mapPath = resolve(examplesDir, mapName);
     if (check) {
-      let existing = "";
-      try {
-        existing = readFileSync(luaPath, "utf8");
-      } catch {
-        // no existing file
-      }
+      const existing = readOptionalUtf8(luaPath) ?? "";
       if (existing !== lua) {
         console.error(`Out of date: ${luaName}`);
         stale = true;
@@ -157,7 +180,8 @@ async function main(): Promise<void> {
       }
     } else {
       writeFileSync(luaPath, lua);
-      console.log(`${name} -> ${luaName}`);
+      writeFileSync(mapPath, luaSourceMap);
+      console.log(`${name} -> ${luaName}, ${mapName}`);
     }
   }
 

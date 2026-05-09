@@ -14,11 +14,13 @@ assert(hp > 0);
 // Namespace calls — stripped (debug.* by default)
 debug.traceback();
 
-// Limitation: return value used in variable declaration — preserved
+// Not stripped: return value is assigned to a variable — removing the call
+// would leave traceback uninitialized.
 // Note: debug.traceback is called twice below, so localizer hoists it as a local in the output
 const traceback = debug.traceback();
 
-// Limitation: return value feeds a return statement — preserved
+// Not stripped: return value feeds a return statement — the caller depends
+// on the result
 function getInfo(): string {
   return debug.traceback();
 }

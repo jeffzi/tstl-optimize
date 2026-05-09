@@ -2,7 +2,8 @@ import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 
 // ScopeType.Function = 2 (not re-exported from the public TSTL API)
-export const FUNCTION_SCOPE = 2 as Parameters<tstl.TransformationContext["pushScope"]>[0];
+type PushScopeKind = Parameters<tstl.TransformationContext["pushScope"]>[0];
+export const FUNCTION_SCOPE: PushScopeKind = 2;
 
 export interface ExpressionInlineTarget {
   kind: "expression";
@@ -77,8 +78,9 @@ function classifyBody(
     return { kind: "expression", expr: func.body };
   }
 
-  const body = ts.isArrowFunction(func) ? (func.body as ts.Block | undefined) : func.body;
-  if (!body || body.statements.length === 0) return undefined;
+  const body = func.body;
+  if (!body || !ts.isBlock(body)) return undefined;
+  if (body.statements.length === 0) return undefined;
 
   const { statements } = body;
   if (statements.length === 1) {

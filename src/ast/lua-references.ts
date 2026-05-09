@@ -1,6 +1,12 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 
+/** A single identifier access visited in evaluation order.
+ *
+ * - `identifier`: The Lua identifier being accessed.
+ * - `kind`: Whether this is a read (RHS) or write (LHS assignment/declaration).
+ * - `inFunctionBody`: True if this access is inside a nested FunctionExpression body.
+ */
 export type AccessEntry = {
   identifier: tstl.Identifier;
   kind: "read" | "write";
@@ -119,13 +125,14 @@ export function forEachAccess(
 
   const walkStatement = (stmt: tstl.Statement, inFunctionBody: boolean): boolean => {
     if (tstl.isAssignmentStatement(stmt)) {
-      // Special handling for AssignmentStatement
+      // Lua assignment semantics: all RHS expressions are evaluated before any writes
+      // take effect. Table-index LHS targets require reads of both .table and .index,
+      // so they are emitted immediately. Plain Identifier targets are deferred until
+      // after all RHS reads to reflect the correct evaluation order.
       const deferredWrites: tstl.Identifier[] = [];
 
-      // Step 1: Walk LHS, deferring plain Identifier writes
       for (const lhs of stmt.left) {
         if (tstl.isTableIndexExpression(lhs)) {
-          // Emit table and index reads immediately
           if (walkExpression(lhs.table, inFunctionBody)) {
             return true;
           }
@@ -133,19 +140,16 @@ export function forEachAccess(
             return true;
           }
         } else if (tstl.isIdentifier(lhs)) {
-          // Defer the write
           deferredWrites.push(lhs);
         }
       }
 
-      // Step 2: Walk all RHS expressions
       for (const rhs of stmt.right) {
         if (walkExpression(rhs, inFunctionBody)) {
           return true;
         }
       }
 
-      // Step 3: Emit deferred writes in source order
       for (const write of deferredWrites) {
         if (visit({ identifier: write, kind: "write", inFunctionBody })) {
           return true;
@@ -190,15 +194,13 @@ export function forEachAccess(
     }
 
     if (tstl.isIfStatement(stmt)) {
-      // Condition
       if (walkExpression(stmt.condition, inFunctionBody)) {
         return true;
       }
-      // If block
       if (walkStatements(stmt.ifBlock.statements, inFunctionBody)) {
         return true;
       }
-      // Else blocks (can be Block or another IfStatement)
+      // elseBlock can be a nested IfStatement (elseif chain) or a plain Block.
       if (stmt.elseBlock) {
         if (tstl.isIfStatement(stmt.elseBlock)) {
           return walkStatement(stmt.elseBlock, inFunctionBody);
@@ -237,7 +239,6 @@ export function forEachAccess(
     }
 
     if (tstl.isForInStatement(stmt)) {
-      // RHS expressions
       for (const expr of stmt.expressions) {
         if (walkExpression(expr, inFunctionBody)) {
           return true;
@@ -271,7 +272,6 @@ export function withoutShadowedNames<T>(
   for (const node of nodes) {
     const name = getName(node);
     if (name !== undefined && names.has(name)) {
-      // Found a shadowing name — create a new set if we haven't already
       if (result === undefined) {
         result = new Set(names);
       }

@@ -210,20 +210,6 @@ class OptimizePlugin implements tstl.Plugin {
 
     this.visitors = mergedVisitors;
   }
-
-  // Strip JSDoc artifact — TSTL converts all JSDoc tags to Lua comments,
-  // but @inline is a compiler directive, not documentation
-  beforeEmit(
-    _program: ts.Program,
-    _options: tstl.CompilerOptions,
-    _emitHost: tstl.EmitHost,
-    result: tstl.EmitFile[],
-  ): void {
-    if (!isRuleEnabled(this.config.rules, "inline")) return;
-    for (const file of result) {
-      file.code = file.code.replace(/(?:---\s*\n)?--\s*@inline\s*\n/g, "");
-    }
-  }
 }
 
 // TSTL calls `typeof factory === "function" ? factory(pluginOption) : factory`

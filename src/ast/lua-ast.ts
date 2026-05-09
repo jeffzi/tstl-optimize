@@ -54,7 +54,7 @@ export function isLuaExprPure(expr: tstl.Expression): boolean {
  */
 export function getElseBranchStatements(
   elseBlock: tstl.Block | tstl.IfStatement,
-): readonly tstl.Statement[] {
+): tstl.Statement[] {
   return tstl.isIfStatement(elseBlock) ? [elseBlock] : elseBlock.statements;
 }
 

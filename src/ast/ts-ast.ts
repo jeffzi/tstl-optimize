@@ -164,6 +164,8 @@ export function hasSideEffects(
     }
 
     if (queue.length === 0) return false;
-    current = queue.pop() as ts.Expression;
+    // queue.length > 0 is proven by the guard above — pop() is non-undefined here.
+    // biome-ignore lint/style/noNonNullAssertion: length guard above proves pop() is non-undefined
+    current = queue.pop()!;
   }
 }

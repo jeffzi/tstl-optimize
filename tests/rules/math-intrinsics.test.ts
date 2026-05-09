@@ -14,13 +14,8 @@ function expectLuaSnippets(
   lua: string,
   { contains, excludes = [] }: { contains: readonly string[]; excludes?: readonly string[] },
 ): void {
-  for (const snippet of contains) {
-    expect(lua, `expected Lua to contain snippet: ${snippet}`).toContain(snippet);
-  }
-
-  for (const snippet of excludes) {
-    expect(lua, `expected Lua to exclude snippet: ${snippet}`).not.toContain(snippet);
-  }
+  expect(contains.filter((snippet) => !lua.includes(snippet))).toStrictEqual([]);
+  expect(excludes.filter((snippet) => lua.includes(snippet))).toStrictEqual([]);
 }
 
 function parseCallExpression(source: string): ts.CallExpression {

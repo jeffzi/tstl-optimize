@@ -23,12 +23,13 @@ if (y) {
 } else {
 }
 
-// Limitation: condition with side effects — if not removed
+// Not removed: sideEffect() may have side effects — removing the empty if
+// would skip the call, changing observable behavior
 declare function sideEffect(): boolean;
 if (sideEffect()) {
 }
 
-// Limitation: non-empty if-block with non-empty else — nothing to promote
+// Not optimized: both branches have code — nothing to remove or promote
 if (x) {
   doSomething();
 } else {

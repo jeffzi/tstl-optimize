@@ -74,7 +74,7 @@ function isStrippedCall(
 
 export const createVisitors: RuleFactory = (checker, config) => {
   const resolved = resolveDebugStripConfig(config.rules["debug-strip"]);
-  if (resolved === false) return {};
+  if (resolved === false || !resolved.enabled) return {};
 
   const functions: ReadonlySet<string> = new Set(resolved.functions);
   const namespaces: ReadonlySet<string> = new Set(resolved.namespaces);

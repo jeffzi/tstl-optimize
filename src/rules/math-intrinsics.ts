@@ -80,7 +80,11 @@ function getMathMethodCallInfo(
   };
 }
 
-/** Build `arg ^ 0.5` */
+/**
+ * Lua has no `math.sqrt` intrinsic that compiles to a single opcode.
+ * Raising to the 0.5 power is mathematically equivalent and lets the VM
+ * use the `POW` instruction rather than a C-level function call.
+ */
 function buildSqrt(luaArg: tstl.Expression): tstl.Expression {
   return tstl.createBinaryExpression(
     luaArg,
@@ -89,7 +93,13 @@ function buildSqrt(luaArg: tstl.Expression): tstl.Expression {
   );
 }
 
-/** Build `arg - arg % 1` */
+/**
+ * Lua 5.1's `math.floor` returns a float, and `arg - arg % 1` is the
+ * idiomatic integer-truncation trick.  However it breaks for ±infinity
+ * (infinity mod 1 is NaN in IEEE 754), so the generated expression guards
+ * with `(arg == math.huge or arg == -math.huge) and math.floor(arg) or ...`
+ * to fall back to the library call only for those two special values.
+ */
 function buildFloor(luaArg: tstl.Expression): tstl.Expression {
   const positiveInfinity = tstl.createTableIndexExpression(
     tstl.createIdentifier("math"),
@@ -134,7 +144,13 @@ function buildFloor(luaArg: tstl.Expression): tstl.Expression {
   );
 }
 
-/** Build `(arg == 0) and 0 or ((arg < 0) and -arg or arg)` */
+/**
+ * Lua 5.1 has no `math.abs` intrinsic, so we emit the standard
+ * `and`/`or` ternary idiom.  The zero branch `(arg == 0) and 0 or ...`
+ * is required to normalise `-0` → `0`, matching IEEE 754 `Math.abs`
+ * semantics; without it `-0` would pass the `< 0` check as falsy and
+ * the or-arm would return `arg` unchanged.
+ */
 function buildAbs(luaArg: tstl.Expression): tstl.Expression {
   const zeroCheck = tstl.createBinaryExpression(
     luaArg,
@@ -168,7 +184,13 @@ function buildAbs(luaArg: tstl.Expression): tstl.Expression {
   );
 }
 
-/** Build `(a > b) and a or b` for max, `(a < b) and a or b` for min */
+/**
+ * Lua 5.1's `and`/`or` ternary: `(cond) and truthy or falsy`.
+ * This is only safe when both arguments are guaranteed to be numeric
+ * literals — i.e. never falsy in Lua — because Lua treats `0` as truthy
+ * (unlike JS).  For variables, NaN would make the `and`-arm false and
+ * the result would silently return the wrong operand.
+ */
 function buildMinMax(
   luaA: tstl.Expression,
   luaB: tstl.Expression,
@@ -183,6 +205,12 @@ function buildMinMax(
   return tstl.createBinaryExpression(andExpr, tstl.cloneNode(luaB), tstl.SyntaxKind.OrOperator);
 }
 
+/**
+ * The `and`/`or` ternary pattern used by `buildMinMax` breaks when an
+ * argument is NaN: `NaN > b` is false, so the `and`-arm short-circuits
+ * and `or` returns `b` — the wrong answer.  Numeric literals parsed from
+ * source cannot be NaN, so they are the only safe inputs for the rewrite.
+ */
 function isSafeMinMaxRewriteArg(node: ts.Expression): boolean {
   return ts.isNumericLiteral(node);
 }
@@ -198,21 +226,25 @@ function handleCallExpression(
   if (!ts.isPropertyAccessExpression(expr)) return undefined;
 
   if (mathCall.receiverKind === "typed-math") {
-    return tstl.createMethodCallExpression(
+    const result = tstl.createMethodCallExpression(
       context.transformExpression(expr.expression),
       tstl.createIdentifier(expr.name.text),
       node.arguments.map((arg) => context.transformExpression(arg)),
     );
+    tstl.setNodeOriginal(result, node);
+    return result;
   }
 
   if (mathCall.receiverKind === "builtin-alias") {
-    return tstl.createCallExpression(
+    const result = tstl.createCallExpression(
       tstl.createTableIndexExpression(
         context.transformExpression(expr.expression),
         tstl.createStringLiteral(expr.name.text),
       ),
       node.arguments.map((arg) => context.transformExpression(arg)),
     );
+    tstl.setNodeOriginal(result, node);
+    return result;
   }
 
   const method = mathCall.method;
@@ -222,23 +254,31 @@ function handleCallExpression(
   switch (method) {
     case "sqrt": {
       if (args.length !== 1) return undefined;
-      return buildSqrt(context.transformExpression(args[0]));
+      const sqrtResult = buildSqrt(context.transformExpression(args[0]));
+      tstl.setNodeOriginal(sqrtResult, node);
+      return sqrtResult;
     }
     case "floor": {
       if (args.length !== 1) return undefined;
       if (ts.isNumericLiteral(args[0])) {
         const foldedValue = Number(args[0].text);
         if (Number.isFinite(foldedValue)) {
-          return tstl.createNumericLiteral(Math.floor(foldedValue));
+          const lit = tstl.createNumericLiteral(Math.floor(foldedValue));
+          tstl.setNodeOriginal(lit, node);
+          return lit;
         }
       }
       if (hasSideEffects(args[0])) return undefined;
-      return buildFloor(context.transformExpression(args[0]));
+      const floorResult = buildFloor(context.transformExpression(args[0]));
+      tstl.setNodeOriginal(floorResult, node);
+      return floorResult;
     }
     case "abs": {
       if (args.length !== 1) return undefined;
       if (hasSideEffects(args[0])) return undefined;
-      return buildAbs(context.transformExpression(args[0]));
+      const absResult = buildAbs(context.transformExpression(args[0]));
+      tstl.setNodeOriginal(absResult, node);
+      return absResult;
     }
     case "max":
     case "min": {
@@ -249,11 +289,13 @@ function handleCallExpression(
       }
       const op =
         method === "max" ? tstl.SyntaxKind.GreaterThanOperator : tstl.SyntaxKind.LessThanOperator;
-      return buildMinMax(
+      const minMaxResult = buildMinMax(
         context.transformExpression(args[0]),
         context.transformExpression(args[1]),
         op,
       );
+      tstl.setNodeOriginal(minMaxResult, node);
+      return minMaxResult;
     }
     default:
       return undefined;
@@ -277,22 +319,25 @@ export const createVisitors: RuleFactory = (checker, config) => {
 
     [ts.SyntaxKind.BinaryExpression]: (node, context) => {
       if (!ts.isBinaryExpression(node)) return undefined;
-      const binNode = node;
-      // x ** 2 → x * x
+      // Squaring is the common case where duplicating the operand is cheaper
+      // than a `POW` dispatch; only safe when the base is side-effect-free so
+      // it can be evaluated once and cloned in the Lua AST.
       if (
-        binNode.operatorToken.kind !== ts.SyntaxKind.AsteriskAsteriskToken ||
-        !ts.isNumericLiteral(binNode.right) ||
-        binNode.right.text !== "2" ||
-        hasSideEffects(binNode.left, SideEffectOptions.ConsiderIdentityMutating)
+        node.operatorToken.kind !== ts.SyntaxKind.AsteriskAsteriskToken ||
+        !ts.isNumericLiteral(node.right) ||
+        node.right.text !== "2" ||
+        hasSideEffects(node.left, SideEffectOptions.ConsiderIdentityMutating)
       ) {
         return undefined;
       }
-      const luaBase = context.transformExpression(binNode.left);
-      return tstl.createBinaryExpression(
+      const luaBase = context.transformExpression(node.left);
+      const powResult = tstl.createBinaryExpression(
         luaBase,
         deepCloneExpression(luaBase),
         tstl.SyntaxKind.MultiplicationOperator,
       );
+      tstl.setNodeOriginal(powResult, node);
+      return powResult;
     },
   };
   return visitors as tstl.Visitors;

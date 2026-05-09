@@ -6,7 +6,15 @@ import type { LiteralKind } from "./const-literal";
 import { classifyCrossModuleInline } from "./cross-module";
 import { createInlineWarning } from "./diagnostics";
 import { canInline, needsEagerArgumentTemps } from "./eligibility";
-import { needsParentheses, substituteParams, substituteParamsInStatements } from "./lua-substitute";
+import {
+  clearExpressionPositions,
+  clearNodePositions,
+  needsParentheses,
+  substituteParams,
+  substituteParamsInStatements,
+  walkLuaExpression,
+  walkLuaNodes,
+} from "./lua-substitute";
 import { rewriteWithConstSubstitutions } from "./rewrite-body";
 import type {
   ExpressionInlineTarget,
@@ -43,6 +51,26 @@ export function createDiscardTemp(
   // Defensive only: all current callers pass expr; the bare-decl branch is unreachable in tests
   /* v8 ignore next */
   return tstl.createVariableDeclarationStatement([discardIdent], expr ? [expr] : undefined);
+}
+
+/**
+ * Stamp every position-less node in a statement list with the call expression's
+ * source position.  Run this on the final result of each top-level inline builder
+ * after substitution so that structural nodes (result decls, do…end, temp decls)
+ * and any body nodes cleared by `clearNodePositions` are attributed to the call site.
+ * Arg-expression nodes that carry the argument's own position are left untouched
+ * because their `line` field is already set.
+ */
+export function stampCallSitePositions(stmts: tstl.Statement[], callNode: ts.CallExpression): void {
+  walkLuaNodes(stmts, (n) => {
+    if (n.line === undefined) tstl.setNodeOriginal(n, callNode);
+  });
+}
+
+function stampCallSiteExpression(expr: tstl.Expression, callNode: ts.CallExpression): void {
+  walkLuaExpression(expr, (n) => {
+    if (n.line === undefined) tstl.setNodeOriginal(n, callNode);
+  });
 }
 
 export function buildParamMap(
@@ -99,11 +127,17 @@ function transformBodyStatements(
   context: tstl.TransformationContext,
 ): tstl.Statement[] {
   context.pushScope(FUNCTION_SCOPE, declaration);
+  let result: tstl.Statement[];
   try {
-    return bodyStmts.flatMap((s) => context.transformStatements(s));
+    result = bodyStmts.flatMap((s) => context.transformStatements(s));
   } finally {
     context.popScope();
   }
+  // Erase function-body TS positions so the post-stamp pass can attribute every
+  // node to the call site instead.  Arg expressions (built separately in
+  // buildParamMap) are not touched here and keep their original arg positions.
+  clearNodePositions(result);
+  return result;
 }
 
 interface TransformedInlineFunction {
@@ -131,6 +165,10 @@ export function transformInlineBodyAndReturn(
   } finally {
     context.popScope();
   }
+  // Erase function-body positions so stampCallSitePositions can attribute every
+  // body node to the call site. Matches what transformBodyStatements does (line 139).
+  clearNodePositions(luaBody);
+  clearNodePositions(luaReturnStmts);
   const luaReturn = luaReturnStmts.find(
     (stmt): stmt is tstl.ReturnStatement => stmt.kind === tstl.SyntaxKind.ReturnStatement,
   );
@@ -165,6 +203,7 @@ export function prepareReturnValueInline(
   // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(rewrittenBodyStmts, declaration, context);
   const luaReturnExpr = context.transformExpression(rewrittenReturnExpr);
+  clearExpressionPositions(luaReturnExpr);
 
   const mapped = buildParamMap(params, callNode.arguments, checker, context);
   if (!mapped) return undefined;
@@ -203,6 +242,7 @@ export function buildDoEndBlock(
         effectfulArgs.push(createDiscardTemp(context, context.transformExpression(arg)));
       }
     }
+    stampCallSitePositions(effectfulArgs, callNode);
     return effectfulArgs;
   }
 
@@ -212,7 +252,9 @@ export function buildDoEndBlock(
 
   const substituted = substituteParamsInStatements(luaBody, paramMap);
 
-  return [...tempDecls, tstl.createDoStatement(substituted)];
+  const result = [...tempDecls, tstl.createDoStatement(substituted)];
+  stampCallSitePositions(result, callNode);
+  return result;
 }
 
 /**
@@ -250,18 +292,21 @@ export function inlineExpressionBody(
 
   const rewrittenExpr = rewriteInlineNode(target.bodyExpr, substitutions, checker);
   const luaBody = context.transformExpression(rewrittenExpr);
+  clearExpressionPositions(luaBody);
 
   if (needsEagerArgumentTemps(target, callNode, checker)) {
     const mapped = buildParamMap(target.params, callNode.arguments, checker, context);
     if (!mapped) return undefined;
 
     const substituted = substituteParams(luaBody, mapped.paramMap);
-    return tstl.createCallExpression(
+    const callExpr = tstl.createCallExpression(
       tstl.createFunctionExpression(
         tstl.createBlock([...mapped.tempDecls, tstl.createReturnStatement([substituted])]),
       ),
       [],
     );
+    stampCallSiteExpression(callExpr, callNode);
+    return callExpr;
   }
 
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
@@ -276,9 +321,11 @@ export function inlineExpressionBody(
   }
 
   const substituted = substituteParams(luaBody, paramMap);
-  return needsParentheses(substituted)
+  const result = needsParentheses(substituted)
     ? tstl.createParenthesizedExpression(substituted)
     : substituted;
+  stampCallSiteExpression(result, callNode);
+  return result;
 }
 
 function getStatementBody(stmt: ts.Statement): readonly ts.Statement[] {
@@ -367,6 +414,7 @@ export function buildVarDeclInline(
 
   const doEnd = tstl.createDoStatement([...substitutedBody, assignResult]);
 
+  let result: tstl.Statement[];
   if (needsTempName) {
     // Register the call-site variable in symbolIdMaps before dead-local analysis.
     // Without this, dead-local sees the binding as unread and removes it.
@@ -379,9 +427,12 @@ export function buildVarDeclInline(
       [tstl.createIdentifier(nameIdent.text, undefined, bindingSymId)],
       [tstl.createIdentifier(resultIdent.text, undefined, resultSymId)],
     );
-    return [resultDecl, ...tempDecls, doEnd, bindingDecl];
+    result = [resultDecl, ...tempDecls, doEnd, bindingDecl];
+  } else {
+    result = [resultDecl, ...tempDecls, doEnd];
   }
-  return [resultDecl, ...tempDecls, doEnd];
+  stampCallSitePositions(result, callNode);
+  return result;
 }
 
 export function buildReturnSiteInline(
@@ -416,12 +467,24 @@ export function buildReturnSiteInline(
     const substitutedReturns = luaReturn.expressions.map((expr) =>
       substituteParams(expr, paramMap),
     );
-    return [...tempDecls, ...substitutedBody, tstl.createReturnStatement(substitutedReturns)];
+    const multiResult = [
+      ...tempDecls,
+      ...substitutedBody,
+      tstl.createReturnStatement(substitutedReturns),
+    ];
+    stampCallSitePositions(multiResult, callNode);
+    return multiResult;
   }
 
   const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
-  return [...tempDecls, ...substitutedBody, tstl.createReturnStatement([substitutedReturn])];
+  const result = [
+    ...tempDecls,
+    ...substitutedBody,
+    tstl.createReturnStatement([substitutedReturn]),
+  ];
+  stampCallSitePositions(result, callNode);
+  return result;
 }

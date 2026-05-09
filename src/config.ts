@@ -340,11 +340,17 @@ function isStructuredRuleKey(
   return rule in STRUCTURED_RULE_PARSERS;
 }
 
+function isRuleKey(key: string): key is keyof RulesConfig {
+  return key in DEFAULT_RULES;
+}
+
 export function parseConfig(options?: Record<string, unknown>): PluginConfig {
   const rawRules = isRecord(options?.rules) ? options.rules : {};
   const rules: RulesConfig = { ...DEFAULT_RULES };
 
-  for (const key of Object.keys(DEFAULT_RULES) as (keyof RulesConfig)[]) {
+  for (const key of Object.keys(DEFAULT_RULES)) {
+    if (!isRuleKey(key)) continue;
+
     const val = rawRules[key];
     if (val === undefined) continue;
 

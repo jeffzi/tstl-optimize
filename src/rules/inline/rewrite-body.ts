@@ -101,7 +101,6 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
       return n;
     }
 
-    // For all other nodes, recursively visit children and rebuild the node
     return ts.visitEachChild(n, visit, transformCtx);
   }
 

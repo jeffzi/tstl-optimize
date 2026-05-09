@@ -5,6 +5,7 @@ import { getElseBranchStatements, isLuaRhsPure } from "../ast/lua-ast";
 import { withoutShadowedNames } from "../ast/lua-references";
 import { Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
+import { getTransformedFile } from "./source-file";
 
 function expressionsReferenceAnyOf(
   expressions: readonly tstl.Expression[] | undefined,
@@ -320,8 +321,7 @@ function recurseIntoFunctionBodies(statements: tstl.Statement[]): void {
 export const createVisitors: RuleFactory = () => ({
   [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context): tstl.File => {
     const nodes = context.superTransformNode(node);
-    const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-    if (!file || !tstl.isFile(file) || !file.statements) return file;
+    const file = getTransformedFile(nodes);
 
     // Module-level locals are not merged, but we must recurse into blocks
     // and find any top-level FunctionExpressions.

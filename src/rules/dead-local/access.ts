@@ -2,6 +2,11 @@
 import * as tstl from "typescript-to-lua";
 import { forEachAccess } from "../../ast/lua-references";
 
+/**
+ * Distinguishes whether an identifier is being read from or written to.
+ * - "read": The identifier's current value is used.
+ * - "write": The identifier is assigned a new value.
+ */
 type AccessKind = "read" | "write";
 
 export function collectReadSymbols(
@@ -13,19 +18,24 @@ export function collectReadSymbols(
       if (kind === "read" && identifier.symbolId !== undefined) {
         reads.add(identifier.symbolId);
       }
-      return undefined;
     });
   }
 }
 
 /**
- * Finds the first access to `symbolId` among statements that are guaranteed to execute
- * in source order. Returns "write" only when the write is unconditional at this scope —
- * a conditional write (inside if/while/for/repeat) cannot replace the declaration's
- * initializer because the original value is observable when the condition is false.
+ * Finds the first access to a symbol among statements that execute in source order.
  *
- * When a conditional statement mentions the symbol at all, we return "read" (pessimistic)
- * to disable the drop-initializer shortcut. Plain do-end blocks are transparent.
+ * **Return value**: Returns "write" if the first unconditional access is a write; "read" if the
+ * first unconditional access is a read; or undefined if the symbol is never accessed.
+ *
+ * **Conditional writes**: A write inside if/while/for/repeat is treated as no access ("read"
+ * returned instead). This is because the original value is observable when the condition is
+ * false, so the initializer cannot be safely dropped.
+ *
+ * **Conditional reads**: When a conditional statement reads the symbol at all (even inside a
+ * branch), we conservatively return "read" to prevent the drop-initializer optimization.
+ *
+ * **do-end blocks**: Transparent — we descend into them since they don't affect observability.
  */
 export function findFirstAccessKind(
   statements: readonly tstl.Statement[],
@@ -45,7 +55,7 @@ export function findFirstAccessKind(
 
     let result: AccessKind | undefined;
     forEachAccess(stmt, ({ identifier, kind, inFunctionBody }) => {
-      if (identifier.symbolId !== symbolId) return undefined;
+      if (identifier.symbolId !== symbolId) return;
       result = inFunctionBody ? "read" : kind;
       return true;
     });

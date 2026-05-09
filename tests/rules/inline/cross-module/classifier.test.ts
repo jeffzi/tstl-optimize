@@ -5,14 +5,7 @@ import {
   hasCrossModuleFreeVariable,
   isDescendant,
 } from "../../../../src/rules/inline/cross-module";
-import { findNode, makeMultiFileChecker } from "../helpers";
-
-function makeChecker(source: string): {
-  checker: ts.TypeChecker;
-  sourceFile: ts.SourceFile;
-} {
-  return makeMultiFileChecker({ "test.ts": source }, "test.ts");
-}
+import { findNode, makeChecker, makeMultiFileChecker } from "../helpers";
 
 function findFunction(sourceFile: ts.SourceFile, name = "fn"): ts.FunctionDeclaration {
   const declaration = findNode(

@@ -90,8 +90,9 @@ describe("phase executor", () => {
         },
       );
 
+      assertNoEmptyDoBlock(lua);
       expect(lua).not.toContain("safeHp");
-      expect(lua).toContain("return");
+      expect(lua).toContain("return hp");
     });
   });
 

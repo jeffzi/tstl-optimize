@@ -82,19 +82,20 @@ switch (PLATFORM) {
 
 // --- Limitations ---
 
-// Conditions with runtime variables can't be resolved
+// Not resolved: isAlive is a runtime variable with no compile-time value
 declare const isAlive: boolean;
 if (isAlive) {
   print("alive");
 }
 
-// Mixed known/unknown — unknown side prevents folding (emits a warning)
+// Partially resolved: PLATFORM === "desktop" folds to true, but connected
+// is a runtime variable — the branch is preserved (emits a warning)
 declare const connected: boolean;
 if (PLATFORM === "desktop" && connected) {
   print("desktop + connected");
 }
 
-// Switch on runtime variable — can't resolve
+// Not resolved: mode is a runtime variable — all cases preserved
 declare const mode: number;
 switch (mode) {
   case 1:

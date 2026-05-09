@@ -42,6 +42,7 @@ function evaluateEquality(
   if (typeof left !== typeof right) return undefined;
   if (operator === ts.SyntaxKind.EqualsEqualsToken) return left === right;
   if (operator === ts.SyntaxKind.ExclamationEqualsToken) return left !== right;
+  // Unhandled operator — not an equality comparison
   return undefined;
 }
 

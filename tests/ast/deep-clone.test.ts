@@ -2,7 +2,11 @@ import fc from "fast-check";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
-import { deepCloneExpression, deepCloneStatement } from "../../src/ast/deep-clone";
+import {
+  deepCloneExpression,
+  deepCloneStatement,
+  withPositionFrom,
+} from "../../src/ast/deep-clone";
 import { arbExpression } from "../arbitraries";
 
 function id(text: string, symbolId?: number, originalName?: string): tstl.Identifier {
@@ -215,6 +219,10 @@ describe("deepCloneStatement", () => {
       name: "WhileStatement",
       stmt: tstl.createWhileStatement(tstl.createBlock([]), id("c")),
     },
+    {
+      name: "RepeatStatement",
+      stmt: tstl.createRepeatStatement(tstl.createBlock([]), tstl.createBooleanLiteral(true)),
+    },
   ])("clones block-based statement: $name", ({ stmt }) => {
     const cloned = deepCloneStatement(stmt);
     expect(cloned).not.toBe(stmt);
@@ -281,21 +289,8 @@ describe("deepCloneStatement", () => {
     { name: "ExpressionStatement", stmt: tstl.createExpressionStatement(id("x")) },
     { name: "GotoStatement", stmt: tstl.createGotoStatement("lbl") },
     { name: "BreakStatement", stmt: tstl.createBreakStatement() },
+    { name: "LabelStatement", stmt: tstl.createLabelStatement("lbl") },
   ])("clones simple statement: $name", ({ stmt }) => {
-    const cloned = deepCloneStatement(stmt);
-    expect(cloned).not.toBe(stmt);
-    expect(cloned).toStrictEqual(stmt);
-  });
-
-  it("clones RepeatStatement", () => {
-    const stmt = tstl.createRepeatStatement(tstl.createBlock([]), tstl.createBooleanLiteral(true));
-    const cloned = deepCloneStatement(stmt);
-    expect(cloned).not.toBe(stmt);
-    expect(cloned).toStrictEqual(stmt);
-  });
-
-  it("clones LabelStatement", () => {
-    const stmt = tstl.createLabelStatement("lbl");
     const cloned = deepCloneStatement(stmt);
     expect(cloned).not.toBe(stmt);
     expect(cloned).toStrictEqual(stmt);
@@ -453,5 +448,123 @@ describe("when cloning arbitrary expressions (property-based)", () => {
         expect(structurallyEqual(once, twice)).toBe(true);
       }),
     );
+  });
+});
+
+describe("withPositionFrom", () => {
+  it.each([
+    { name: "line only", sourceProps: { line: 42 }, expectedLine: 42, expectedCol: undefined },
+    { name: "column only", sourceProps: { column: 10 }, expectedLine: undefined, expectedCol: 10 },
+    {
+      name: "line and column",
+      sourceProps: { line: 15, column: 5 },
+      expectedLine: 15,
+      expectedCol: 5,
+    },
+  ])("copies $name from source to target", ({ sourceProps, expectedLine, expectedCol }) => {
+    const target = tstl.createNumericLiteral(1);
+    const source = tstl.createIdentifier("x");
+    Object.assign(source, sourceProps);
+
+    const result = withPositionFrom(target, source);
+
+    expect(result).toBe(target);
+    expect(target.line).toBe(expectedLine);
+    expect(target.column).toBe(expectedCol);
+  });
+
+  it("leaves target unchanged when source has no line or column", () => {
+    const target = tstl.createNumericLiteral(1);
+    target.line = 99;
+    target.column = 50;
+    const source = tstl.createIdentifier("x");
+    // source.line and source.column are undefined
+
+    const result = withPositionFrom(target, source);
+
+    expect(result).toBe(target);
+    expect(target.line).toBe(99);
+    expect(target.column).toBe(50);
+  });
+
+  it("returns the target for method chaining", () => {
+    const target = tstl.createStringLiteral("hello");
+    const source = tstl.createIdentifier("x");
+    source.line = 3;
+
+    const result = withPositionFrom(target, source);
+
+    expect(result).toBe(target);
+  });
+
+  it.each([
+    {
+      name: "flags",
+      setup: () => {
+        const target = tstl.createCallExpression(id("fn"), []);
+        const source = tstl.createCallExpression(id("fn"), []);
+        source.flags |= tstl.NodeFlags.TableUnpackCall;
+        return { target, source };
+      },
+      assertNotCopied: (target: tstl.Node) => {
+        expect((target as tstl.CallExpression).flags & tstl.NodeFlags.TableUnpackCall).toBe(0);
+      },
+    },
+    {
+      name: "leadingComments",
+      setup: () => {
+        const target = tstl.createReturnStatement([id("x")]);
+        const source = tstl.createReturnStatement([id("y")]);
+        source.leadingComments = ["-- comment"];
+        return { target, source };
+      },
+      assertNotCopied: (target: tstl.Node) => {
+        expect((target as tstl.ReturnStatement).leadingComments).toBeUndefined();
+      },
+    },
+    {
+      name: "trailingComments",
+      setup: () => {
+        const target = tstl.createReturnStatement([id("x")]);
+        const source = tstl.createReturnStatement([id("y")]);
+        source.trailingComments = ["-- comment"];
+        return { target, source };
+      },
+      assertNotCopied: (target: tstl.Node) => {
+        expect((target as tstl.ReturnStatement).trailingComments).toBeUndefined();
+      },
+    },
+  ])("does not copy $name from source", ({ setup, assertNotCopied }) => {
+    const { target, source } = setup();
+
+    withPositionFrom(target, source);
+
+    assertNotCopied(target);
+  });
+
+  it.each([
+    {
+      field: "line" as const,
+      initialValue: 10,
+      sourceValue: 99,
+    },
+    {
+      field: "column" as const,
+      initialValue: 5,
+      sourceValue: 20,
+    },
+  ])("overwrites existing $field on target when source.$field is defined", ({
+    field,
+    initialValue,
+    sourceValue,
+  }) => {
+    const target = tstl.createNumericLiteral(1);
+    target[field] = initialValue;
+    const source = tstl.createIdentifier("x");
+    source[field] = sourceValue;
+
+    withPositionFrom(target, source);
+
+    expect(target[field]).toBe(sourceValue);
   });
 });

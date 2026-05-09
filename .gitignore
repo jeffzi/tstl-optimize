@@ -34,6 +34,7 @@ node_modules/
 
 # Build output
 dist/
+*lua.map
 
 # Compiled benchmark Lua (generated from TS)
 benchmark/lua/
