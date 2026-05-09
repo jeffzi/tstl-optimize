@@ -18,8 +18,23 @@ import {
   isModuleScopeDeclaration,
   isPureAtVoidSite,
 } from "./eligibility";
-import type { ReturnValueInlineTarget } from "./target";
+import type { InlineTarget, ReturnValueInlineTarget } from "./target";
 import { getInlineTarget, hasInlineTag } from "./target";
+
+function getCallInlineTarget(
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): InlineTarget | undefined {
+  return getInlineTarget(callNode, checker)?.target;
+}
+
+function getReturnValueInlineTarget(
+  callNode: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ReturnValueInlineTarget | undefined {
+  const target = getCallInlineTarget(callNode, checker);
+  return target?.kind === "statementsWithReturn" ? target : undefined;
+}
 
 function validateAndClassifyReturnValueInline(
   callNode: ts.CallExpression,
@@ -56,9 +71,8 @@ export function handleCallExpression(
   context: tstl.TransformationContext,
   strict: boolean,
 ): tstl.Expression | undefined {
-  const result = getInlineTarget(node, checker);
-  if (!result) return undefined;
-  const { target } = result;
+  const target = getCallInlineTarget(node, checker);
+  if (target === undefined) return undefined;
 
   if (target.kind === "statements" || target.kind === "statementsWithReturn") {
     // Suppress when the statement-level handler owns the diagnostic for this call site:
@@ -101,12 +115,8 @@ export function handleVariableStatement(
   if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
 
   const callNode = decl.initializer;
-  const result = getInlineTarget(callNode, checker);
-  if (!result) return undefined;
-
-  const { target } = result;
-
-  if (target.kind !== "statementsWithReturn") return undefined;
+  const target = getReturnValueInlineTarget(callNode, checker);
+  if (target === undefined) return undefined;
 
   const substitutions = validateAndClassifyReturnValueInline(
     callNode,
@@ -155,11 +165,8 @@ export function handleReturnStatement(
   if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
 
   const callNode = node.expression;
-  const result = getInlineTarget(callNode, checker);
-  if (!result) return undefined;
-
-  const { target } = result;
-  if (target.kind !== "statementsWithReturn") return undefined;
+  const target = getReturnValueInlineTarget(callNode, checker);
+  if (target === undefined) return undefined;
 
   const substitutions = validateAndClassifyReturnValueInline(
     callNode,
@@ -182,10 +189,8 @@ export function handleExpressionStatement(
   if (!ts.isCallExpression(node.expression)) return undefined;
   const callNode = node.expression;
 
-  const result = getInlineTarget(callNode, checker);
-  if (!result) return undefined;
-
-  const { target } = result;
+  const target = getCallInlineTarget(callNode, checker);
+  if (target === undefined) return undefined;
 
   if (target.kind === "expression") {
     const inlined = inlineExpressionBody(target, callNode, checker, context, strict);

@@ -89,6 +89,7 @@ export function isCallSiteFullyInlined(
         target.params,
       )
     );
+    /* v8 ignore next -- source-map artifact: closing brace has no distinct V8 instruction after a return */
   }
 
   if (!ts.isVariableDeclaration(callNode.parent)) {
@@ -155,23 +156,6 @@ function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeCheck
   }
   visit(node);
   return count;
-}
-
-function isParamWritten(body: ts.Node, paramSymbol: ts.Symbol, checker: ts.TypeChecker): boolean {
-  let written = false;
-  function visit(n: ts.Node): void {
-    if (written) return;
-    if (ts.isIdentifier(n)) {
-      const sym = checker.getSymbolAtLocation(n);
-      if (sym === paramSymbol && getAccessKind(n) & AccessKind.Write) {
-        written = true;
-        return;
-      }
-    }
-    ts.forEachChild(n, visit);
-  }
-  visit(body);
-  return written;
 }
 
 function analyzeParamUsage(
@@ -396,7 +380,7 @@ export function canInlineStatements(
         code: InlineDiagnosticCode.parameterRestriction,
       };
     for (const node of allNodes) {
-      if (isParamWritten(node, paramSymbol, checker))
+      if (analyzeParamUsage(node, paramSymbol, checker).isWritten)
         return {
           reason: "parameter is written inside body",
           code: InlineDiagnosticCode.parameterRestriction,
@@ -410,23 +394,304 @@ export function canInlineStatements(
   return undefined;
 }
 
+/**
+ * Returns true if a side-effectful sub-expression appears before the parameter's
+ * first use in left-to-right evaluation order within the body expression, OR if
+ * another parameter with a side-effectful argument appears in a different order
+ * than the parameter list (parameter reordering with multiple side-effectful args).
+ */
+function hasSideEffectBeforeParamUse(
+  bodyExpr: ts.Expression,
+  targetParamIndex: number,
+  paramSymbols: readonly ts.Symbol[],
+  callArgs: ts.NodeArray<ts.Expression>,
+  checker: ts.TypeChecker,
+): boolean {
+  // Identify which parameters have side-effectful arguments
+  const sideEffectArgIndices = new Set<number>();
+  for (let i = 0; i < paramSymbols.length; i++) {
+    if (hasSideEffects(callArgs[i], SideEffectOptions.None)) {
+      sideEffectArgIndices.add(i);
+    }
+  }
+
+  // Walk the body and find:
+  // 1. If there's a side-effect before the target param's first use
+  // 2. If there's another param with SE arg appearing before target param in eval order
+  // TS does not narrow `ts.Expression` from `switch (expr.kind)` into the corresponding node
+  // subtype. Each arm casts `expr` to the correct interface — the unavoidable pattern when
+  // using the TypeScript compiler API's kind-based dispatch.
+  function findFirstParamWithSEOrSE(expr: ts.Expression): "side-effect" | number | undefined {
+    // Returns: "side-effect" if SE found, param-index if param with SE arg found, undefined otherwise
+    switch (expr.kind) {
+      // --- Always side-effectful (handled specially below for CallExpression) ---
+      case ts.SyntaxKind.PostfixUnaryExpression:
+      case ts.SyntaxKind.AwaitExpression:
+      case ts.SyntaxKind.YieldExpression:
+      case ts.SyntaxKind.DeleteExpression:
+        return "side-effect";
+
+      // --- Transparent wrappers ---
+      case ts.SyntaxKind.TypeAssertionExpression:
+      case ts.SyntaxKind.AsExpression:
+      case ts.SyntaxKind.SatisfiesExpression:
+      case ts.SyntaxKind.ParenthesizedExpression:
+      case ts.SyntaxKind.NonNullExpression:
+      case ts.SyntaxKind.VoidExpression:
+      case ts.SyntaxKind.TypeOfExpression:
+        return findFirstParamWithSEOrSE(
+          (
+            expr as
+              | ts.AssertionExpression
+              | ts.SatisfiesExpression
+              | ts.ParenthesizedExpression
+              | ts.NonNullExpression
+              | ts.VoidExpression
+              | ts.TypeOfExpression
+          ).expression,
+        );
+
+      case ts.SyntaxKind.SpreadElement:
+        return "side-effect";
+
+      // --- Identifier: check if it's a parameter ---
+      case ts.SyntaxKind.Identifier: {
+        const sym = checker.getSymbolAtLocation(expr as ts.Identifier);
+        for (let i = 0; i < paramSymbols.length; i++) {
+          if (sym === paramSymbols[i]) {
+            return sideEffectArgIndices.has(i) ? i : undefined;
+          }
+        }
+        return undefined;
+      }
+
+      // --- Literals ---
+      case ts.SyntaxKind.NumericLiteral:
+      case ts.SyntaxKind.StringLiteral:
+      case ts.SyntaxKind.BigIntLiteral:
+      case ts.SyntaxKind.RegularExpressionLiteral:
+      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts.SyntaxKind.TrueKeyword:
+      case ts.SyntaxKind.FalseKeyword:
+      case ts.SyntaxKind.NullKeyword:
+      case ts.SyntaxKind.UndefinedKeyword:
+        return undefined;
+
+      // --- Binary expression: eval left first, then right ---
+      case ts.SyntaxKind.BinaryExpression: {
+        const bin = expr as ts.BinaryExpression;
+        const leftResult = findFirstParamWithSEOrSE(bin.left);
+        if (leftResult !== undefined) return leftResult;
+        return findFirstParamWithSEOrSE(bin.right);
+      }
+
+      // --- Prefix unary ---
+      case ts.SyntaxKind.PrefixUnaryExpression: {
+        const prefix = expr as ts.PrefixUnaryExpression;
+        if (
+          prefix.operator === ts.SyntaxKind.PlusPlusToken ||
+          prefix.operator === ts.SyntaxKind.MinusMinusToken
+        ) {
+          return "side-effect";
+        }
+        return findFirstParamWithSEOrSE(prefix.operand);
+      }
+
+      // --- Property access ---
+      case ts.SyntaxKind.PropertyAccessExpression: {
+        const propAccess = expr as ts.PropertyAccessExpression;
+        const objResult = findFirstParamWithSEOrSE(propAccess.expression);
+        if (objResult !== undefined) return objResult;
+        // Property reads can invoke getters (arbitrary side effects), so conservatively treat
+        // the read itself as a side effect even when the object expression is pure.
+        return "side-effect";
+      }
+
+      // --- Element access ---
+      case ts.SyntaxKind.ElementAccessExpression: {
+        const elemAccess = expr as ts.ElementAccessExpression;
+        const objResult = findFirstParamWithSEOrSE(elemAccess.expression);
+        if (objResult !== undefined) return objResult;
+        const indexResult = findFirstParamWithSEOrSE(elemAccess.argumentExpression);
+        if (indexResult !== undefined) return indexResult;
+        return "side-effect";
+      }
+
+      // --- Call expression ---
+      case ts.SyntaxKind.CallExpression: {
+        const call = expr as ts.CallExpression;
+        const calleeResult = findFirstParamWithSEOrSE(call.expression);
+        if (calleeResult !== undefined) return calleeResult;
+        for (const arg of call.arguments) {
+          const argResult = findFirstParamWithSEOrSE(arg);
+          if (argResult !== undefined) return argResult;
+        }
+        return "side-effect";
+      }
+
+      // --- New expression ---
+      case ts.SyntaxKind.NewExpression: {
+        const newExpr = expr as ts.NewExpression;
+        const exprResult = findFirstParamWithSEOrSE(newExpr.expression);
+        if (exprResult !== undefined) return exprResult;
+        if (newExpr.arguments) {
+          for (const arg of newExpr.arguments) {
+            const argResult = findFirstParamWithSEOrSE(arg);
+            if (argResult !== undefined) return argResult;
+          }
+        }
+        return "side-effect";
+      }
+
+      // --- Tagged template ---
+      case ts.SyntaxKind.TaggedTemplateExpression: {
+        const tte = expr as ts.TaggedTemplateExpression;
+        const tagResult = findFirstParamWithSEOrSE(tte.tag);
+        if (tagResult !== undefined) return tagResult;
+        if (tte.template.kind === ts.SyntaxKind.TemplateExpression) {
+          const template = tte.template as ts.TemplateExpression;
+          for (const span of template.templateSpans) {
+            const spanResult = findFirstParamWithSEOrSE(span.expression);
+            if (spanResult !== undefined) return spanResult;
+          }
+        }
+        return "side-effect";
+      }
+
+      // --- Template expression ---
+      case ts.SyntaxKind.TemplateExpression: {
+        const template = expr as ts.TemplateExpression;
+        for (const span of template.templateSpans) {
+          const spanResult = findFirstParamWithSEOrSE(span.expression);
+          if (spanResult !== undefined) return spanResult;
+        }
+        return undefined;
+      }
+
+      // --- Array literal ---
+      case ts.SyntaxKind.ArrayLiteralExpression: {
+        const arr = expr as ts.ArrayLiteralExpression;
+        for (const elem of arr.elements) {
+          if (ts.isSyntheticExpression(elem)) continue;
+          if (elem.kind === ts.SyntaxKind.SpreadElement) return "side-effect";
+          const elemResult = findFirstParamWithSEOrSE(elem);
+          if (elemResult !== undefined) return elemResult;
+        }
+        return undefined;
+      }
+
+      // --- Object literal ---
+      case ts.SyntaxKind.ObjectLiteralExpression: {
+        const obj = expr as ts.ObjectLiteralExpression;
+        for (const prop of obj.properties) {
+          if (prop.name?.kind === ts.SyntaxKind.ComputedPropertyName) {
+            const keyResult = findFirstParamWithSEOrSE(
+              (prop.name as ts.ComputedPropertyName).expression,
+            );
+            if (keyResult !== undefined) return keyResult;
+          }
+
+          switch (prop.kind) {
+            case ts.SyntaxKind.PropertyAssignment: {
+              const propAssign = prop as ts.PropertyAssignment;
+              const valueResult = findFirstParamWithSEOrSE(propAssign.initializer);
+              if (valueResult !== undefined) return valueResult;
+              break;
+            }
+            case ts.SyntaxKind.SpreadAssignment:
+              return "side-effect";
+            case ts.SyntaxKind.ShorthandPropertyAssignment:
+            case ts.SyntaxKind.MethodDeclaration:
+            case ts.SyntaxKind.GetAccessor:
+            case ts.SyntaxKind.SetAccessor:
+              break;
+            /* v8 ignore next -- defensive fallthrough for property kinds not present in valid inline bodies */
+            default:
+              return "side-effect";
+          }
+        }
+        return undefined;
+      }
+
+      // --- Conditional expression ---
+      case ts.SyntaxKind.ConditionalExpression: {
+        const cond = expr as ts.ConditionalExpression;
+        const condResult = findFirstParamWithSEOrSE(cond.condition);
+        if (condResult !== undefined) return condResult;
+
+        const thenResult = findFirstParamWithSEOrSE(cond.whenTrue);
+        const elseResult = findFirstParamWithSEOrSE(cond.whenFalse);
+
+        // If either branch has a param or SE, return side-effect
+        // (params behind conditionals need eager temps)
+        if (thenResult !== undefined || elseResult !== undefined) {
+          return "side-effect";
+        }
+        return undefined;
+      }
+
+      // --- Function definition ---
+      case ts.SyntaxKind.FunctionExpression:
+      case ts.SyntaxKind.ArrowFunction:
+        return undefined;
+
+      // --- Class expression ---
+      case ts.SyntaxKind.ClassExpression:
+        return "side-effect";
+
+      // --- Default ---
+      /* v8 ignore next -- defensive fallthrough for expression kinds not present in valid inline bodies */
+      default:
+        return "side-effect";
+    }
+  }
+
+  const firstResult = findFirstParamWithSEOrSE(bodyExpr);
+
+  // Need eager temps if:
+  // 1. There's a side-effect before this param's first use
+  if (firstResult === "side-effect") {
+    return true;
+  }
+
+  // 2. Another parameter with a side-effectful arg appears before the target in eval order
+  if (typeof firstResult === "number") {
+    // firstResult is a param index with SE arg
+    // If this other param appears before target in eval but after in param list, or vice versa,
+    // we need temps for both
+    if (firstResult !== targetParamIndex) {
+      return true; // Different param with SE arg appears first
+    }
+  }
+
+  return false;
+}
+
 export function needsEagerArgumentTemps(
   target: ExpressionInlineTarget,
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
 ): boolean {
-  for (let i = 0; i < target.params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
-    if (!paramSymbol) {
-      return false;
-    }
+  const paramSymbols: ts.Symbol[] = [];
+  for (const param of target.params) {
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
+    /* v8 ignore next -- TypeChecker always resolves symbols for named parameters in valid TS */
+    if (!paramSymbol) return false;
+    paramSymbols.push(paramSymbol);
+  }
 
+  for (let i = 0; i < target.params.length; i++) {
+    const paramSymbol = paramSymbols[i];
     const usage = analyzeParamUsage(target.bodyExpr, paramSymbol, checker);
     if (usage.isCaptured) {
       return true;
     }
 
-    if (usage.count === 1 && hasSideEffects(callNode.arguments[i], SideEffectOptions.None)) {
+    if (
+      usage.count === 1 &&
+      hasSideEffects(callNode.arguments[i], SideEffectOptions.None) &&
+      hasSideEffectBeforeParamUse(target.bodyExpr, i, paramSymbols, callNode.arguments, checker)
+    ) {
       return true;
     }
   }

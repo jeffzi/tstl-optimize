@@ -32,6 +32,15 @@ function stripInlineComments(stmts: tstl.Statement[]): void {
   }
 }
 
+function transformAndStripInlineComments(
+  node: ts.Statement,
+  context: tstl.TransformationContext,
+): tstl.Statement[] {
+  const statements = context.superTransformStatements(node);
+  stripInlineComments(statements);
+  return statements;
+}
+
 export const createVisitors: RuleFactory = (checker, config) => {
   const inlineCfg = resolveInlineConfig(config.rules.inline);
   if (!inlineCfg.enabled) return {};
@@ -66,9 +75,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
       // Non-erased @inline declaration: transform with TSTL default, then strip
       // the @inline comment so the printer never emits lines that shift sourcemap entries.
       if (hasInlineTag(node)) {
-        const stmts = context.superTransformStatements(node);
-        stripInlineComments(stmts);
-        return stmts;
+        return transformAndStripInlineComments(node, context);
       }
       return undefined;
     },
@@ -82,9 +89,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
       if (result !== undefined) return result; // erased (return [])
       // Non-erased @inline declaration: transform with TSTL default, then strip the comment.
       if (hasInlineTag(node)) {
-        const stmts = context.superTransformStatements(node);
-        stripInlineComments(stmts);
-        return stmts;
+        return transformAndStripInlineComments(node, context);
       }
       return undefined;
     },
