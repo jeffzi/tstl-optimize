@@ -1,10 +1,10 @@
 /** @inline */
-function lerp(a: number, b: number, t: number) {
+function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
 /** @inline */
-const negate = (x: number) => -x;
+const negate = (x: number): number => -x;
 
 /** @inline */
 function mul(x: number): number {
@@ -30,7 +30,7 @@ const atkSquared = mul(stats.atk.base);
 // Multi-statement body at void call site: body spliced into a do...end
 // block with arguments bound to temporaries
 /** @inline */
-function debugLog(prefix: string, value: number) {
+function debugLog(prefix: string, value: number): void {
   const msg = `${prefix}: ${value}`;
   print(msg);
 }
@@ -109,7 +109,7 @@ const label = classify(playerHp);
 // --- Limitations ---
 
 // Not inlined: no @inline tag
-function double(x: number) {
+function double(x: number): number {
   return x * 2;
 }
 const doubled = double(hp);
@@ -117,7 +117,7 @@ const doubled = double(hp);
 // Not inlined: destructuring parameters are not supported — the plugin
 // cannot reliably map destructured bindings to argument positions
 /** @inline */
-function addPair({ a: da, b: db }: { a: number; b: number }) {
+function addPair({ a: da, b: db }: { a: number; b: number }): number {
   return da + db;
 }
 const sum = addPair({ a: 1, b: 2 });

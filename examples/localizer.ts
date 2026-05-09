@@ -30,7 +30,7 @@ const terminalSpeed = config.physics.gravity / config.physics.friction;
 // Not localized: applyDrag() mutates the drag array between reads — caching
 // drag[i] in a local would miss the write from the function call
 const drag = [1.0, 0.9];
-function applyDrag(i: number) {
+function applyDrag(i: number): void {
   drag[i] = drag[i] * 0.5;
 }
 for (const i of $range(0, count - 1)) {

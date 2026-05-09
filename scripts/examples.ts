@@ -85,6 +85,14 @@ function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
+function readOptionalUtf8(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 // Patterns that indicate pipeline bugs committed into .lua output files.
 // /\bdo\s+end\b/ matches both same-line ("do end") and multiline ("do\n    end")
 // because \s matches \n in JS — so empty do-blocks in any formatting are caught.
@@ -137,11 +145,14 @@ async function main(): Promise<void> {
 
     const optsPath = resolve(examplesDir, name.replace(/\.ts$/, ".opts.json"));
     let pluginOptions: Record<string, unknown> | undefined;
-    try {
-      const raw: unknown = JSON.parse(readFileSync(optsPath, "utf8"));
-      if (isRecord(raw)) pluginOptions = raw;
-    } catch {
-      // sidecar opts file is optional
+    const optsJson = readOptionalUtf8(optsPath);
+    if (optsJson !== undefined) {
+      try {
+        const raw: unknown = JSON.parse(optsJson);
+        if (isRecord(raw)) pluginOptions = raw;
+      } catch {
+        // sidecar opts file is optional
+      }
     }
 
     const { lua, luaSourceMap, warnings } = compile(OptimizePlugin, name, source, pluginOptions);
@@ -159,28 +170,13 @@ async function main(): Promise<void> {
     const mapName = `${luaName}.map`;
     const mapPath = resolve(examplesDir, mapName);
     if (check) {
-      let existing = "";
-      try {
-        existing = readFileSync(luaPath, "utf8");
-      } catch {
-        // no existing file
-      }
+      const existing = readOptionalUtf8(luaPath) ?? "";
       if (existing !== lua) {
         console.error(`Out of date: ${luaName}`);
         stale = true;
       }
       if (existing && lintCommittedLua(luaName, existing)) {
         lintFailed = true;
-      }
-      let existingMap = "";
-      try {
-        existingMap = readFileSync(mapPath, "utf8");
-      } catch {
-        // no existing map
-      }
-      if (existingMap !== luaSourceMap) {
-        console.error(`Out of date: ${mapName}`);
-        stale = true;
       }
     } else {
       writeFileSync(luaPath, lua);
