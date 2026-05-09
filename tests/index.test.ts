@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DebugStripConfig, LocalizerConfig } from "../src/config";
 import { isRuleEnabled, parseConfig, resolveLocalizerConfig } from "../src/config";
 import pluginFactory, { OptimizePlugin } from "../src/index";
+import { getTransformedFile } from "../src/rules/source-file";
 import { compile, normalizeLua } from "./helpers";
 
 function assertLocalizerConfig(config: LocalizerConfig | false): asserts config is LocalizerConfig {
@@ -369,6 +370,50 @@ describe("SourceFile visitor fallback", () => {
 
         expect(lua).toContain("do\nend");
       },
+    );
+  });
+
+  it("wraps upstream SourceFile statement arrays for downstream rules", async () => {
+    await withMockedRuleVisitors(
+      {
+        conditionalCompilation: () => ({
+          [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile) => [tstl.createDoStatement([], node)],
+        }),
+      },
+      ({ OptimizePlugin: MockedOptimizePlugin }) => {
+        const plugin = new MockedOptimizePlugin({ rules: VISITOR_MERGE_RULES });
+        const lua = transpileWithPlugin(plugin);
+
+        expect(lua).toContain("do\nend");
+      },
+    );
+  });
+});
+
+describe("getTransformedFile", () => {
+  it("returns a direct Lua file result unchanged", () => {
+    const file = tstl.createFile([], new Set<tstl.LuaLibFeature>(), "");
+
+    expect(getTransformedFile(file)).toBe(file);
+  });
+
+  it("unwraps a single-file array result", () => {
+    const file = tstl.createFile([], new Set<tstl.LuaLibFeature>(), "");
+
+    expect(getTransformedFile([file])).toBe(file);
+  });
+
+  it("wraps statement array results in a synthetic Lua file", () => {
+    const statement = tstl.createDoStatement([]);
+    const file = getTransformedFile([statement]);
+
+    expect(tstl.isFile(file)).toBe(true);
+    expect(file.statements).toStrictEqual([statement]);
+  });
+
+  it("throws for non-file SourceFile transform results", () => {
+    expect(() => getTransformedFile([tstl.createNilLiteral()])).toThrow(
+      "expected SourceFile transform to produce a Lua file",
     );
   });
 });
