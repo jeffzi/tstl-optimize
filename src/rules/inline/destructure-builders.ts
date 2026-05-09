@@ -1,7 +1,12 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { buildParamMap, prepareReturnValueInline, transformInlineBodyAndReturn } from "./builders";
+import {
+  buildParamMap,
+  prepareReturnValueInline,
+  stampCallSitePositions,
+  transformInlineBodyAndReturn,
+} from "./builders";
 import type { LiteralKind } from "./const-literal";
 import { substituteParams, substituteParamsInStatements } from "./lua-substitute";
 import { type ReturnValueInlineTarget, returnsLuaMultiReturn } from "./target";
@@ -85,7 +90,9 @@ export function buildObjectDestructureInline(
     fieldDecls.push(tstl.createVariableDeclarationStatement([localIdent], [fieldAccess]));
   }
 
-  return [resultDecl, ...tempDecls, doEnd, ...fieldDecls];
+  const result = [resultDecl, ...tempDecls, doEnd, ...fieldDecls];
+  stampCallSitePositions(result, callNode);
+  return result;
 }
 
 export function buildArrayDestructureInline(
@@ -158,7 +165,9 @@ export function buildArrayDestructureInline(
       resultIdents.map((id) => tstl.createIdentifier(id.text, undefined, id.symbolId)),
     );
 
-    return [...resultDecls, ...tempDecls, doEnd, finalDecl];
+    const multiResult = [...resultDecls, ...tempDecls, doEnd, finalDecl];
+    stampCallSitePositions(multiResult, callNode);
+    return multiResult;
   }
 
   const shared = buildDestructureShared(target, callNode, checker, context, substitutions);
@@ -171,10 +180,12 @@ export function buildArrayDestructureInline(
     tstl.createNumericLiteral(pattern.elements.length),
   ]);
 
-  return [
+  const result = [
     resultDecl,
     ...tempDecls,
     doEnd,
     tstl.createVariableDeclarationStatement(bindingIdents, [unpackCall]),
   ];
+  stampCallSitePositions(result, callNode);
+  return result;
 }

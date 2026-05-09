@@ -1,5 +1,6 @@
 import ts from "typescript";
-import type * as tstl from "typescript-to-lua";
+// biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
+import * as tstl from "typescript-to-lua";
 import { isExplicitAmbientTopLevelDeclaration } from "../../ast/ts-ambient";
 import {
   type ConstantValue,
@@ -158,26 +159,34 @@ export const createVisitors: RuleFactory = (checker, config) => {
     context: tstl.TransformationContext,
   ): tstl.Expression {
     const value = evaluateScopedCondition(node);
-    return value !== undefined
-      ? constantToLuaLiteral(value)
-      : context.superTransformExpression(node);
+    if (value !== undefined) {
+      const lit = constantToLuaLiteral(value);
+      tstl.setNodeOriginal(lit, node);
+      return lit;
+    }
+    return context.superTransformExpression(node);
   }
 
   return {
-    [ts.SyntaxKind.Identifier]: (node: ts.Identifier, context: tstl.TransformationContext) =>
-      tryFoldExpression(node, context),
+    [ts.SyntaxKind.Identifier]: (
+      node: ts.Identifier,
+      context: tstl.TransformationContext,
+    ): tstl.Expression => tryFoldExpression(node, context),
 
     [ts.SyntaxKind.BinaryExpression]: (
       node: ts.BinaryExpression,
       context: tstl.TransformationContext,
-    ) => tryFoldExpression(node, context),
+    ): tstl.Expression => tryFoldExpression(node, context),
 
     [ts.SyntaxKind.PrefixUnaryExpression]: (
       node: ts.PrefixUnaryExpression,
       context: tstl.TransformationContext,
-    ) => tryFoldExpression(node, context),
+    ): tstl.Expression => tryFoldExpression(node, context),
 
-    [ts.SyntaxKind.IfStatement]: (node: ts.IfStatement, context: tstl.TransformationContext) => {
+    [ts.SyntaxKind.IfStatement]: (
+      node: ts.IfStatement,
+      context: tstl.TransformationContext,
+    ): tstl.Statement | tstl.Statement[] | undefined => {
       const value = evaluateScopedCondition(node.expression);
       if (value === undefined) {
         if (referencesScopedConstants(node.expression)) {
@@ -199,7 +208,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
     [ts.SyntaxKind.ConditionalExpression]: (
       node: ts.ConditionalExpression,
       context: tstl.TransformationContext,
-    ) => {
+    ): tstl.Expression => {
       const value = evaluateScopedCondition(node.condition);
       if (value === undefined) {
         if (referencesScopedConstants(node.condition)) {
@@ -216,7 +225,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
     [ts.SyntaxKind.SwitchStatement]: (
       node: ts.SwitchStatement,
       context: tstl.TransformationContext,
-    ) => {
+    ): tstl.Statement | tstl.Statement[] | undefined => {
       const switchValue = evaluateScopedCondition(node.expression);
       if (switchValue === undefined) {
         if (referencesScopedConstants(node.expression)) {

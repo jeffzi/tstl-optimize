@@ -1,8 +1,10 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { withPositionFrom } from "../ast/deep-clone";
 import { Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
+import { getTransformedFile } from "./source-file";
 
 function isLoopStatement(
   stmt: tstl.Statement,
@@ -150,9 +152,11 @@ function pruneTrailingEmptyBranches(
 function negateCondition(expr: tstl.Expression): tstl.Expression {
   const operand =
     tstl.isBinaryExpression(expr) || tstl.isConditionalExpression(expr)
-      ? tstl.createParenthesizedExpression(expr)
+      ? withPositionFrom(tstl.createParenthesizedExpression(expr), expr)
       : expr;
-  return tstl.createUnaryExpression(operand, tstl.SyntaxKind.NotOperator);
+  const unaryExpr = tstl.createUnaryExpression(operand, tstl.SyntaxKind.NotOperator);
+  withPositionFrom(unaryExpr, expr);
+  return unaryExpr;
 }
 
 function promoteElseBlock(statements: tstl.Statement[], i: number): void {
@@ -239,9 +243,7 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => ({
   [ts.SyntaxKind.SourceFile]: {
     transform: (node: ts.SourceFile, context): tstl.File => {
       const nodes = context.superTransformNode(node);
-      const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-
-      if (!file || !tstl.isFile(file) || !file.statements) return file;
+      const file = getTransformedFile(nodes);
 
       // 1. Process root statements recursively
       removeEmptyBranches(file.statements, new Set<tstl.SymbolId>());

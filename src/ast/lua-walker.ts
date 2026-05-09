@@ -1,12 +1,16 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 
+/** Control methods for early termination during statement traversal.
+ *
+ * - `skip()`: Skip the children of the current statement (but continue traversing siblings).
+ * - `stop()`: Stop all traversal immediately and return from the walker.
+ */
 export interface TraversalControl {
   skip(): void;
   stop(): void;
 }
 
-// Walk action API (D-prime)
 export const Walk = {
   keep: Object.freeze({ kind: "keep" } as const),
   skip: Object.freeze({ kind: "skip" } as const),
@@ -15,6 +19,15 @@ export const Walk = {
   replaceChildren: (node: tstl.Expression) => ({ kind: "replaceChildren", node }) as const,
 };
 
+/** Action returned by expression visitors to control traversal.
+ *
+ * - `keep`: Continue traversal into child expressions.
+ * - `skip`: Skip children of this expression and move to the next sibling.
+ * - `stop`: Stop all traversal immediately.
+ * - `replace(node)`: Replace this expression with a new one without visiting the replacement.
+ * - `replaceChildren(node)`: Replace this expression with a new one, then visit only the
+ *   replacement's children.
+ */
 export type ExprAction =
   | typeof Walk.keep
   | typeof Walk.skip
@@ -22,7 +35,7 @@ export type ExprAction =
   | ReturnType<typeof Walk.replace>
   | ReturnType<typeof Walk.replaceChildren>;
 
-/** D-prime expr visitor — returns an ExprAction to control traversal. */
+/** Expression visitor that returns an ExprAction to control traversal. */
 export type ExprVisitor = (expr: tstl.Expression) => ExprAction;
 
 type StmtVisitor = (stmt: tstl.Statement, control: TraversalControl) => void;

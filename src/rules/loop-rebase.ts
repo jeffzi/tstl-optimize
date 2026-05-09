@@ -1,6 +1,7 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { withPositionFrom } from "../ast/deep-clone";
 import { type ExprAction, Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 
@@ -77,7 +78,9 @@ function commitReplacements(
   walkStatements(body.statements, {
     expr: (expr: tstl.Expression): ExprAction => {
       if (tstl.isBinaryExpression(expr) && targets.has(expr)) {
-        return Walk.replace(tstl.createIdentifier(varName));
+        const ident = tstl.createIdentifier(varName);
+        withPositionFrom(ident, expr);
+        return Walk.replace(ident);
       }
       return Walk.keep;
     },
@@ -85,7 +88,7 @@ function commitReplacements(
 }
 
 function incrementLimit(limit: tstl.Expression): tstl.Expression {
-  // n - 1 → n
+  // n - 1 → n: limit.left already carries position from the original AST
   if (
     tstl.isBinaryExpression(limit) &&
     limit.operator === tstl.SyntaxKind.SubtractionOperator &&
@@ -96,13 +99,16 @@ function incrementLimit(limit: tstl.Expression): tstl.Expression {
   }
   // NumericLiteral(N) → NumericLiteral(N + 1)
   if (tstl.isNumericLiteral(limit)) {
-    return tstl.createNumericLiteral(limit.value + 1);
+    return withPositionFrom(tstl.createNumericLiteral(limit.value + 1), limit);
   }
   // fallback: limit + 1
-  return tstl.createBinaryExpression(
+  return withPositionFrom(
+    tstl.createBinaryExpression(
+      limit,
+      tstl.createNumericLiteral(1),
+      tstl.SyntaxKind.AdditionOperator,
+    ),
     limit,
-    tstl.createNumericLiteral(1),
-    tstl.SyntaxKind.AdditionOperator,
   );
 }
 
@@ -136,7 +142,10 @@ export const createVisitors: RuleFactory = (_checker, _config) => ({
     if (blocked || targets.size === 0) return result;
 
     // Rebase: init 0→1, limit +1, replace all var+1 with bare var
-    forStmt.controlVariableInitializer = tstl.createNumericLiteral(1);
+    const origInit = forStmt.controlVariableInitializer;
+    const newInit = tstl.createNumericLiteral(1);
+    withPositionFrom(newInit, origInit);
+    forStmt.controlVariableInitializer = newInit;
     forStmt.limitExpression = incrementLimit(forStmt.limitExpression);
     commitReplacements(forStmt.body, targets, varName);
 

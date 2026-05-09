@@ -121,10 +121,7 @@ function processFile(
   }
 }
 
-function processFunctionBodies(
-  statements: readonly tstl.Statement[],
-  ctx: ProcessingContext,
-): void {
+function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingContext): void {
   const { threshold, alreadyHoisted, context, isRootAllowed, reservedNames } = ctx;
   const scopeReservedNames = mergeNameSets(
     reservedNames,
@@ -212,7 +209,7 @@ function processFunctionBodies(
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context, loopReservedNames);
       processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: loopReservedNames });
       if (preLoopDecls.length > 0) {
-        (statements as tstl.Statement[]).splice(j, 0, ...preLoopDecls);
+        statements.splice(j, 0, ...preLoopDecls);
         j += preLoopDecls.length;
       }
     } else if (tstl.isWhileStatement(stmt) || tstl.isRepeatStatement(stmt)) {

@@ -1,5 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { withPositionFrom } from "../../ast/deep-clone";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import { collectArrayElementAccesses, collectScopeInfo } from "../../ast/scope";
 import { allocateHoistName, mergeNameSets } from "./hoist";
@@ -35,7 +36,7 @@ export function replaceArrayElements(
 
       const ident = hoisted.get(baseName);
       if (ident) {
-        return Walk.replace(tstl.cloneIdentifier(ident));
+        return Walk.replace(tstl.cloneNode(ident));
       }
       return Walk.keep;
     },
@@ -57,7 +58,7 @@ export function replaceArrayElements(
 
           const ident = hoisted.get(baseName);
           if (ident) {
-            stmt.left[i] = tstl.cloneIdentifier(ident);
+            stmt.left[i] = tstl.cloneNode(ident);
           }
         }
       }
@@ -79,7 +80,11 @@ export function hoistArrayElements(
 ): void {
   const { scopeDefs } = collectScopeInfo(statements, true);
   const unavailableNames = mergeNameSets(scopeDefs, loopVarNames, reservedNames);
-  const { counts, writes, loopVar } = collectArrayElementAccesses(statements, loopVarNames, true);
+  const { counts, writes, loopVar, firstAccess } = collectArrayElementAccesses(
+    statements,
+    loopVarNames,
+    true,
+  );
 
   const earlyExit = hasEarlyExit(statements);
 
@@ -112,20 +117,27 @@ export function hoistArrayElements(
     scopeDefs.add(hoistName);
     unavailableNames.add(hoistName);
 
-    // local ____base = base[loopVar]
+    const positionSource = firstAccess.get(baseName);
+    if (positionSource === undefined)
+      throw new Error(`unreachable: no firstAccess for ${baseName}`);
     const tableAccess = tstl.createTableIndexExpression(
-      tstl.createIdentifier(baseName),
-      tstl.createIdentifier(indexName),
+      withPositionFrom(tstl.createIdentifier(baseName), positionSource),
+      withPositionFrom(tstl.createIdentifier(indexName), positionSource),
     );
-    decls.push(tstl.createVariableDeclarationStatement(ident, tableAccess));
+    withPositionFrom(tableAccess, positionSource);
+    const decl = tstl.createVariableDeclarationStatement(ident, tableAccess);
+    withPositionFrom(decl, positionSource);
+    decls.push(decl);
 
-    // base[loopVar] = ____base (only for written bases)
     if (writes.has(baseName)) {
       const writeAccess = tstl.createTableIndexExpression(
-        tstl.createIdentifier(baseName),
-        tstl.createIdentifier(indexName),
+        withPositionFrom(tstl.createIdentifier(baseName), positionSource),
+        withPositionFrom(tstl.createIdentifier(indexName), positionSource),
       );
-      writebacks.push(tstl.createAssignmentStatement(writeAccess, tstl.cloneIdentifier(ident)));
+      withPositionFrom(writeAccess, positionSource);
+      const writeback = tstl.createAssignmentStatement(writeAccess, tstl.cloneNode(ident));
+      withPositionFrom(writeback, positionSource);
+      writebacks.push(writeback);
     }
   }
 

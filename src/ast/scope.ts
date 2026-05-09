@@ -1,5 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { withPositionFrom } from "./deep-clone";
 import { type TraversalControl, Walk, walkStatements } from "./lua-walker";
 
 /** Build a dotted chain string from a Lua TableIndexExpression. */
@@ -22,9 +23,18 @@ export function luaPropertyChain(node: tstl.TableIndexExpression): string | unde
   return undefined;
 }
 
+/** Collected metadata about table-index chains and variable definitions in a scope.
+ *
+ * - `chainCounts`: Read frequency for each dotted chain (e.g., "math.floor" → 3),
+ *   excluding guarded accesses and shadowed chains.
+ * - `scopeDefs`: All variable names defined in this scope via declarations or assignments.
+ * - `firstChainUse`: First node (statement) observing each chain, used to position hoisted locals.
+ */
 export interface ScopeInfo {
   chainCounts: Map<string, number>;
   scopeDefs: Set<string>;
+  /** First TableIndexExpression observed for each chain string (in source order). */
+  firstChainUse: Map<string, tstl.Node>;
 }
 
 export function isRootShadowedInActiveScopes(
@@ -43,16 +53,20 @@ export function isRootShadowedInActiveScopes(
  * When `shallow` is false, descends into nested functions with scope-aware tracking:
  * nested function parameters are NOT added to scopeDefs (they belong to nested scopes).
  * We track shadowed roots via shadowStack and exclude chains with BOTH outer and inner reads
- * when the inner reads are shadowed (Concern B2 scenario).
+ * when the inner reads come from a nested function parameter that shadows the root name.
  */
 export function collectScopeInfo(
   statements: readonly tstl.Statement[],
   shallow: boolean,
 ): ScopeInfo {
   const chainCounts = new Map<string, number>();
+  const firstChainUse = new Map<string, tstl.Node>();
   const scopeDefs = new Set<string>();
   const shadowStack: Array<Set<string>> = []; // Stack of shadowed param names as we enter/exit nested funcs
   const shadowedChains = new Set<string>(); // Tracks chains with mixed outer + shadowed inner reads
+  // Track the current top-level statement so we can record it as the position source for
+  // firstChainUse. Statements have line/column in the Lua AST; TableIndexExpression nodes don't.
+  let currentStmt: tstl.Statement | undefined;
 
   const hooks = {
     shallow,
@@ -78,6 +92,9 @@ export function collectScopeInfo(
             } else if (!isShadowed) {
               // Either at module scope or shadowing doesn't apply — count normally
               chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
+              if (!firstChainUse.has(chain) && currentStmt !== undefined) {
+                firstChainUse.set(chain, currentStmt);
+              }
             }
           }
           return Walk.skip;
@@ -86,6 +103,7 @@ export function collectScopeInfo(
       return Walk.keep;
     },
     stmt: (stmt: tstl.Statement) => {
+      currentStmt = stmt;
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
         const isFunctionDef =
           tstl.isAssignmentStatement(stmt) &&
@@ -136,14 +154,23 @@ export function collectScopeInfo(
   };
   walkStatements(statements, hooks);
 
-  // Remove chains that have mixed shadowing (both outer and inner reads with shadowing)
   for (const chain of shadowedChains) {
     chainCounts.delete(chain);
   }
 
-  return { chainCounts, scopeDefs };
+  return { chainCounts, scopeDefs, firstChainUse };
 }
 
+/** Collected metadata about array-element accesses inside a loop.
+ *
+ * - `counts`: Read frequency per array base name (e.g., "arr" → 4). LHS writes are not counted
+ *   because the write-back still requires one table lookup.
+ * - `writes`: Base names that appear on the LHS of assignments.
+ * - `loopVar`: Which loop variable is used as index for each base name. If multiple indices
+ *   are detected, the base is excluded from counts/writes/loopVar.
+ * - `firstAccess`: First `base[loopVar]` TableIndexExpression observed for each base name,
+ *   used to position hoisted locals.
+ */
 export interface ArrayElementInfo {
   /** Read-count per base name (LHS writes are NOT counted — only reads benefit from localization) */
   counts: Map<string, number>;
@@ -151,6 +178,8 @@ export interface ArrayElementInfo {
   writes: Set<string>;
   /** Which loop variable is used as index for each base name */
   loopVar: Map<string, string>;
+  /** First `base[loopVar]` TableIndexExpression observed for each base name (in source order). */
+  firstAccess: Map<string, tstl.Node>;
 }
 
 /**
@@ -166,6 +195,7 @@ export function collectArrayElementAccesses(
   const counts = new Map<string, number>();
   const writes = new Set<string>();
   const loopVar = new Map<string, string>();
+  const firstAccess = new Map<string, tstl.Node>();
   // Bases used with multiple different loop vars — excluded from hoisting
   const mixedIndex = new Set<string>();
 
@@ -191,6 +221,7 @@ export function collectArrayElementAccesses(
         if (hooks.guardDepth === 0) {
           trackLoopVar(expr.table.text, expr.index.text);
           counts.set(expr.table.text, (counts.get(expr.table.text) ?? 0) + 1);
+          if (!firstAccess.has(expr.table.text)) firstAccess.set(expr.table.text, expr);
         }
         return Walk.skip;
       }
@@ -223,25 +254,40 @@ export function collectArrayElementAccesses(
   };
   walkStatements(statements, hooks);
 
-  // Remove bases with inconsistent indices
   for (const name of mixedIndex) {
     counts.delete(name);
     writes.delete(name);
     loopVar.delete(name);
   }
 
-  return { counts, writes, loopVar };
+  return { counts, writes, loopVar, firstAccess };
 }
 
-/** Reconstruct a TableIndexExpression from a dotted chain string (e.g. "math.floor"). */
-export function buildChainExpression(chain: string): tstl.TableIndexExpression {
+/**
+ * Reconstruct a TableIndexExpression from a dotted chain string (e.g. "math.floor").
+ *
+ * When `source` is provided, every created node is stamped with `source`'s position
+ * via `withPositionFrom` so hoisted declarations map to the first-use site.
+ */
+export function buildChainExpression(chain: string, source?: tstl.Node): tstl.TableIndexExpression {
   const parts = chain.split(".");
   if (parts.length < 2) {
     throw new Error(`buildChainExpression requires a dotted chain (got "${chain}")`);
   }
-  let expr: tstl.Expression = tstl.createIdentifier(parts[0]);
-  for (let i = 1; i < parts.length; i++) {
-    expr = tstl.createTableIndexExpression(expr, tstl.createStringLiteral(parts[i]));
+  const root = tstl.createIdentifier(parts[0]);
+  if (source) withPositionFrom(root, source);
+  // Build the first TableIndexExpression from the root identifier. The parts.length < 2
+  // guard above ensures parts[1] exists, so the non-null assertion is safe.
+  // biome-ignore lint/style/noNonNullAssertion: length guard above proves parts[1] is defined
+  const firstKey = tstl.createStringLiteral(parts[1]!);
+  if (source) withPositionFrom(firstKey, source);
+  let result: tstl.TableIndexExpression = tstl.createTableIndexExpression(root, firstKey);
+  if (source) withPositionFrom(result, source);
+  for (const part of parts.slice(2)) {
+    const key = tstl.createStringLiteral(part);
+    if (source) withPositionFrom(key, source);
+    result = tstl.createTableIndexExpression(result, key);
+    if (source) withPositionFrom(result, source);
   }
-  return expr as tstl.TableIndexExpression;
+  return result;
 }

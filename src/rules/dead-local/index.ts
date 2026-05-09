@@ -4,8 +4,15 @@ import * as tstl from "typescript-to-lua";
 import { isLuaRhsPure } from "../../ast/lua-ast";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import type { RuleFactory } from "../../config";
+import { getTransformedFile } from "../source-file";
 import { collectReadSymbols, findFirstAccessKind } from "./access";
 
+/**
+ * Metadata about a dead-local candidate.
+ * - `index`: Position in the statement array.
+ * - `stmt`: The variable declaration statement itself.
+ * - `rhs`: The right-hand side initializer expression.
+ */
 type DeadLocalDeclaration = {
   index: number;
   stmt: tstl.VariableDeclarationStatement;
@@ -39,15 +46,17 @@ function getNestedScopeStatements(stmt: tstl.Statement): tstl.Statement[] | unde
 /**
  * Two-pass dead-local elimination on a single function body's statement list.
  *
- * Pass 1 (shallow): collect single-var declarations at this scope only — `shallow: true`
- * stops at FunctionExpression boundaries so nested declarations aren't misattributed.
+ * **Pass 1 (shallow)**: Collect single-variable declarations at this scope only. We stop at
+ * FunctionExpression boundaries so nested declarations (which have their own scope) aren't
+ * misattributed to this scope.
  *
- * Pass 2 (deep): collect all identifier reads. Deep walk is required so closure captures
- * inside nested functions count as reads of the outer declaration.
+ * **Pass 2 (deep)**: Collect all identifier reads across the entire statement list. A deep walk
+ * is required because closure captures inside nested functions count as reads of the outer
+ * scope's declaration — skipping them would incorrectly mark the outer variable as dead.
  */
 function eliminateDeadLocals(
   statements: tstl.Statement[],
-  preserveFunctionExpressionDecls = false,
+  preserveFunctionExpressionDecls: boolean = false,
 ): void {
   const declsBySymbol = new Map<number, DeadLocalDeclaration>();
 
@@ -71,11 +80,13 @@ function eliminateDeadLocals(
 
     const toRemove = new Set<tstl.Statement>();
     for (const [symbolId, { index, stmt, rhs }] of declsBySymbol) {
-      const firstAccess = findFirstAccessKind(statements.slice(index + 1), symbolId);
+      // Skip impure RHS early: the initializer must execute for its side effects
+      // even when the variable is never read, so nothing can be dropped or erased.
       if (!canDropInitializer(rhs, preserveFunctionExpressionDecls)) {
         continue;
       }
 
+      const firstAccess = findFirstAccessKind(statements.slice(index + 1), symbolId);
       if (firstAccess === "write") {
         stmt.right = undefined;
         continue;
@@ -84,13 +95,11 @@ function eliminateDeadLocals(
       if (!reads.has(symbolId)) {
         toRemove.add(stmt);
       }
-      // Impure RHS must execute even when the variable is never read — keep it.
     }
 
     if (toRemove.size > 0) {
       const kept = statements.filter((s) => !toRemove.has(s));
-      statements.length = 0;
-      statements.push(...kept);
+      statements.splice(0, statements.length, ...kept);
     }
   }
 
@@ -132,9 +141,10 @@ function recurseIntoNestedScopes(statements: tstl.Statement[]): void {
 export const createVisitors: RuleFactory = (): tstl.Visitors => ({
   [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context): tstl.File => {
     const nodes = context.superTransformNode(node);
-    const file = (Array.isArray(nodes) ? nodes[0] : nodes) as tstl.File;
-    if (!file || !tstl.isFile(file) || !file.statements) return file;
-    // Module-level locals are intentionally excluded — only function-scope dead locals are removed.
+    const file = getTransformedFile(nodes);
+    // Module-level locals are not eliminated because they may be accessed by code outside the
+    // module (e.g., by other modules that import them). We only eliminate dead locals within
+    // function bodies, where scope is guaranteed to be contained.
     recurseIntoNestedScopes(file.statements);
     return file;
   },
