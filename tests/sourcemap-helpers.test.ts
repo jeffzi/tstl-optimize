@@ -42,7 +42,9 @@ describe("compileWithSourceMap", () => {
   });
 
   it("runs the Lua syntax check by default", () => {
-    expect(() => compileWithSourceMap(INVALID_LUA_SOURCE)).toThrow(/break outside loop/);
+    expect(() => compileWithSourceMap(INVALID_LUA_SOURCE)).toThrow(
+      /break outside loop|no loop to break/,
+    );
   });
 
   it("skips the Lua syntax check when skipLuaCheck is true", () => {
