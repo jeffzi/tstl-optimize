@@ -34,7 +34,8 @@ const cubed = x ** 3;
 const maxLit = Math.max(2, 3);
 const minLit = Math.min(1, 2);
 
-// Non-literal or 3-arg calls fall through to math.max/math.min
+// Not rewritten: 3+ arguments or non-literal operands fall through to
+// math.max/math.min — the short-circuit pattern only handles 2 literal args
 const biggest = Math.max(x, y, speed);
 
 print(dist); // 201.24611797498

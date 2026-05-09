@@ -33,7 +33,7 @@ const inf = 1 / 0;
 declare function getValue(): number;
 const runtime = getValue() + 1;
 
-// Mixed: one constant operand does not fold the whole expression
+// Not folded: x is a runtime variable — both operands must be constant
 const mixed = x + 1;
 
 print(a, b, c, d);

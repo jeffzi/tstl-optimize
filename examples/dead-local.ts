@@ -26,7 +26,8 @@ function impureUnused(): number {
   return 0;
 }
 
-// Limitation: module-scope locals are not removed (only function-scope)
+// Not removed: module-scope locals may be read by other modules — only
+// function-scope locals are eligible
 const moduleLevel = 99; // not touched — module scope
 
 // Limitation: multi-variable declaration — skipped entirely

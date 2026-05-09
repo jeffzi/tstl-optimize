@@ -11,6 +11,9 @@ const velY = [0, 0];
 const count = 2;
 const dt = 0.5;
 
+// config.physics.friction accessed 2x in loop → hoisted to a local above
+// the loop. velX[i] and velY[i] read and written multiple times → cached
+// in locals within the loop body, written back at end of each iteration.
 for (const i of $range(0, count - 1)) {
   velX[i] = velX[i] * config.physics.friction;
   velY[i] = velY[i] + config.physics.gravity * dt;
@@ -19,12 +22,13 @@ for (const i of $range(0, count - 1)) {
   posY[i] = posY[i] + velY[i] * dt;
 }
 
+// config.physics.gravity accessed only 1x per scope → not hoisted
 const terminalSpeed = config.physics.gravity / config.physics.friction;
 
 // --- Limitations ---
 
-// Array elements not localized: applyDrag mutates the drag array, so caching
-// drag[i] in a local would miss the side-effect
+// Not localized: applyDrag() mutates the drag array between reads — caching
+// drag[i] in a local would miss the write from the function call
 const drag = [1.0, 0.9];
 function applyDrag(i: number) {
   drag[i] = drag[i] * 0.5;

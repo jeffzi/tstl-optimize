@@ -7,6 +7,7 @@ t = 0.5
 offset = 10
 displayHp = (hp + (maxHp - hp) * t)
 flipped = (-offset)
+stats = {atk = {base = 100}}
 atkSquared = mul(stats.atk.base)
 playerHp = 75
 local ____inline_arg_0 = "hp"

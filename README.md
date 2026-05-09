@@ -61,7 +61,7 @@ Rule reference:
 npm install --save-dev typescript-to-lua tstl-optimize
 ```
 
-**Peer dependency:** `typescript-to-lua >= 1.22.0` (tested against `1.34.0`).
+Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
 
 ## Usage
 
@@ -318,6 +318,8 @@ through the `math` table. The rule skips LuaJIT targets, which already handle C 
 | `Math.min(1, 2)` | `(1 < 2) and 1 or 2` | 2-arg, numeric literals only |
 | `x ** 2` | `x * x` | Lossless. Literal `2` exponent only |
 
+*Lossless: the rewrite produces bit-identical results to the original call for all finite inputs.*
+
 `abs` and `floor` rewrite only side-effect-free arguments, so duplicating them is safe. `max` and
 `min` rewrite only when **both** arguments are numeric literals, which — combined with
 `constant-folding` — collapses the pattern at compile time; non-literal arguments fall through to
@@ -419,12 +421,11 @@ for (const i of $range(0, n - 1)) {
 -- After:  for i = 1, n do arr[i] = value end
 ```
 
-The rule bails out when the body assigns the control variable, uses it without `+ 1`, or shadows it
-in a nested declaration.
+The rule skips the loop when the body assigns the control variable, uses the control variable without `+ 1`, or shadows it in a nested declaration.
 
 ### `inline`
 
-Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries.
+Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)).
 
 ```typescript
 /** @inline */
@@ -433,6 +434,13 @@ function double(x: number) {
 }
 const y = double(5); // becomes: const y = 5 * 2
 ```
+
+> **Source map caveat:** The `inline` rule currently has limited debugger support. Because the
+> original `@inline` function body is removed and emitted at each call site, breakpoints set inside
+> the original function body may not resolve. Some debuggers, including
+> [Local Lua Debugger for VS Code](https://github.com/tomblind/local-lua-debugger-vscode), can
+> error instead of moving the breakpoint to a mapped line. For debugging, set breakpoints at call
+> sites or disable `rules.inline` in your debug config.
 
 Cross-module inlining works for self-contained functions that only reference parameters and
 literals. The rule skips functions that capture module-scope variables and emits a diagnostic
@@ -774,8 +782,9 @@ an optimization cannot be applied:
 ```
 
 Use a per-rule `strict` override to exempt a specific rule from the global setting. The `inline` and
-`conditional-compilation` rules support per-rule strict. The example below enables global strict but
-keeps inline diagnostics as warnings:
+`conditional-compilation` rules support per-rule strict.
+
+The example below enables global strict but keeps `inline` diagnostics as warnings:
 
 ```jsonc
 {
@@ -786,6 +795,27 @@ keeps inline diagnostics as warnings:
         "strict": true,
         "rules": {
           "inline": { "strict": false }
+        }
+      }
+    ]
+  }
+}
+```
+
+This example enables global strict but keeps `conditional-compilation` diagnostics as warnings:
+
+```jsonc
+{
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "tstl-optimize",
+        "strict": true,
+        "rules": {
+          "conditional-compilation": {
+            "constants": { "DEBUG": { "env": "DEBUG", "default": false } },
+            "strict": false
+          }
         }
       }
     ]
@@ -858,12 +888,13 @@ Check the [`inline` conditions](#inline). Common causes:
 Enable `strict: true` on the `inline` rule to promote the warning to a hard error and see exactly
 which condition failed.
 
-### A local shadowing a stdlib name got rewritten
+### A local variable sharing a stdlib name got rewritten
 
 All rules that match identifiers (`conditional-compilation`, `debug-strip`, `localizer`,
-`math-intrinsics`) are **name-based**, not type-based, after TSTL has lowered the file. A local
-`print` will still be stripped by `debug-strip`. Rename the local or remove the global from the
-rule's match list.
+`math-intrinsics`) match Lua-level text, not TypeScript types — TSTL has already lowered the file
+by the time rules run. A local named `print` will be stripped by `debug-strip` just like the
+global. Rename the local, or remove the identifier from the rule's match list (e.g. `exclude` for
+`localizer`, `functions` for `debug-strip`).
 
 ### `conditional-compilation` doesn't substitute my constant
 
@@ -879,17 +910,19 @@ not propagate.
 
 ### My `localizer` rule doesn't hoist a chain rooted at a library global
 
-The default allowlist is stdlib-only. Add your library roots via `include`:
+The default allowlist is stdlib-only to protect against metatable-based APIs where hoisting would
+collapse the `__index` chain and silently change behavior. Add your library roots via `include`:
 
 ```jsonc
 "localizer": { "include": ["go", "msg", "vmath"] }
 ```
 
-See the [root filtering](#root-filtering) section for the full resolution formula.
+See [root filtering](#root-filtering) for the full resolution formula and engine-specific examples
+(Defold, WoW).
 
 ### `npm install` warns about peer dep version
 
-`typescript-to-lua >= 1.22.0` is the documented floor; CI tests against `1.34.0`. Older TSTL
+`typescript-to-lua >= 1.22.0` is the documented floor; CI tests against `1.36.0`. Older TSTL
 versions may work but are not verified — if you see plugin behavior that contradicts this README,
 upgrade TSTL first.
 
