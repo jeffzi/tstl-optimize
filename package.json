@@ -1,6 +1,6 @@
 {
   "name": "tstl-optimize",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "TSTL plugin with configurable optimization rules for faster Lua output",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
