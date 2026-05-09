@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-09
+
+### Added
+
+- Optimization rules now keep source maps aligned through transforms, so debuggers and stack
+  traces point back to the correct TypeScript locations after inlining, hoisting, and rewriting.
+  This covers **conditional-compilation**, **loop-rebase**, **math-intrinsics**,
+  **remove-empty-branch**, **inline**, and **localizer**.
+
+### Changed
+
+- **inline** now inlines call arguments that are provably evaluated before any side effect
+  directly, without wrapping them in an eager temporary. This reduces unnecessary IIFE wrappers
+  in the output.
+
+## [0.7.1] - 2026-04-28
+
 ### Fixed
 
 - **inline** preserves call-site binding when inlined function body declares a local with the same name.
@@ -32,7 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **dead-local** rule — eliminate unused local variables.
 - **merge-locals** rule — merge local variable declarations with subsequent assignments.
 - **remove-empty-branch** rule — drop `if`/`else` branches whose body is empty.
-- **debug-strip** rule now includes `console` in its default namespaces.
 
 ### Fixed
 
@@ -139,7 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
 - Runnable examples with generation script.
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.5.0...v0.6.0
