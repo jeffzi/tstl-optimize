@@ -7,6 +7,8 @@ import {
 } from "../../../../src/rules/inline/cross-module";
 import { findNode, makeChecker, makeMultiFileChecker } from "../helpers";
 
+type DescendantNodeKey = "functionDeclaration" | "returnStatement";
+
 function findFunction(sourceFile: ts.SourceFile, name = "fn"): ts.FunctionDeclaration {
   const declaration = findNode(
     sourceFile,
@@ -18,18 +20,39 @@ function findFunction(sourceFile: ts.SourceFile, name = "fn"): ts.FunctionDeclar
 }
 
 describe("isDescendant", () => {
-  it("detects descendant relationships", () => {
+  it.each<{
+    ancestor: DescendantNodeKey;
+    descendant: DescendantNodeKey;
+    expected: boolean;
+    name: string;
+  }>([
+    {
+      name: "return statement inside function declaration",
+      descendant: "returnStatement",
+      ancestor: "functionDeclaration",
+      expected: true,
+    },
+    {
+      name: "function declaration inside return statement",
+      descendant: "functionDeclaration",
+      ancestor: "returnStatement",
+      expected: false,
+    },
+  ])("returns $expected for $name", ({ ancestor, descendant, expected }) => {
     const { sourceFile } = makeChecker("function fn() { const x = 1; return x; }");
     const fn = findFunction(sourceFile);
     const returnStatement = findNode(fn, ts.isReturnStatement);
     if (!returnStatement) throw new Error("expected return statement");
+    const nodes: Record<DescendantNodeKey, ts.Node> = {
+      functionDeclaration: fn,
+      returnStatement,
+    };
 
-    expect(isDescendant(returnStatement, fn)).toBe(true);
-    expect(isDescendant(fn, returnStatement)).toBe(false);
+    expect(isDescendant(nodes[descendant], nodes[ancestor])).toBe(expected);
   });
 });
 
-describe("classifyCrossModuleFreeVariables", () => {
+describe("hasCrossModuleFreeVariable", () => {
   it.each<{
     expected: boolean;
     name: string;
@@ -103,6 +126,13 @@ describe("classifyCrossModuleFreeVariables", () => {
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
     {
+      name: "chained method call receiver (non-identifier after unwrap)",
+      expected: false,
+      source:
+        "function fn(obj: { method(): { value: number } }): number { return obj.method().value; }",
+      selectNodes: (fn) => fn.body?.statements ?? [],
+    },
+    {
       name: "shorthand property with same-file identifier",
       expected: true,
       source: "const localVar = 5; function fn(): object { return { localVar }; }",
@@ -125,9 +155,10 @@ describe("classifyCrossModuleFreeVariables", () => {
     expect(hasCrossModuleFreeVariable(selectNodes(fn), fn.parameters, fn, checker)).toBe(expected);
   });
 
-  it("detects aliased imports when checking free variables", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
+  it.each<{ name: string; files: Record<string, string> }>([
+    {
+      name: "aliased imports",
+      files: {
         "constants.ts": "export const LIMIT = 1;",
         "test.ts": `
           import { LIMIT } from "./constants";
@@ -137,8 +168,101 @@ describe("classifyCrossModuleFreeVariables", () => {
           }
         `,
       },
-      "test.ts",
-    );
+    },
+    {
+      name: "cross-module free variables in computed property names",
+      files: {
+        "keys.ts": "export const KEY = 'myKey';",
+        "test.ts": `
+          import { KEY } from "./keys";
+
+          function fn(): object {
+            return { [KEY]: 42 };
+          }
+        `,
+      },
+    },
+    {
+      name: "cross-module free variables in element access expressions",
+      files: {
+        "arrays.ts": "export const ARR = [1, 2, 3];",
+        "test.ts": `
+          import { ARR } from "./arrays";
+
+          function fn(): number {
+            return ARR[0];
+          }
+        `,
+      },
+    },
+    {
+      name: "cross-module free variables in object spread initializers",
+      files: {
+        "objects.ts": "export const obj = { x: 1 };",
+        "test.ts": `
+            import { obj } from "./objects";
+
+            function fn(): object {
+              const enhanced = { ...obj, y: 2 };
+              return enhanced;
+            }
+          `,
+      },
+    },
+    {
+      name: "aliased cross-module identifiers through type assertions",
+      files: {
+        "constants.ts": "export const LIMIT = 100;",
+        "test.ts": `
+          import { LIMIT as MAX } from "./constants";
+
+          function fn(): number {
+            return MAX as any;
+          }
+        `,
+      },
+    },
+    {
+      name: "aliased cross-module identifiers",
+      files: {
+        "constants.ts": "export const LIMIT = 100;",
+        "test.ts": `
+          import { LIMIT as MAX } from "./constants";
+
+          function fn(): number {
+            return MAX;
+          }
+        `,
+      },
+    },
+    {
+      name: "aliased identifiers in shorthand property assignments",
+      files: {
+        "constants.ts": "export const VALUE = 42;",
+        "test.ts": `
+          import { VALUE as VAL } from "./constants";
+
+          function fn(): object {
+            return { VAL };
+          }
+        `,
+      },
+    },
+    {
+      name: "aliased property access on cross-module exports",
+      files: {
+        "constants.ts": "export const CONFIG = { limit: 100 };",
+        "test.ts": `
+          import { CONFIG as CFG } from "./constants";
+
+          function fn(): number {
+            return CFG.limit;
+          }
+        `,
+      },
+    },
+  ])("detects $name", ({ files }) => {
+    const { checker, sourceFile } = makeMultiFileChecker(files, "test.ts");
     const fn = findFunction(sourceFile);
 
     expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
@@ -146,7 +270,29 @@ describe("classifyCrossModuleFreeVariables", () => {
     );
   });
 
-  it("walks synthetic nodes without checker symbols", () => {
+  it("detects cross-module variables in destructured parameter defaults", () => {
+    const { checker, sourceFile } = makeMultiFileChecker(
+      {
+        "shared.ts": "export const enhanced = { x: 2 };",
+        "test.ts": `
+            import { enhanced } from "./shared";
+
+            function fn({ shared = enhanced }: any = {}): any {
+              return shared;
+            }
+          `,
+      },
+      "test.ts",
+    );
+    const fn = findFunction(sourceFile);
+    const params = fn.parameters;
+
+    expect(hasCrossModuleFreeVariable(params, [], fn, checker)).toBe(true);
+  });
+});
+
+describe("classifyCrossModuleFreeVariables", () => {
+  it("blocks synthetic identifiers without checker symbols", () => {
     const { checker, sourceFile } = makeChecker("function fn(): void {}");
     const fn = findFunction(sourceFile);
     const propertyAccess = ts.factory.createPropertyAccessExpression(
@@ -165,175 +311,11 @@ describe("classifyCrossModuleFreeVariables", () => {
       checker,
     );
 
-    expect(result.blocking).toHaveLength(0);
+    expect(result.blocking.map((node) => node.text)).toStrictEqual([
+      "MISSING",
+      "MISSING",
+      "MISSING",
+    ]);
     expect(result.substitutions.size).toBe(0);
-  });
-
-  it("detects cross-module free variables in computed property names", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "keys.ts": "export const KEY = 'myKey';",
-        "test.ts": `
-          import { KEY } from "./keys";
-
-          function fn(): object {
-            return { [KEY]: 42 };
-          }
-        `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects cross-module free variables in element access expressions", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "arrays.ts": "export const ARR = [1, 2, 3];",
-        "test.ts": `
-          import { ARR } from "./arrays";
-
-          function fn(): number {
-            return ARR[0];
-          }
-        `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects cross-module free variables in shorthand property with object assignment initializer", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "objects.ts": "export const obj = { x: 1 };",
-        "test.ts": `
-            import { obj } from "./objects";
-
-            function fn(): object {
-              const enhanced = { ...obj, y: 2 };
-              return enhanced;
-            }
-          `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects cross-module aliased symbols in property access", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "constants.ts": "export const LIMIT = 100;",
-        "test.ts": `
-          import { LIMIT as MAX } from "./constants";
-
-          function fn(): number {
-            return MAX as any;
-          }
-        `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects aliased property access on cross-module identifiers", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "constants.ts": "export const LIMIT = 100;",
-        "test.ts": `
-          import { LIMIT as MAX } from "./constants";
-
-          function fn(): number {
-            return MAX;
-          }
-        `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects aliased identifiers in shorthand property assignments", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "constants.ts": "export const VALUE = 42;",
-        "test.ts": `
-          import { VALUE as VAL } from "./constants";
-
-          function fn(): object {
-            return { VAL };
-          }
-        `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects aliased property access on cross-module exports", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "constants.ts": "export const CONFIG = { limit: 100 };",
-        "test.ts": `
-          import { CONFIG as CFG } from "./constants";
-
-          function fn(): number {
-            return CFG.limit;
-          }
-        `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects cross-module variables in function parameters with shorthand property defaults", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
-        "shared.ts": "export const enhanced = { x: 2 };",
-        "test.ts": `
-            import { enhanced } from "./shared";
-
-            function fn({ shared = enhanced }: any = {}): any {
-              return shared;
-            }
-          `,
-      },
-      "test.ts",
-    );
-    const fn = findFunction(sourceFile);
-    const params = fn.parameters;
-
-    expect(hasCrossModuleFreeVariable(params, [], fn, checker)).toBe(true);
   });
 });

@@ -2,10 +2,35 @@ import { describe, expect, it } from "vitest";
 import { compileMultiFileWithDiagnostics, normalizeLua } from "../../../helpers";
 import { hasDiagnosticCode } from "../helpers";
 
+const CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC = 90003;
+
+function compileMultiFile(files: Record<string, string>) {
+  const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
+  return { diagnostics, normalized: normalizeLua(lua) };
+}
+
+function compileAndExpectNoDiagnostics(files: Record<string, string>): string {
+  const { diagnostics, normalized } = compileMultiFile(files);
+  expect(diagnostics).toHaveLength(0);
+  return normalized;
+}
+
+function compileAndVerifyInlined(files: Record<string, string>): string {
+  const { diagnostics, normalized } = compileMultiFile(files);
+  expect(diagnostics).toHaveLength(0);
+  return normalized;
+}
+
+function compileAndExpectCrossModuleDiagnostic(files: Record<string, string>): string {
+  const { diagnostics, normalized } = compileMultiFile(files);
+  expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
+  return normalized;
+}
+
 describe("cross-module const literal inlining", () => {
   describe("when substituting literals inside rewritten bodies", () => {
     it("substitutes exported const literals inside compound expressions", () => {
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+      const normalized = compileAndExpectNoDiagnostics({
         "shared.ts": `
           export const OFFSET = 42;
 
@@ -21,14 +46,12 @@ describe("cross-module const literal inlining", () => {
         `,
       });
 
-      expect(diagnostics).toHaveLength(0);
-      const normalized = normalizeLua(lua);
       expect(normalized).toContain("(43)");
       expect(normalized).not.toContain("addOffset(1)");
     });
 
     it("substitutes exported const literals through imported aliases", () => {
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+      const normalized = compileAndExpectNoDiagnostics({
         "constants.ts": `
           export const VALUE = 7;
         `,
@@ -47,8 +70,6 @@ describe("cross-module const literal inlining", () => {
         `,
       });
 
-      expect(diagnostics).toHaveLength(0);
-      const normalized = normalizeLua(lua);
       expect(normalized).toContain("7");
       expect(normalized).not.toContain("readValue()");
     });
@@ -81,10 +102,7 @@ describe("cross-module const literal inlining", () => {
           `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain(assertion);
     });
   });
@@ -106,10 +124,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain("255");
     });
   });
@@ -134,7 +149,7 @@ describe("cross-module const literal inlining", () => {
 
       const { diagnostics } = compileMultiFileWithDiagnostics(files);
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
+      expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes(
@@ -183,11 +198,66 @@ describe("cross-module const literal inlining", () => {
         },
         preservedCall: "____exports.result = describeFlag()",
       },
-    ])("emits diagnostic 90003 when $name", ({ files, preservedCall }) => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
+      {
+        name: "the exported const is the receiver of an element-access expression",
+        files: {
+          "utils.ts": `
+            export const NAME = "Alice";
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
-      expect(normalizeLua(lua)).toContain(preservedCall);
+            /** @inline */
+            export function getChar(): string {
+              return NAME[0];
+            }
+          `,
+          "main.ts": `
+            import { getChar } from "./utils";
+
+            export const result = getChar();
+          `,
+        },
+        preservedCall: "____exports.result = getChar()",
+      },
+      {
+        name: "the inline body reads an ambient global that the call site shadows",
+        files: {
+          "globals.d.ts": `
+            declare const GLOBAL_VALUE: number;
+          `,
+          "utils.ts": `
+            /** @inline */
+            export function readGlobal(): number {
+              return GLOBAL_VALUE;
+            }
+          `,
+          "main.ts": `
+            import { readGlobal } from "./utils";
+
+            const GLOBAL_VALUE = 1;
+            export const result = readGlobal();
+          `,
+        },
+        preservedCall: "____exports.result = readGlobal()",
+      },
+      {
+        name: "the inline body reads declarationless runtime arguments",
+        files: {
+          "utils.ts": `
+            /** @inline */
+            export function argumentCount(): number {
+              return arguments.length;
+            }
+          `,
+          "main.ts": `
+            import { argumentCount } from "./utils";
+
+            export const result = argumentCount();
+          `,
+        },
+        preservedCall: "____exports.result = argumentCount()",
+      },
+    ])("emits diagnostic 90003 when $name", ({ files, preservedCall }) => {
+      const normalized = compileAndExpectCrossModuleDiagnostic(files);
+      expect(normalized).toContain(preservedCall);
     });
 
     it("emits diagnostic 90003 when an exported const is used as an element-access index", () => {
@@ -208,10 +278,8 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
-      expect(normalizeLua(lua)).toContain("readAt(values)");
+      const normalized = compileAndExpectCrossModuleDiagnostic(files);
+      expect(normalized).toContain("readAt(values)");
     });
   });
 
@@ -255,7 +323,7 @@ describe("cross-module const literal inlining", () => {
     ])("emits diagnostic 90003 when const is $name", ({ files }) => {
       const { diagnostics } = compileMultiFileWithDiagnostics(files);
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
+      expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
     });
   });
 
@@ -274,12 +342,11 @@ describe("cross-module const literal inlining", () => {
         }
       `;
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+      const normalized = compileAndVerifyInlined({
         "main.ts": code,
       });
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
-      expect(normalizeLua(lua)).toContain("42");
+      expect(normalized).toContain("42");
     });
   });
 
@@ -301,10 +368,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain("2");
       expect(normalized).not.toContain("getB()");
     });
@@ -327,10 +391,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).not.toContain("combine()");
       expect(normalized).toContain("1");
       expect(normalized).toContain('"hello"');
@@ -355,10 +416,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain("{X = 10}");
       expect(normalized).not.toContain("____exports.X");
     });
@@ -412,10 +470,7 @@ describe("cross-module const literal inlining", () => {
         },
       },
     ])("inlines $name", ({ expectedLua, files, removedCall }) => {
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain(expectedLua);
       expect(normalized).not.toContain(removedCall);
     });
@@ -441,10 +496,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toMatch(/return 10, (value|____inline_arg_0)/);
       expect(normalized).not.toContain("____exports.X");
     });
@@ -467,10 +519,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain("10");
       expect(normalized).not.toContain("____exports.X");
     });
@@ -496,10 +545,8 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
-      expect(normalizeLua(lua)).toContain(assertion);
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain(assertion);
     });
   });
 
@@ -523,10 +570,8 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
-      expect(normalizeLua(lua)).toContain("42");
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain("42");
     });
   });
 
@@ -549,7 +594,7 @@ describe("cross-module const literal inlining", () => {
 
       const { diagnostics } = compileMultiFileWithDiagnostics(files);
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
+      expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
     });
   });
 
@@ -594,10 +639,7 @@ describe("cross-module const literal inlining", () => {
         },
       },
     ])("inlines $name function with const reference", ({ files, assertion }) => {
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-      const normalized = normalizeLua(lua);
-
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
+      const normalized = compileAndVerifyInlined(files);
       expect(normalized).toContain(assertion);
     });
   });
@@ -619,10 +661,174 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain('""');
+    });
+  });
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(false);
-      expect(normalizeLua(lua)).toContain('""');
+  describe("when const is a computed expression", () => {
+    it("inlines simple computed const (power operation)", () => {
+      const files = {
+        "shared.ts": `
+          const BITS = 24;
+          export const MAX = 2 ** BITS;
+
+          /** @inline */
+          export function scale(x: number): number {
+            return x * MAX;
+          }
+        `,
+        "main.ts": `
+          import { scale } from "./shared";
+          export const result = scale(3);
+        `,
+      };
+
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain("50331648");
+    });
+
+    it("inlines chained computed consts", () => {
+      const files = {
+        "shared.ts": `
+          const A = 2;
+          const B = A ** 3;
+          export const C = B * 2;
+
+          /** @inline */
+          export function apply(x: number): number {
+            return x + C;
+          }
+        `,
+        "main.ts": `
+          import { apply } from "./shared";
+          export const result = apply(1);
+        `,
+      };
+
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain("17");
+    });
+
+    it("emits diagnostic 90003 when mixed computed const and blocking refs", () => {
+      const files = {
+        "shared.ts": `
+          const BITS = 8;
+          export const MAX = 2 ** BITS;
+          export function helper(): number {
+            return 1;
+          }
+
+          /** @inline */
+          export function mixed(): number {
+            return MAX + helper();
+          }
+        `,
+        "main.ts": `
+          import { mixed } from "./shared";
+          const r = mixed();
+        `,
+      };
+
+      const { diagnostics } = compileMultiFileWithDiagnostics(files);
+
+      expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
+    });
+
+    it("inlines computed const through import alias", () => {
+      const files = {
+        "constants.ts": `
+          const BASE = 255;
+          export const MULTIPLIER = BASE * 8;
+        `,
+        "shared.ts": `
+          import { MULTIPLIER } from "./constants";
+
+          /** @inline */
+          export function scale(val: number): number {
+            return val * MULTIPLIER;
+          }
+        `,
+        "main.ts": `
+          import { scale } from "./shared";
+          export const result = scale(2);
+        `,
+      };
+
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain("4080");
+    });
+
+    it("inlines computed const whose initializer reads an imported const", () => {
+      const files = {
+        "constants.ts": `
+          export const BASE = 255;
+        `,
+        "shared.ts": `
+          import { BASE } from "./constants";
+          export const MULTIPLIER = BASE * 8;
+
+          /** @inline */
+          export function scale(val: number): number {
+            return val * MULTIPLIER;
+          }
+        `,
+        "main.ts": `
+          import { scale } from "./shared";
+          export const result = scale(2);
+        `,
+      };
+
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain("4080");
+    });
+  });
+
+  describe("when body references computed template literal const", () => {
+    it("inlines simple computed template literal", () => {
+      const files = {
+        "utils.ts": `
+          export const MAX = 2 ** 8;
+          export const MSG = \`max: \${MAX - 1}\`;
+
+          /** @inline */
+          export function getMessage(): string {
+            return MSG;
+          }
+        `,
+        "main.ts": `
+          import { getMessage } from "./utils";
+          const m = getMessage();
+        `,
+      };
+
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain('"max: 255"');
+    });
+
+    it("inlines OVERFLOW_MSG pattern with computed template literal and computed const", () => {
+      const files = {
+        "utils.ts": `
+          const SAFE_BITS = 53;
+          const GEN_BITS = 24;
+          export const MAX_INDEX = 2 ** (SAFE_BITS - GEN_BITS);
+
+          export const OVERFLOW_MSG = \`entity index overflow (max \${MAX_INDEX - 1} per world)\`;
+
+          /** @inline */
+          export function getConstraints(): { msg: string; limit: number } {
+            return { msg: OVERFLOW_MSG, limit: MAX_INDEX };
+          }
+        `,
+        "main.ts": `
+          import { getConstraints } from "./utils";
+          const c = getConstraints();
+        `,
+      };
+
+      const normalized = compileAndVerifyInlined(files);
+      expect(normalized).toContain('"entity index overflow (max 536870911 per world)"');
+      expect(normalized).toContain("536870912");
     });
   });
 });

@@ -1,57 +1,73 @@
 import ts from "typescript";
 
-/**
- * A discriminated union representing a primitive literal value extracted from a TypeScript node.
- */
 export type LiteralKind =
   | { kind: "number"; value: number }
   | { kind: "string"; value: string }
   | { kind: "boolean"; value: boolean };
 
-/**
- * Extracts a primitive literal value from a TypeScript expression node.
- *
- * Recursively unwraps:
- * - `ParenthesizedExpression` — `(42)` → `{ kind: "number", value: 42 }`
- * - `AsExpression` — `42 as const` → `{ kind: "number", value: 42 }`
- * - `TypeAssertionExpression` — `<const>42` → `{ kind: "number", value: 42 }`
- *
- * Recognizes:
- * - `NumericLiteral` → `{ kind: "number", value: number }`
- * - `StringLiteral` / `NoSubstitutionTemplateLiteral` → `{ kind: "string", value: string }`
- * - `TrueKeyword` / `FalseKeyword` → `{ kind: "boolean", value: boolean }`
- * - `PrefixUnaryExpression` with `MinusToken` or `PlusToken` over `NumericLiteral`
- *
- * Returns `undefined` for anything else (identifiers, binary expressions, object literals, etc.).
- */
-export function extractPrimitiveLiteral(node: ts.Expression): LiteralKind | undefined {
-  // Unwrap transparent wrapper nodes
-  if (
-    ts.isParenthesizedExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node)
+export function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
   ) {
-    return extractPrimitiveLiteral(node.expression);
+    current = current.expression;
+  }
+  return current;
+}
+
+function stringifyTemplateSpanValue(literal: LiteralKind): string | undefined {
+  switch (literal.kind) {
+    case "string":
+      return literal.value;
+    case "boolean":
+      return literal.value ? "true" : "false";
+    case "number":
+      if (!Number.isSafeInteger(literal.value)) return undefined;
+      if (Math.abs(literal.value) >= 1e14) return undefined;
+      return String(literal.value);
+  }
+}
+
+function evaluateTemplateLiteral(
+  expression: ts.TemplateExpression,
+  evaluateSpan: (node: ts.Expression) => LiteralKind | undefined,
+): { kind: "string"; value: string } | undefined {
+  let result = expression.head.text;
+  for (const span of expression.templateSpans) {
+    const spanValue = evaluateSpan(span.expression);
+    if (spanValue === undefined) return undefined;
+    const stringValue = stringifyTemplateSpanValue(spanValue);
+    if (stringValue === undefined) return undefined;
+    result += stringValue + span.literal.text;
+  }
+  return { kind: "string", value: result };
+}
+
+export function extractPrimitiveLiteral(node: ts.Expression): LiteralKind | undefined {
+  const expression = unwrapTransparentExpression(node);
+
+  if (ts.isNumericLiteral(expression)) {
+    return { kind: "number", value: Number(expression.text) };
   }
 
-  if (ts.isNumericLiteral(node)) {
-    return { kind: "number", value: Number(node.text) };
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return { kind: "string", value: expression.text };
   }
 
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-    return { kind: "string", value: node.text };
-  }
-
-  if (node.kind === ts.SyntaxKind.TrueKeyword) {
+  if (expression.kind === ts.SyntaxKind.TrueKeyword) {
     return { kind: "boolean", value: true };
   }
 
-  if (node.kind === ts.SyntaxKind.FalseKeyword) {
+  if (expression.kind === ts.SyntaxKind.FalseKeyword) {
     return { kind: "boolean", value: false };
   }
 
-  if (ts.isPrefixUnaryExpression(node)) {
-    const { operator, operand } = node;
+  if (ts.isPrefixUnaryExpression(expression)) {
+    const { operator, operand } = expression;
     if (
       (operator === ts.SyntaxKind.MinusToken || operator === ts.SyntaxKind.PlusToken) &&
       ts.isNumericLiteral(operand)
@@ -62,21 +78,17 @@ export function extractPrimitiveLiteral(node: ts.Expression): LiteralKind | unde
     }
   }
 
+  if (ts.isTemplateExpression(expression)) {
+    return evaluateTemplateLiteral(expression, extractPrimitiveLiteral);
+  }
+
   return undefined;
 }
 
-/**
- * Synthesizes a fresh TypeScript AST node for a primitive literal value.
- *
- * - `number` (negative) → `PrefixUnaryExpression` with `MinusToken` over `NumericLiteral`
- * - `number` (non-negative) → `NumericLiteral`
- * - `string` → `StringLiteral`
- * - `boolean` → `TrueKeyword` / `FalseKeyword`
- */
 export function synthesizeLiteralExpression(literal: LiteralKind): ts.Expression {
   switch (literal.kind) {
     case "number": {
-      // Special case: detect negative zero using 1/x === -Infinity
+      // -0 === 0 in JS, so Object.is is needed to distinguish them.
       if (Object.is(literal.value, -0)) {
         return ts.factory.createPrefixUnaryExpression(
           ts.SyntaxKind.MinusToken,
@@ -98,15 +110,12 @@ export function synthesizeLiteralExpression(literal: LiteralKind): ts.Expression
   }
 }
 
-/**
- * Resolves a TypeScript symbol to a primitive const literal, if possible.
- *
- * Returns `undefined` if:
- * - The symbol has no declarations
- * - No declaration is a `VariableDeclaration` in a `const` binding
- * - The initializer is not a primitive literal (e.g., object, call expression, binary expression)
- */
-export function resolveConstLiteral(symbol: ts.Symbol): LiteralKind | undefined {
+type ConstInitializer = {
+  declaration: ts.VariableDeclaration;
+  initializer: ts.Expression;
+};
+
+function findConstInitializer(symbol: ts.Symbol): ConstInitializer | undefined {
   const declarations = symbol.getDeclarations();
   if (declarations === undefined) return undefined;
 
@@ -116,13 +125,135 @@ export function resolveConstLiteral(symbol: ts.Symbol): LiteralKind | undefined 
     const list = declaration.parent;
     if (!ts.isVariableDeclarationList(list)) continue;
     if ((list.flags & ts.NodeFlags.Const) === 0) continue;
+    if (declaration.initializer === undefined) continue;
 
-    const { initializer } = declaration;
-    if (initializer === undefined) continue;
-
-    const result = extractPrimitiveLiteral(initializer);
-    if (result !== undefined) return result;
+    return { declaration, initializer: declaration.initializer };
   }
 
   return undefined;
+}
+
+function isDeclaredAfterReference(
+  declaration: ts.VariableDeclaration,
+  reference: ts.Identifier,
+): boolean {
+  const sourceFile = reference.getSourceFile();
+  if (declaration.getSourceFile() !== sourceFile) return false;
+  return declaration.getStart(sourceFile) > reference.getStart(sourceFile);
+}
+
+function getConstValueSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
+  if ((symbol.flags & ts.SymbolFlags.Alias) === 0) return symbol;
+  return checker.getAliasedSymbol(symbol);
+}
+
+function evaluateConstInitializer(
+  node: ts.Expression,
+  checker: ts.TypeChecker,
+  visited: Set<ts.Symbol>,
+): LiteralKind | undefined {
+  const expression = unwrapTransparentExpression(node);
+
+  if (ts.isIdentifier(expression)) {
+    const symbol = checker.getSymbolAtLocation(expression);
+    if (!symbol) return undefined;
+
+    const valueSymbol = getConstValueSymbol(symbol, checker);
+    if (visited.has(valueSymbol)) return undefined;
+
+    const constInitializer = findConstInitializer(valueSymbol);
+    if (!constInitializer) return undefined;
+    if (isDeclaredAfterReference(constInitializer.declaration, expression)) return undefined;
+
+    visited.add(valueSymbol);
+    try {
+      return evaluateConstInitializer(constInitializer.initializer, checker, visited);
+    } finally {
+      visited.delete(valueSymbol);
+    }
+  }
+
+  if (ts.isTemplateExpression(expression)) {
+    return evaluateTemplateLiteral(expression, (spanExpr) =>
+      evaluateConstInitializer(spanExpr, checker, visited),
+    );
+  }
+
+  if (ts.isPrefixUnaryExpression(expression)) {
+    const operand = evaluateConstInitializer(expression.operand, checker, visited);
+    if (operand?.kind !== "number") return undefined;
+
+    switch (expression.operator) {
+      case ts.SyntaxKind.PlusToken:
+        return { kind: "number", value: +operand.value };
+      case ts.SyntaxKind.MinusToken:
+        return { kind: "number", value: -operand.value };
+      default:
+        return undefined;
+    }
+  }
+
+  if (ts.isBinaryExpression(expression)) {
+    const left = evaluateConstInitializer(expression.left, checker, visited);
+    const right = evaluateConstInitializer(expression.right, checker, visited);
+
+    if (left === undefined || right === undefined) return undefined;
+
+    if (
+      left.kind === "string" &&
+      right.kind === "string" &&
+      expression.operatorToken.kind === ts.SyntaxKind.PlusToken
+    ) {
+      return { kind: "string", value: left.value + right.value };
+    }
+
+    if (left.kind !== "number" || right.kind !== "number") return undefined;
+
+    const result = evaluateBinaryOp(left.value, expression.operatorToken.kind, right.value);
+    if (result === undefined) return undefined;
+    if (!Number.isFinite(result)) return undefined;
+
+    return { kind: "number", value: result };
+  }
+
+  return extractPrimitiveLiteral(expression);
+}
+
+function evaluateBinaryOp(
+  left: number,
+  operator: ts.SyntaxKind,
+  right: number,
+): number | undefined {
+  switch (operator) {
+    case ts.SyntaxKind.PlusToken:
+      return left + right;
+    case ts.SyntaxKind.MinusToken:
+      return left - right;
+    case ts.SyntaxKind.AsteriskToken:
+      return left * right;
+    case ts.SyntaxKind.SlashToken:
+      return left / right;
+    case ts.SyntaxKind.PercentToken:
+      if (left < 0 || right < 0) return undefined;
+      if (!Number.isInteger(left) || !Number.isInteger(right)) return undefined;
+      return left % right;
+    case ts.SyntaxKind.AsteriskAsteriskToken:
+      return left ** right;
+    default:
+      return undefined;
+  }
+}
+
+export function resolveConstLiteral(
+  symbol: ts.Symbol,
+  checker?: ts.TypeChecker,
+): LiteralKind | undefined {
+  const constInitializer = findConstInitializer(symbol);
+  if (constInitializer === undefined) return undefined;
+
+  if (checker === undefined) {
+    return extractPrimitiveLiteral(constInitializer.initializer);
+  }
+
+  return evaluateConstInitializer(constInitializer.initializer, checker, new Set());
 }
