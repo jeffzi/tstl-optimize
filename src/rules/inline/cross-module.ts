@@ -8,6 +8,8 @@ import {
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import type { InlineTarget } from "./target";
 
+const CROSS_MODULE_WARNING_MESSAGE = "cross-module function references non-parameter identifiers";
+
 export function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
   let current: ts.Node | undefined = node;
   while (current !== undefined) {
@@ -30,6 +32,7 @@ export function hasCrossModuleFreeVariable(
 interface CrossModuleFreeVariableClassification {
   blocking: ts.Identifier[];
   substitutions: Map<ts.Symbol, LiteralKind>;
+  ambients: Set<ts.Symbol>;
 }
 
 function getParamSymbols(
@@ -51,39 +54,6 @@ function isSameFileNonDescendant(
   return (
     declaration.getSourceFile() === sourceFile && !isDescendant(declaration, sourceDeclaration)
   );
-}
-
-function getVariableStatement(declaration: ts.Declaration): ts.VariableStatement | undefined {
-  const declarationList = declaration.parent;
-  if (!ts.isVariableDeclarationList(declarationList)) return undefined;
-
-  const statement = declarationList.parent;
-  return ts.isVariableStatement(statement) ? statement : undefined;
-}
-
-function isExportedVariableDeclaration(declaration: ts.VariableDeclaration): boolean {
-  const statement = getVariableStatement(declaration);
-  /* v8 ignore next -- module-scope variable declarations have variable statements */
-  if (!statement) return false;
-
-  if (statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
-    return true;
-  }
-
-  /* v8 ignore next -- const literal substitutions only resolve identifier declarations */
-  if (!ts.isIdentifier(declaration.name)) return false;
-  const localName = declaration.name.text;
-  return statement
-    .getSourceFile()
-    .statements.some(
-      (sourceStatement) =>
-        ts.isExportDeclaration(sourceStatement) &&
-        sourceStatement.exportClause &&
-        ts.isNamedExports(sourceStatement.exportClause) &&
-        sourceStatement.exportClause.elements.some(
-          (element) => (element.propertyName?.text ?? element.name.text) === localName,
-        ),
-    );
 }
 
 function classifyAliasedIdentifier(
@@ -122,12 +92,7 @@ function classifySameFileIdentifier(
     if (!isSameFileNonDescendant(declaration, sourceFile, sourceDeclaration)) continue;
 
     const literal = resolveConstLiteral(symbol, checker);
-    if (
-      allowSubstitution &&
-      literal !== undefined &&
-      ts.isVariableDeclaration(declaration) &&
-      isExportedVariableDeclaration(declaration)
-    ) {
+    if (allowSubstitution && literal !== undefined && ts.isVariableDeclaration(declaration)) {
       classification.substitutions.set(symbol, literal);
     } else {
       classification.blocking.push(node);
@@ -149,6 +114,16 @@ function hasNoValueDeclaration(symbol: ts.Symbol): boolean {
   return symbol.getDeclarations() === undefined;
 }
 
+function isAmbientGlobalSymbol(symbol: ts.Symbol): boolean {
+  const declarations = symbol.getDeclarations();
+  if (declarations === undefined || declarations.length === 0) return false;
+  return declarations.every((d) => d.getSourceFile().isDeclarationFile);
+}
+
+function hasRuntimeDeclaration(symbol: ts.Symbol): boolean {
+  return symbol.getDeclarations()?.some((d) => !d.getSourceFile().isDeclarationFile) === true;
+}
+
 function isAllowedExternalIdentifier(node: ts.Identifier): boolean {
   return node.text === "$multi";
 }
@@ -165,8 +140,10 @@ function classifyIdentifierSymbol(
 ): void {
   if (paramSymbols.has(symbol)) return;
 
-  if (!classifyAliasedIdentifier(symbol, node, checker, classification, allowSubstitution)) {
-    const handled = classifySameFileIdentifier(
+  if (classifyAliasedIdentifier(symbol, node, checker, classification, allowSubstitution)) return;
+
+  if (
+    classifySameFileIdentifier(
       symbol,
       node,
       sourceFile,
@@ -174,14 +151,20 @@ function classifyIdentifierSymbol(
       classification,
       allowSubstitution,
       checker,
-    );
-    if (
-      !handled &&
-      !isAllowedExternalIdentifier(node) &&
-      (hasExternalValueDeclaration(symbol, sourceFile) || hasNoValueDeclaration(symbol))
-    ) {
-      classification.blocking.push(node);
-    }
+    )
+  ) {
+    return;
+  }
+
+  if (isAllowedExternalIdentifier(node)) return;
+
+  if (isAmbientGlobalSymbol(symbol)) {
+    classification.ambients.add(symbol);
+    return;
+  }
+
+  if (hasExternalValueDeclaration(symbol, sourceFile) || hasNoValueDeclaration(symbol)) {
+    classification.blocking.push(node);
   }
 }
 
@@ -197,6 +180,7 @@ export function classifyCrossModuleFreeVariables(
   const classification: CrossModuleFreeVariableClassification = {
     blocking: [],
     substitutions: new Map<ts.Symbol, LiteralKind>(),
+    ambients: new Set<ts.Symbol>(),
   };
 
   function classifyResolvedIdentifier(
@@ -268,6 +252,57 @@ export function classifyCrossModuleFreeVariables(
   return classification;
 }
 
+function isAmbientShadowedAtCallSite(
+  ambientSymbol: ts.Symbol,
+  callNode: ts.Node,
+  checker: ts.TypeChecker,
+): boolean {
+  const name = ambientSymbol.getName();
+  const localSymbols = checker.getSymbolsInScope(
+    callNode,
+    ts.SymbolFlags.Value | ts.SymbolFlags.Alias,
+  );
+  return localSymbols.some(
+    (scopedSymbol) =>
+      scopedSymbol !== ambientSymbol &&
+      scopedSymbol.getName() === name &&
+      isValueSpaceSymbol(scopedSymbol, checker) &&
+      hasRuntimeDeclaration(scopedSymbol),
+  );
+}
+
+function isTypeOnlyAliasDeclaration(declaration: ts.Declaration): boolean {
+  return ts.isTypeOnlyImportDeclaration(declaration) || ts.isTypeOnlyExportDeclaration(declaration);
+}
+
+function isValueSpaceSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): boolean {
+  if ((symbol.flags & ts.SymbolFlags.Value) !== 0) return true;
+  if ((symbol.flags & ts.SymbolFlags.Alias) === 0) return false;
+
+  const declarations = symbol.getDeclarations();
+  if (declarations?.every(isTypeOnlyAliasDeclaration) === true) {
+    return false;
+  }
+
+  return (checker.getAliasedSymbol(symbol).flags & ts.SymbolFlags.Value) !== 0;
+}
+
+function createCrossModuleRejection(
+  callNode: ts.CallExpression,
+  context: tstl.TransformationContext,
+  strict: boolean,
+): { reject: true } {
+  context.diagnostics.push(
+    createInlineWarning(
+      callNode,
+      CROSS_MODULE_WARNING_MESSAGE,
+      strict,
+      InlineDiagnosticCode.crossModule,
+    ),
+  );
+  return { reject: true };
+}
+
 export function classifyCrossModuleInline(
   callNode: ts.CallExpression,
   target: InlineTarget,
@@ -283,7 +318,7 @@ export function classifyCrossModuleInline(
     return { reject: false, substitutions: new Map() };
   }
 
-  const { blocking, substitutions } = classifyCrossModuleFreeVariables(
+  const { blocking, substitutions, ambients } = classifyCrossModuleFreeVariables(
     nodes,
     target.params,
     target.declaration,
@@ -291,15 +326,13 @@ export function classifyCrossModuleInline(
   );
 
   if (blocking.length > 0) {
-    context.diagnostics.push(
-      createInlineWarning(
-        callNode,
-        "cross-module function references non-parameter identifiers",
-        strict,
-        InlineDiagnosticCode.crossModule,
-      ),
-    );
-    return { reject: true };
+    return createCrossModuleRejection(callNode, context, strict);
+  }
+
+  for (const symbol of ambients) {
+    if (isAmbientShadowedAtCallSite(symbol, callNode, checker)) {
+      return createCrossModuleRejection(callNode, context, strict);
+    }
   }
 
   return { reject: false, substitutions };

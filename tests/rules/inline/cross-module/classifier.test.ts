@@ -80,7 +80,7 @@ describe("hasCrossModuleFreeVariable", () => {
     {
       name: "same-file free variables",
       expected: true,
-      source: "const LEFT = 1; const RIGHT = 2; function fn(): number { return LEFT + RIGHT; }",
+      source: "let LEFT = 1; let RIGHT = 2; function fn(): number { return LEFT + RIGHT; }",
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
     {
@@ -98,19 +98,19 @@ describe("hasCrossModuleFreeVariable", () => {
     {
       name: "property assignments with same-file identifiers",
       expected: true,
-      source: "const value = 42; function fn(): object { return { value: value }; }",
+      source: "let value = 42; function fn(): object { return { value: value }; }",
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
     {
       name: "shorthand property assignments with same-file identifiers",
       expected: true,
-      source: "const moduleVar = 10; function fn(): object { return { moduleVar }; }",
+      source: "let moduleVar = 10; function fn(): object { return { moduleVar }; }",
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
     {
       name: "computed property names with same-file variable",
       expected: true,
-      source: "const key = 'myKey'; function fn(): object { return { [key]: 42 }; }",
+      source: "let key = 'myKey'; function fn(): object { return { [key]: 42 }; }",
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
     {
@@ -135,13 +135,19 @@ describe("hasCrossModuleFreeVariable", () => {
     {
       name: "shorthand property with same-file identifier",
       expected: true,
-      source: "const localVar = 5; function fn(): object { return { localVar }; }",
+      source: "let localVar = 5; function fn(): object { return { localVar }; }",
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
     {
       name: "shorthand property without object assignment initializer",
       expected: false,
       source: "const x = 1; function fn(param: typeof x): object { return { param }; }",
+      selectNodes: (fn) => fn.body?.statements ?? [],
+    },
+    {
+      name: "ambient global (Math)",
+      expected: false,
+      source: "function fn(x: number) { return Math.floor(x); }",
       selectNodes: (fn) => fn.body?.statements ?? [],
     },
   ])("hasCrossModuleFreeVariable returns $expected for $name", ({
@@ -316,6 +322,55 @@ describe("classifyCrossModuleFreeVariables", () => {
       "MISSING",
       "MISSING",
     ]);
+    expect(result.substitutions.size).toBe(0);
+  });
+
+  it("ambient global is not blocking and not substituted", () => {
+    const { checker, sourceFile } = makeChecker("function fn(x: number) { return Math.floor(x); }");
+    const fn = findFunction(sourceFile);
+
+    const result = classifyCrossModuleFreeVariables(
+      fn.body?.statements ?? [],
+      fn.parameters,
+      fn,
+      checker,
+    );
+
+    expect(result.blocking).toStrictEqual([]);
+    expect(result.substitutions.size).toBe(0);
+  });
+
+  it("substitutes non-exported same-file const literal", () => {
+    const { checker, sourceFile } = makeChecker(
+      'const MSG = "boom"; function fn(): string { return MSG; }',
+    );
+    const fn = findFunction(sourceFile);
+
+    const result = classifyCrossModuleFreeVariables(
+      fn.body?.statements ?? [],
+      fn.parameters,
+      fn,
+      checker,
+    );
+
+    expect(result.blocking).toStrictEqual([]);
+    expect(result.substitutions.size).toBe(1);
+  });
+
+  it("blocks non-const same-file variable", () => {
+    const { checker, sourceFile } = makeChecker(
+      "let counter = 0; function fn(): number { return counter; }",
+    );
+    const fn = findFunction(sourceFile);
+
+    const result = classifyCrossModuleFreeVariables(
+      fn.body?.statements ?? [],
+      fn.parameters,
+      fn,
+      checker,
+    );
+
+    expect(result.blocking).toHaveLength(1);
     expect(result.substitutions.size).toBe(0);
   });
 });

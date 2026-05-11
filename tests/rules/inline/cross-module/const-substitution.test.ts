@@ -15,12 +15,6 @@ function compileAndExpectNoDiagnostics(files: Record<string, string>): string {
   return normalized;
 }
 
-function compileAndVerifyInlined(files: Record<string, string>): string {
-  const { diagnostics, normalized } = compileMultiFile(files);
-  expect(diagnostics).toHaveLength(0);
-  return normalized;
-}
-
 function compileAndExpectCrossModuleDiagnostic(files: Record<string, string>): string {
   const { diagnostics, normalized } = compileMultiFile(files);
   expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
@@ -102,7 +96,7 @@ describe("cross-module const literal inlining", () => {
           `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain(assertion);
     });
   });
@@ -124,7 +118,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("255");
     });
   });
@@ -239,6 +233,120 @@ describe("cross-module const literal inlining", () => {
         preservedCall: "____exports.result = readGlobal()",
       },
       {
+        name: "the inline body reads an ambient global shadowed by a local function",
+        files: {
+          "globals.d.ts": `
+            declare const GLOBAL_VALUE: number;
+          `,
+          "utils.ts": `
+            /** @inline */
+            export function readGlobal(): number {
+              return GLOBAL_VALUE;
+            }
+          `,
+          "main.ts": `
+            import { readGlobal } from "./utils";
+
+            function GLOBAL_VALUE(): number {
+              return 1;
+            }
+            export const result = readGlobal();
+          `,
+        },
+        preservedCall: "____exports.result = readGlobal()",
+      },
+      {
+        name: "the inline body reads an ambient global shadowed by an import alias",
+        files: {
+          "globals.d.ts": `
+            declare const GLOBAL_VALUE: number;
+          `,
+          "shadow.ts": `
+            export const localValue = 1;
+          `,
+          "utils.ts": `
+            /** @inline */
+            export function readGlobal(): number {
+              return GLOBAL_VALUE;
+            }
+          `,
+          "main.ts": `
+            import { localValue as GLOBAL_VALUE } from "./shadow";
+            import { readGlobal } from "./utils";
+
+            export const result = readGlobal();
+          `,
+        },
+        preservedCall: "____exports.result = readGlobal()",
+      },
+      {
+        name: "the inline body reads an ambient global shadowed by a class",
+        files: {
+          "globals.d.ts": `
+            declare const GLOBAL_VALUE: number;
+          `,
+          "utils.ts": `
+            /** @inline */
+            export function readGlobal(): number {
+              return GLOBAL_VALUE;
+            }
+          `,
+          "main.ts": `
+            import { readGlobal } from "./utils";
+
+            class GLOBAL_VALUE {}
+            export const result = readGlobal();
+          `,
+        },
+        preservedCall: "____exports.result = readGlobal()",
+      },
+      {
+        name: "the inline body reads an ambient global shadowed by an enum",
+        files: {
+          "globals.d.ts": `
+            declare const GLOBAL_VALUE: number;
+          `,
+          "utils.ts": `
+            /** @inline */
+            export function readGlobal(): number {
+              return GLOBAL_VALUE;
+            }
+          `,
+          "main.ts": `
+            import { readGlobal } from "./utils";
+
+            enum GLOBAL_VALUE {
+              Local = 1,
+            }
+            export const result = readGlobal();
+          `,
+        },
+        preservedCall: "____exports.result = readGlobal()",
+      },
+      {
+        name: "the inline body reads an ambient global shadowed by a namespace",
+        files: {
+          "globals.d.ts": `
+            declare const GLOBAL_VALUE: number;
+          `,
+          "utils.ts": `
+            /** @inline */
+            export function readGlobal(): number {
+              return GLOBAL_VALUE;
+            }
+          `,
+          "main.ts": `
+            import { readGlobal } from "./utils";
+
+            namespace GLOBAL_VALUE {
+              export const local = 1;
+            }
+            export const result = readGlobal();
+          `,
+        },
+        preservedCall: "____exports.result = readGlobal()",
+      },
+      {
         name: "the inline body reads declarationless runtime arguments",
         files: {
           "utils.ts": `
@@ -342,7 +450,7 @@ describe("cross-module const literal inlining", () => {
         }
       `;
 
-      const normalized = compileAndVerifyInlined({
+      const normalized = compileAndExpectNoDiagnostics({
         "main.ts": code,
       });
 
@@ -368,7 +476,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("2");
       expect(normalized).not.toContain("getB()");
     });
@@ -391,7 +499,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).not.toContain("combine()");
       expect(normalized).toContain("1");
       expect(normalized).toContain('"hello"');
@@ -416,7 +524,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("{X = 10}");
       expect(normalized).not.toContain("____exports.X");
     });
@@ -470,7 +578,7 @@ describe("cross-module const literal inlining", () => {
         },
       },
     ])("inlines $name", ({ expectedLua, files, removedCall }) => {
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain(expectedLua);
       expect(normalized).not.toContain(removedCall);
     });
@@ -496,7 +604,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toMatch(/return 10, (value|____inline_arg_0)/);
       expect(normalized).not.toContain("____exports.X");
     });
@@ -519,7 +627,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("10");
       expect(normalized).not.toContain("____exports.X");
     });
@@ -545,7 +653,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain(assertion);
     });
   });
@@ -570,13 +678,13 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("42");
     });
   });
 
   describe("when const is not exported", () => {
-    it("emits diagnostic 90003", () => {
+    it("substitutes non-exported const literal and inlines successfully", () => {
       const files = {
         "utils.ts": `
           const PRIVATE = 42;
@@ -592,9 +700,9 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { diagnostics } = compileMultiFileWithDiagnostics(files);
-
-      expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
+      const normalized = compileAndExpectNoDiagnostics(files);
+      expect(normalized).toContain("42");
+      expect(normalized).not.toContain("getPrivate(");
     });
   });
 
@@ -639,7 +747,7 @@ describe("cross-module const literal inlining", () => {
         },
       },
     ])("inlines $name function with const reference", ({ files, assertion }) => {
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain(assertion);
     });
   });
@@ -661,7 +769,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain('""');
     });
   });
@@ -684,7 +792,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("50331648");
     });
 
@@ -706,7 +814,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("17");
     });
 
@@ -755,7 +863,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("4080");
     });
 
@@ -779,7 +887,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain("4080");
     });
   });
@@ -802,7 +910,7 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain('"max: 255"');
     });
 
@@ -826,9 +934,50 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const normalized = compileAndVerifyInlined(files);
+      const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain('"entity index overflow (max 536870911 per world)"');
       expect(normalized).toContain("536870912");
+    });
+
+    it("inlines cross-module function with non-exported same-file const literal", () => {
+      const files = {
+        "utils.ts": `
+          const MSG = "boom";
+
+          /** @inline */
+          export function bang(): string {
+            return MSG;
+          }
+        `,
+        "main.ts": `
+          import { bang } from "./utils";
+          const m = bang();
+        `,
+      };
+
+      const normalized = compileAndExpectNoDiagnostics(files);
+      expect(normalized).toContain('"boom"');
+    });
+
+    it("inlines cross-module function with non-exported computed const literal", () => {
+      const files = {
+        "utils.ts": `
+          const BITS = 24;
+          const MAX = 2 ** BITS;
+
+          /** @inline */
+          export function getMax(): number {
+            return MAX;
+          }
+        `,
+        "main.ts": `
+          import { getMax } from "./utils";
+          const m = getMax();
+        `,
+      };
+
+      const normalized = compileAndExpectNoDiagnostics(files);
+      expect(normalized).toContain("16777216");
     });
   });
 });

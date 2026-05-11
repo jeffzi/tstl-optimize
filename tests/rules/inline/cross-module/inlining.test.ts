@@ -93,6 +93,25 @@ describe("cross-module inlining", () => {
       expect(diagnostics).toHaveLength(0);
       expect(normalizeLua(lua)).not.toContain("alias(1)");
     });
+
+    it("inlines a function whose body uses an ambient global (Math.floor)", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "shared.ts": `
+          /** @inline */
+          export function floorIt(x: number): number {
+            return Math.floor(x);
+          }
+        `,
+        "main.ts": `
+          import { floorIt } from "./shared";
+
+          export const result = floorIt(3.7);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      expect(normalizeLua(lua)).not.toContain("floorIt(");
+    });
   });
 
   describe("when the target closes over non-substitutable module state", () => {
