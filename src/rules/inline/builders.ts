@@ -86,7 +86,12 @@ export function buildParamMap(
     if (!paramSymbol) return undefined;
     const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
     const callArg = callArgs[i];
-    if (!callArg) return undefined;
+    if (callArg === undefined) {
+      if (paramSymbolId !== undefined) {
+        paramMap.set(paramSymbolId, tstl.createNilLiteral());
+      }
+      continue;
+    }
     if (paramSymbolId === undefined) {
       if (hasSideEffects(callArg)) {
         tempDecls.push(createDiscardTemp(context, context.transformExpression(callArg)));
@@ -120,19 +125,29 @@ function rewriteInlineStatements(
   return bodyStmts.map((stmt) => rewriteWithConstSubstitutions(stmt, substitutions, checker));
 }
 
+/** Run inline transforms in a fresh function scope so locals produce `local` in Lua. */
+function transformInFunctionScope<T>(
+  declaration: ts.Node,
+  context: tstl.TransformationContext,
+  transform: () => T,
+): T {
+  context.pushScope(FUNCTION_SCOPE, declaration);
+  try {
+    return transform();
+  } finally {
+    context.popScope();
+  }
+}
+
 /** Transform body statements inside a fresh function scope so locals produce `local` in Lua. */
 function transformBodyStatements(
   bodyStmts: readonly ts.Statement[],
   declaration: ts.Node,
   context: tstl.TransformationContext,
 ): tstl.Statement[] {
-  context.pushScope(FUNCTION_SCOPE, declaration);
-  let result: tstl.Statement[];
-  try {
-    result = bodyStmts.flatMap((s) => context.transformStatements(s));
-  } finally {
-    context.popScope();
-  }
+  const result = transformInFunctionScope(declaration, context, () =>
+    bodyStmts.flatMap((s) => context.transformStatements(s)),
+  );
   // Erase function-body TS positions so the post-stamp pass can attribute every
   // node to the call site instead.  Arg expressions (built separately in
   // buildParamMap) are not touched here and keep their original arg positions.
@@ -156,17 +171,12 @@ export function transformInlineBodyAndReturn(
   const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
   const rewrittenReturnExpr = rewriteInlineNode(returnExpr, substitutions, checker);
   const returnStmt = createInlineReturnStatement(rewrittenReturnExpr);
-  context.pushScope(FUNCTION_SCOPE, declaration);
-  let luaBody: tstl.Statement[];
-  let luaReturnStmts: tstl.Statement[];
-  try {
-    luaBody = rewrittenBodyStmts.flatMap((s) => context.transformStatements(s));
-    luaReturnStmts = context.transformStatements(returnStmt);
-  } finally {
-    context.popScope();
-  }
+  const { luaBody, luaReturnStmts } = transformInFunctionScope(declaration, context, () => ({
+    luaBody: rewrittenBodyStmts.flatMap((s) => context.transformStatements(s)),
+    luaReturnStmts: context.transformStatements(returnStmt),
+  }));
   // Erase function-body positions so stampCallSitePositions can attribute every
-  // body node to the call site. Matches what transformBodyStatements does (line 139).
+  // body node to the call site.
   clearNodePositions(luaBody);
   clearNodePositions(luaReturnStmts);
   const luaReturn = luaReturnStmts.find(
@@ -317,7 +327,12 @@ export function inlineExpressionBody(
     if (!paramSymbol) return undefined;
     const symbolId = context.symbolIdMaps.get(paramSymbol);
     if (symbolId === undefined) continue;
-    paramMap.set(symbolId, context.transformExpression(callNode.arguments[i]));
+    const callArg = callNode.arguments[i];
+    if (callArg === undefined) {
+      paramMap.set(symbolId, tstl.createNilLiteral());
+      continue;
+    }
+    paramMap.set(symbolId, context.transformExpression(callArg));
   }
 
   const substituted = substituteParams(luaBody, paramMap);

@@ -312,6 +312,190 @@ describe("inline", () => {
       expect(lua).toContain("stats = {");
       expect(lua).toContain("base = 100");
     });
+
+    describe("optional parameters", () => {
+      it.each<{ name: string; code: string; assertions: (lua: string) => void }>([
+        {
+          name: "single optional param when arg supplied",
+          code: `
+            /** @inline */
+            const f = (x?: number) => (x ?? 0) + 1;
+            declare const a: number;
+            const r = f(a);
+          `,
+          assertions: (lua) => {
+            expect(lua).not.toContain("f(");
+            expect(lua).toContain("a");
+          },
+        },
+        {
+          name: "single optional param when arg omitted",
+          code: `
+            /** @inline */
+            const f = (x?: number) => (x ?? 0) + 1;
+            const r = f();
+          `,
+          assertions: (lua) => {
+            expect(lua).not.toContain("f(");
+            expect(lua).toContain("nil");
+          },
+        },
+      ])("inlines expression-body with $name", ({ code, assertions }) => {
+        const lua = compile(code);
+        assertions(lua);
+      });
+
+      it.each<{ name: string; code: string }>([
+        {
+          name: "all supplied",
+          code: `
+            /** @inline */
+            function add(a: number, b?: number): number { return a + (b ?? 0); }
+            declare const x: number;
+            declare const y: number;
+            const r = add(x, y);
+          `,
+        },
+        {
+          name: "optional is omitted",
+          code: `
+            /** @inline */
+            function add(a: number, b?: number): number { return a + (b ?? 0); }
+            declare const x: number;
+            const r = add(x);
+          `,
+        },
+      ])("inlines with mixed required and optional params when $name", ({ code }) => {
+        const lua = compile(code);
+        expect(lua).not.toContain("add(");
+        expect(lua).toContain("x");
+      });
+
+      it("inlines statement-body with optional param at variable-declaration site", () => {
+        const lua = compile(`
+          /** @inline */
+          function process(val: number, flag?: boolean): number {
+            const adjusted = flag ? val * 2 : val;
+            return adjusted + 1;
+          }
+          declare const n: number;
+          declare const f: boolean;
+          const result = process(n, f);
+        `);
+        expect(lua).not.toContain("process(");
+      });
+
+      it("enforces side-effects for supplied optional args", () => {
+        const { diagnostics } = compileWithDiagnostics(`
+          /** @inline */
+          function use(x?: number): number { return (x ?? 0) + (x ?? 0); }
+          declare function sideEffect(): number;
+          const r = use(sideEffect());
+        `);
+        const hasDiagnostic = diagnostics.some(
+          (d) =>
+            String(d.messageText).includes("side effect") ||
+            String(d.messageText).includes("argument"),
+        );
+        expect(hasDiagnostic).toBe(true);
+      });
+
+      it("eagerly evaluates supplied args before omitted optional params can short-circuit them", () => {
+        const lua = normalizeLua(
+          compile(`
+            declare function sideEffect(): number;
+
+            /** @inline */
+            function f(a: number, b?: boolean): unknown {
+              return b && a;
+            }
+
+            const r = f(sideEffect());
+          `),
+        );
+
+        expect(lua).not.toContain("f(");
+        expect(lua).toMatch(/local ____inline_arg_\d+ = sideEffect\(\)/);
+        expect(lua).not.toContain("nil and sideEffect()");
+      });
+
+      it("inlines with multiple optionals when only some are supplied", () => {
+        const lua = compile(`
+          /** @inline */
+          function f(a: number, b?: number, c?: number): number {
+            return a + (b ?? 0) + (c ?? 0);
+          }
+          declare const x: number;
+          const r = f(x, 10);
+        `);
+        expect(lua).not.toContain("f(");
+        expect(lua).toContain("x");
+        expect(lua).toContain("10");
+      });
+
+      it("inlines statement-body with optional omitted at expression-statement position", () => {
+        const lua = compile(`
+          declare function print(x: unknown): void;
+          /** @inline */
+          function greet(name?: string): void {
+            if (name) { print(name); }
+          }
+          greet();
+        `);
+        expect(lua).not.toContain("greet(");
+      });
+
+      it("inlines statement-body with optional omitted at return position", () => {
+        const lua = compile(`
+          /** @inline */
+          function maybe(x?: number): number {
+            const v = x ?? 42;
+            return v;
+          }
+          function test(): number { return maybe(); }
+        `);
+        expect(lua).not.toContain("maybe(");
+      });
+
+      it.each<{ name: string; code: string }>([
+        {
+          name: "too many args",
+          code: `
+            /** @inline */
+            function f(x: number, y?: number): number { return x + (y ?? 0); }
+            // @ts-ignore exercising plugin validation after type-check suppression
+            const r = f(1, 2, 3);
+          `,
+        },
+        {
+          name: "missing required args",
+          code: `
+            /** @inline */
+            function f(x: number, y?: number): number { return x + (y ?? 0); }
+            // @ts-ignore exercising plugin validation after type-check suppression
+            const r = f();
+          `,
+        },
+      ])("rejects call with $name", ({ code }) => {
+        const { diagnostics } = compileWithDiagnostics(code);
+        const hasArgumentCountError = diagnostics.some((d) =>
+          String(d.messageText).includes("argument count"),
+        );
+        expect(hasArgumentCountError).toBe(true);
+      });
+
+      it("inlines nested calls when inner function has optional param omitted", () => {
+        const lua = compile(`
+          /** @inline */
+          function g(x?: number) { return 42; }
+          /** @inline */
+          function f(x: number) { return x + 1; }
+          const r = f(g());
+        `);
+        expect(lua).not.toContain("f(");
+        expect(lua).not.toContain("g(");
+      });
+    });
   });
 
   describe("expression-body deep clone", () => {
@@ -619,7 +803,6 @@ describe("inline", () => {
 
     it.each([
       { decl: "function f(...args: unknown[]) {}", name: "rest parameters" },
-      { decl: "function f(x?: number) {}", name: "optional parameters" },
       { decl: "function f(x: number = 0) {}", name: "default parameters" },
     ])("rejects unsupported $name", ({ decl }) => {
       const { diagnostics } = compileWithDiagnostics(`
@@ -712,18 +895,6 @@ describe("inline", () => {
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0].messageText).toContain("side effects");
       });
-    });
-
-    it("emits exactly one diagnostic when an eager-arg inline wraps a failing inline", () => {
-      const { diagnostics } = compileWithDiagnostics(`
-        /** @inline */
-        function g(x?: number) { return 42; }
-        /** @inline */
-        function f(x: number) { return x + 1; }
-        const r = f(g(0));
-      `);
-      expect(diagnostics).toHaveLength(1);
-      expect(String(diagnostics[0].messageText)).toContain("optional parameters");
     });
   });
 
@@ -1271,11 +1442,12 @@ describe("inline uncovered branches", () => {
       expect(lua).not.toContain("(x + y)");
     });
 
-    it.each(
-      [
-        {
-          name: "side-effectful body",
-          code: `
+    it.each<{ name: string; code: string; patterns: string[]; wrapperName: string }>([
+      {
+        name: "side-effectful body",
+        wrapperName: "foo",
+        patterns: ["sideEffect()"],
+        code: `
           declare function sideEffect(): number;
 
           /** @inline */
@@ -1285,12 +1457,12 @@ describe("inline uncovered branches", () => {
 
           foo();
         `,
-          shouldContain: "sideEffect()",
-          wrapperName: "foo",
-        },
-        {
-          name: "side-effectful argument",
-          code: `
+      },
+      {
+        name: "side-effectful argument",
+        wrapperName: "double",
+        patterns: ["impure()"],
+        code: `
           declare function impure(): number;
 
           /** @inline */
@@ -1300,12 +1472,12 @@ describe("inline uncovered branches", () => {
 
           double(impure());
         `,
-          shouldContain: "impure()",
-          wrapperName: "double",
-        },
-        {
-          name: "both side-effectful",
-          code: `
+      },
+      {
+        name: "both side-effectful body and argument",
+        wrapperName: "compute",
+        patterns: ["f(", "g()"],
+        code: `
           declare function f(x: number): number;
           declare function g(): number;
 
@@ -1316,24 +1488,18 @@ describe("inline uncovered branches", () => {
 
           compute(g());
         `,
-          shouldContain: ["f(", "g()"],
-          wrapperName: "compute",
-        },
-      ].flatMap(({ shouldContain, ...testCase }) =>
-        (Array.isArray(shouldContain) ? shouldContain : [shouldContain]).map((pattern) => ({
-          ...testCase,
-          pattern,
-        })),
-      ),
-    )("preserves side effect from expression-body call with $name at statement position", ({
+      },
+    ])("preserves side effect from expression-body call with $name at statement position", ({
       code,
-      pattern,
+      patterns,
       wrapperName,
     }) => {
       const lua = normalizeLua(compile(code));
 
       expect(lua).not.toContain(`${wrapperName}(`);
-      expect(lua).toContain(pattern);
+      for (const pattern of patterns) {
+        expect(lua).toContain(pattern);
+      }
       expect(lua).not.toContain("local _ =");
       expect(lua).toMatch(/local ____inline_result_\d+ =/);
     });
@@ -1419,8 +1585,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      // Should have a diagnostic about return-value function at void site
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("return-value function called at void site"),
@@ -1447,8 +1611,11 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      // Should have a diagnostic about side effects or parameter write
-      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(
+        diagnostics.some((d) =>
+          String(d.messageText).includes("return-value function called at void site"),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -1474,28 +1641,6 @@ describe("inline uncovered branches", () => {
       expect(lua).toContain("sum(a, a + 1)");
     });
 
-    it("rejects optional parameters with diagnostic", () => {
-      const code = `
-        /** @inline */
-        function greet(name?: string): string {
-          return name || "default";
-        }
-
-        function test() {
-          greet();
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      expect(diagnostics.length).toBeGreaterThan(0);
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("optional parameters are not supported"),
-        ),
-      ).toBe(true);
-    });
-
     it("rejects default parameters with diagnostic", () => {
       const code = `
         /** @inline */
@@ -1510,7 +1655,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("default parameters are not supported"),
@@ -1532,7 +1676,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("destructuring parameters are not supported"),
@@ -1603,7 +1746,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("argument with side effects is not used"),
@@ -1644,7 +1786,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("argument with side effects is used multiple times"),
@@ -1696,43 +1837,36 @@ describe("inline uncovered branches", () => {
   });
 
   describe("Complex destructuring and type patterns", () => {
-    it("rejects object destructuring with nested patterns", () => {
-      const code = `
-        /** @inline */
-        function process({ a, b: { c } }: { a: number; b: { c: number } }): number {
-          return a + c;
-        }
+    it.each([
+      {
+        name: "object destructuring with nested patterns",
+        code: `
+          /** @inline */
+          function process({ a, b: { c } }: { a: number; b: { c: number } }): number {
+            return a + c;
+          }
 
-        function test() {
-          process({ a: 1, b: { c: 2 } });
-        }
-      `;
+          function test() {
+            process({ a: 1, b: { c: 2 } });
+          }
+        `,
+      },
+      {
+        name: "array destructuring with rest element",
+        code: `
+          /** @inline */
+          function getFirst([head, ...tail]: number[]): number {
+            return head;
+          }
 
+          function test() {
+            getFirst([1, 2, 3]);
+          }
+        `,
+      },
+    ])("rejects $name", ({ code }) => {
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("destructuring parameters are not supported"),
-        ),
-      ).toBe(true);
-    });
-
-    it("rejects array destructuring with rest element", () => {
-      const code = `
-        /** @inline */
-        function getFirst([head, ...tail]: number[]): number {
-          return head;
-        }
-
-        function test() {
-          getFirst([1, 2, 3]);
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("destructuring parameters are not supported"),
@@ -1785,7 +1919,9 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics.some((d) => String(d.messageText).includes("early return in body"))).toBe(
+        true,
+      );
     });
   });
 
@@ -1803,7 +1939,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("function must be declared at module scope"),
@@ -1826,7 +1961,6 @@ describe("inline uncovered branches", () => {
 
       const { diagnostics } = compileWithDiagnostics(code);
 
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("function must be declared at module scope"),
@@ -2366,33 +2500,6 @@ describe("inline uncovered branches", () => {
       expect(normalized).toContain("helper(5)");
     });
 
-    it("preserves call when function has optional parameters at statement position", () => {
-      const code = `
-        declare function print(x: unknown): void;
-
-        /** @inline */
-        function greet(name?: string): void {
-          if (name) {
-            print(name);
-          }
-        }
-
-        greet();
-      `;
-
-      const { lua, diagnostics } = compileWithDiagnostics(code);
-      const normalized = normalizeLua(lua);
-
-      // Call must be preserved because optional parameters are not supported
-      expect(normalized).toContain("greet()");
-      expect(diagnostics.length).toBeGreaterThan(0);
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("optional parameters are not supported"),
-        ),
-      ).toBe(true);
-    });
-
     it("preserves call when function has default parameters at statement position", () => {
       const code = `
         declare function print(x: unknown): void;
@@ -2410,7 +2517,6 @@ describe("inline uncovered branches", () => {
 
       // Call must be preserved because default parameters are not supported
       expect(normalized).toContain("multiply(5)");
-      expect(diagnostics.length).toBeGreaterThan(0);
       expect(
         diagnostics.some((d) =>
           String(d.messageText).includes("default parameters are not supported"),
@@ -2605,23 +2711,6 @@ describe("inline uncovered branches", () => {
   });
 
   describe("additional variable and return inlining coverage", () => {
-    it("reports unsupported optional parameters from a variable-declaration call site", () => {
-      const { diagnostics } = compileWithDiagnostics(`
-        /** @inline */
-        function greet(name?: string): string {
-          return name || "fallback";
-        }
-
-        const result = greet();
-      `);
-
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("optional parameters are not supported"),
-        ),
-      ).toBe(true);
-    });
-
     it("reports unsupported default parameters from a return-site call", () => {
       const { diagnostics } = compileWithDiagnostics(`
         /** @inline */
@@ -3197,17 +3286,6 @@ describe("inline uncovered branches", () => {
     describe("statement-position visitor diagnostics", () => {
       it.each([
         {
-          name: "expression-statement visitor rejects optional parameters",
-          kind: ts.SyntaxKind.ExpressionStatement as const,
-          source: `
-            /** @inline */
-            function greet(name?: string): void {}
-
-            greet();
-          `,
-          messageFragment: "optional parameters are not supported",
-        },
-        {
           name: "expression-statement visitor rejects labeled statements",
           kind: ts.SyntaxKind.ExpressionStatement as const,
           source: `
@@ -3223,20 +3301,6 @@ describe("inline uncovered branches", () => {
             run(true);
           `,
           messageFragment: "labeled statement in body",
-        },
-        {
-          name: "variable-statement visitor rejects optional parameters",
-          kind: ts.SyntaxKind.VariableStatement as const,
-          source: `
-            /** @inline */
-            function scale(value?: number): number {
-              const result = value || 0;
-              return result;
-            }
-
-            const result = scale();
-          `,
-          messageFragment: "optional parameters are not supported",
         },
       ])("$name", ({ kind, source, messageFragment }) => {
         const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
@@ -3269,21 +3333,6 @@ describe("inline uncovered branches", () => {
             }
           `,
           messageFragment: "parameter is written inside body",
-        },
-        {
-          name: "reports optional-parameter rejection",
-          source: `
-            /** @inline */
-            function greet(name?: string): string {
-              const value = name || "fallback";
-              return value;
-            }
-
-            function run() {
-              return greet();
-            }
-          `,
-          messageFragment: "optional parameters are not supported",
         },
       ])("$name", ({ source, messageFragment }) => {
         const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
@@ -3904,20 +3953,6 @@ describe("inline uncovered branches", () => {
       const { diagnostics } = compileWithDiagnostics(code);
       const diag = findDiagnostic(diagnostics, (text) => text.includes("recursive"));
       expect(diag.code).toBe(90004);
-    });
-
-    it("optional parameter restriction emits code 90005", () => {
-      const code = `
-        /** @inline */
-        function withOptional(x?: number): number {
-          return x ?? 0;
-        }
-        export const result = withOptional();
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-      const diag = findDiagnostic(diagnostics, (text) => text.includes("parameter"));
-      expect(diag.code).toBe(90005);
     });
 
     it("side-effects restriction: argument with side effects used multiple times (code 90006)", () => {
