@@ -18,7 +18,7 @@ describe("localizer: parameter shadowing", () => {
           return config.length;
         }
 
-        return inner("test");
+        return a + b + c + inner("test");
       }
       `,
         {
@@ -38,11 +38,10 @@ describe("localizer: parameter shadowing", () => {
     // The outer scope's config.timeout should be hoisted to a local variable
     // even though the nested function has a parameter named 'config'
     expect(lua).toContain("local ____config_timeout = config.timeout");
-    expect(lua).toContain("local a = ____config_timeout");
-    expect(lua).toContain("local b = ____config_timeout");
-    expect(lua).toContain("local c = ____config_timeout");
-    // The nested function should still exist in output
-    expect(lua).toContain("local function inner");
+    expect(lua).toMatch(
+      /local a, b, c.*= ____config_timeout, ____config_timeout, ____config_timeout/,
+    );
+    expect(lua).toContain("return a + b + c");
   });
 
   it("does not hoist a module-scope chain out of an IIFE when the function expression parameter shadows the root", () => {
@@ -103,8 +102,7 @@ describe("localizer: parameter shadowing", () => {
     expect(lua).not.toContain("local ____obj_x = obj.x");
     expect(lua).toContain("local ____obj_x_1 = obj.x");
     expect(lua).toContain("use(____obj_x)");
-    expect(lua).toContain("local a = ____obj_x_1");
-    expect(lua).toContain("local b = ____obj_x_1");
+    expect(lua).toContain("local a, b = ____obj_x_1, ____obj_x_1");
   });
 
   it("renames array-element localization temps when they would shadow an enclosing binding", () => {

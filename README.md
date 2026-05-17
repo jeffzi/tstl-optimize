@@ -867,6 +867,16 @@ All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of
 | `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug and profiling calls. |
 | `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target. When omitted, the plugin derives it from TSTL's `luaTarget`. |
 
+### Refold phase
+
+After all rules have run, the plugin re-runs `constant-folding`, `dead-local`, `merge-locals`, and
+`remove-empty-branch` in a final "refold" phase. Later rules sometimes create new opportunities for
+earlier ones — for example, `localizer` can introduce consecutive `local` declarations that
+`merge-locals` can combine, or `inline` can expand a body whose constants `constant-folding` can
+evaluate. The refold phase catches these cross-rule wins automatically. Each rule in the refold
+phase is still gated by its own `rules.*` toggle, so disabling `merge-locals` globally also
+disables it during refold.
+
 ## Examples
 
 The [`examples/`](examples/) directory contains a `.ts` / `.lua` pair for each rule, showing the

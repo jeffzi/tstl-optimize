@@ -315,7 +315,7 @@ describe("localizer", () => {
       const normalized = normalizeLua(lua);
       const elseifIdx = normalized.indexOf("elseif cond2 then");
       const declIdx = normalized.indexOf("local ____obj_y = obj.y");
-      const useIdx = normalized.indexOf("local d = ____obj_y");
+      const useIdx = normalized.indexOf("local d, e, f");
       expect(elseifIdx).toBeGreaterThanOrEqual(0);
       expect(declIdx).toBeGreaterThan(elseifIdx);
       expect(useIdx).toBeGreaterThan(declIdx);
@@ -623,22 +623,29 @@ describe("localizer", () => {
   });
 
   describe("when configuration is applied", () => {
-    it("threshold: 3 with 2 uses does not hoist, with 3 uses hoists", () => {
-      const threshold3 = {
+    it.each<{ name: string; source: string; shouldHoist: boolean }>([
+      {
+        name: "2 uses (below threshold 3) → does not hoist",
+        source: "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x);",
+        shouldHoist: false,
+      },
+      {
+        name: "3 uses (at threshold 3) → hoists",
+        source:
+          "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x); const c = Math.ceil(x);",
+        shouldHoist: true,
+      },
+    ])("threshold 3: $name", ({ source, shouldHoist }) => {
+      const lua = compile(source, {
         pluginOptions: { rules: { localizer: { threshold: 3, scope: "module" as const } } },
         luaTarget: tstl.LuaTarget.LuaJIT,
-      };
-      const twoUses = compile(
-        "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x);",
-        threshold3,
-      );
-      expect(twoUses).not.toContain("local ____math_ceil = math.ceil");
+      });
 
-      const threeUses = compile(
-        "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x); const c = Math.ceil(x);",
-        threshold3,
-      );
-      expect(threeUses).toContain("local ____math_ceil = math.ceil");
+      if (shouldHoist) {
+        expect(lua).toContain("local ____math_ceil = math.ceil");
+      } else {
+        expect(lua).not.toContain("local ____math_ceil = math.ceil");
+      }
     });
 
     it("scope: function does not hoist module-level chains", () => {
@@ -1394,9 +1401,8 @@ describe("localizer", () => {
   });
 
   describe("when root filtering interactions occur", () => {
-    it("root filter applied in function scope mode", () => {
-      // Lenient non-module predicate: config IS hoisted without include
-      const luaDefault = compile(
+    it("hoists non-stdlib chain in function scope when config is declared after the function (lenient predicate)", () => {
+      const lua = compile(
         [
           "function process() {",
           "  const a = config.graphics.width;",
@@ -1407,10 +1413,12 @@ describe("localizer", () => {
         ].join("\n"),
         FUNC_SCOPE,
       );
-      expect(luaDefault).toContain("local ____config_graphics_width = config.graphics.width");
 
-      // Exclude rejects the root at non-module scope
-      const luaExclude = compile(
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
+    });
+
+    it("does not hoist non-stdlib chain in function scope when root is excluded", () => {
+      const lua = compile(
         [
           "declare const config: { graphics: { width: number } };",
           "function process() {",
@@ -1425,10 +1433,12 @@ describe("localizer", () => {
           },
         },
       );
-      expect(luaExclude).not.toContain("local ____config_graphics_width");
 
-      // With include: config IS hoisted in function scope
-      const luaInclude = compile(
+      expect(lua).not.toContain("local ____config_graphics_width");
+    });
+
+    it("hoists non-stdlib chain in function scope when root is included", () => {
+      const lua = compile(
         [
           "declare const config: { graphics: { width: number } };",
           "function process() {",
@@ -1443,7 +1453,8 @@ describe("localizer", () => {
           },
         },
       );
-      expect(luaInclude).toContain("local ____config_graphics_width = config.graphics.width");
+
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
     });
 
     it("root filter applied in all scope mode", () => {
