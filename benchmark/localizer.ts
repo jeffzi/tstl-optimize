@@ -8,10 +8,16 @@ const N = 1000;
 const _warmupClock = os.clock();
 const _warmupByte = string.byte("A");
 
+// Nested table simulates a multi-level namespace (common in game engines).
+// Non-stdlib roots are only hoisted at function scope (lenient filter), so the
+// callback body needs 2+ occurrences to meet the threshold independently.
+const app = { physics: { gravity: 9.81 } };
+
 // Variable keys prevent the localizer from recognizing the chain: the AST index
 // is an Identifier (not a StringLiteral), so luaPropertyChain returns undefined.
 const clockKey = "clock";
 const byteKey = "byte";
+const physicsKey = "physics";
 
 // os.clock: global table access (common in Lua game loops)
 // Baseline forces dynamic access via variable key to block localizer hoisting.
@@ -58,3 +64,32 @@ print(
     }),
   ),
 );
+
+// Deeper chain (3 levels): each extra level is an extra table lookup saved.
+// Demonstrates proportionally larger wins with deeper nesting.
+print("\n=== app.physics.gravity: 3-level chain vs localizer-hoisted local ===");
+let deepAcc = 0;
+print(
+  render(
+    compare_time({
+      "app[key].gravity (baseline)": {
+        fn: () => {
+          let sum = (app as unknown as Record<string, { gravity: number }>)[physicsKey].gravity;
+          for (let i = 0; i < N; i++) {
+            sum += (app as unknown as Record<string, { gravity: number }>)[physicsKey].gravity;
+          }
+          deepAcc += sum;
+        },
+        baseline: true,
+      },
+      "app.physics.gravity [localizer hoists]": () => {
+        let sum = app.physics.gravity;
+        for (let i = 0; i < N; i++) {
+          sum += app.physics.gravity;
+        }
+        deepAcc += sum;
+      },
+    }),
+  ),
+);
+print(deepAcc);

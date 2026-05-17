@@ -299,7 +299,52 @@ describe("math-intrinsics", () => {
     });
   });
 
-  describe("x ** 2", () => {
+  describe("x / n", () => {
+    it.each([
+      {
+        name: "replaces x / 2 with x * 0.5",
+        source: "declare const x: number; const a = x / 2;",
+        contains: ["x * 0.5"],
+        excludes: ["/"],
+      },
+      {
+        name: "replaces x / 4 with x * 0.25",
+        source: "declare const x: number; const a = x / 4;",
+        contains: ["x * 0.25"],
+        excludes: ["/"],
+      },
+      {
+        name: "replaces x / 8 with x * 0.125",
+        source: "declare const x: number; const a = x / 8;",
+        contains: ["x * 0.125"],
+        excludes: ["/"],
+      },
+      {
+        name: "keeps x / 3 unchanged (not a power of 2)",
+        source: "declare const x: number; const a = x / 3;",
+        contains: ["/"],
+        excludes: [],
+      },
+      {
+        name: "keeps x / 0 unchanged (division by zero)",
+        source: "declare const x: number; const a = x / 0;",
+        contains: ["/"],
+        excludes: [],
+      },
+      {
+        name: "keeps division when left operand has side effects",
+        source: "declare function foo(): number; const a = foo() / 2;",
+        contains: ["/"],
+        excludes: [],
+      },
+    ])("$name", ({ source, contains, excludes }) => {
+      const lua = compile(source);
+
+      expectLuaSnippets(lua, { contains, excludes });
+    });
+  });
+
+  describe("x ** n", () => {
     it.each([
       {
         name: "replaces x ** 2 when base is pure",
@@ -313,14 +358,30 @@ describe("math-intrinsics", () => {
         contains: ["^ 2"],
       },
       {
-        name: "does not replace x ** 3 or other exponents",
+        name: "replaces x ** 3 with x * x * x when base is pure",
         source: "declare const x: number; const a = x ** 3;",
-        contains: ["x ^ 3"],
+        contains: ["x * x * x"],
+        excludes: ["^"],
+      },
+      {
+        name: "keeps x ^ 3 when base has side effects",
+        source: "declare function foo(): number; const a = foo() ** 3;",
+        contains: ["^ 3"],
+      },
+      {
+        name: "keeps x ^ 4 on Lua 5.1 (C pow is faster than 3 MULs)",
+        source: "declare const x: number; const a = x ** 4;",
+        contains: ["^ 4"],
       },
       {
         name: "keeps element-access bases to avoid duplicating indexed reads",
         source: "declare const arr: number[]; const a = arr[0] ** 2;",
         contains: ["^ 2"],
+      },
+      {
+        name: "keeps element-access bases for exponent 3",
+        source: "declare const arr: number[]; const a = arr[0] ** 3;",
+        contains: ["^ 3"],
       },
     ])("$name", ({ source, contains, excludes }) => {
       const lua = compile(source);
@@ -413,6 +474,22 @@ describe("math-intrinsics", () => {
         source: "declare const x: number; const a = x ** 2;",
         contains: ["x * x"],
         excludes: ["^"],
+      },
+      {
+        name: "applies x ** 4 → (x * x) * (x * x)",
+        source: "declare const x: number; const a = x ** 4;",
+        contains: ["(x * x) * (x * x)"],
+        excludes: ["^"],
+      },
+      {
+        name: "keeps x ^ 4 when base has side effects",
+        source: "declare function foo(): number; const a = foo() ** 4;",
+        contains: ["^ 4"],
+      },
+      {
+        name: "keeps element-access bases for exponent 4",
+        source: "declare const arr: number[]; const a = arr[0] ** 4;",
+        contains: ["^ 4"],
       },
     ])("$name on LuaJIT", ({ source, contains, excludes }) => {
       const lua = compile(source, jit);
