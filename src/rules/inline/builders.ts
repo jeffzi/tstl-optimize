@@ -35,12 +35,12 @@ interface PreparedReturnValueInline {
 }
 
 /**
- * Create a discard temp variable with collision-safe name for an unused inline result.
- * If expr is provided, assigns it; otherwise returns a bare decl for further use.
+ * Create a discard temp variable with a collision-safe name and assign `expr` to it.
+ * Used when an inlined expression has side effects but its value is unused at the call site.
  */
 export function createDiscardTemp(
   context: tstl.TransformationContext,
-  expr?: tstl.Expression,
+  expr: tstl.Expression,
 ): tstl.VariableDeclarationStatement {
   const discardSymId = context.nextSymbolId();
   const discardIdent = tstl.createIdentifier(
@@ -48,9 +48,7 @@ export function createDiscardTemp(
     undefined,
     discardSymId,
   );
-  // Defensive only: all current callers pass expr; the bare-decl branch is unreachable in tests
-  /* v8 ignore next */
-  return tstl.createVariableDeclarationStatement([discardIdent], expr ? [expr] : undefined);
+  return tstl.createVariableDeclarationStatement([discardIdent], [expr]);
 }
 
 /**
@@ -109,14 +107,6 @@ export function buildParamMap(
   return { tempDecls, paramMap };
 }
 
-function rewriteInlineNode<T extends ts.Node>(
-  node: T,
-  substitutions: Map<ts.Symbol, LiteralKind>,
-  checker: ts.TypeChecker,
-): T {
-  return rewriteWithConstSubstitutions(node, substitutions, checker);
-}
-
 function rewriteInlineStatements(
   bodyStmts: readonly ts.Statement[],
   substitutions: Map<ts.Symbol, LiteralKind>,
@@ -169,7 +159,7 @@ export function transformInlineBodyAndReturn(
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
 ): TransformedInlineFunction | undefined {
   const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
-  const rewrittenReturnExpr = rewriteInlineNode(returnExpr, substitutions, checker);
+  const rewrittenReturnExpr = rewriteWithConstSubstitutions(returnExpr, substitutions, checker);
   const returnStmt = createInlineReturnStatement(rewrittenReturnExpr);
   const { luaBody, luaReturnStmts } = transformInFunctionScope(declaration, context, () => ({
     luaBody: rewrittenBodyStmts.flatMap((s) => context.transformStatements(s)),
@@ -206,7 +196,7 @@ export function prepareReturnValueInline(
   const { bodyStmts, params, declaration, returnExpr } = target;
 
   const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
-  const rewrittenReturnExpr = rewriteInlineNode(returnExpr, substitutions, checker);
+  const rewrittenReturnExpr = rewriteWithConstSubstitutions(returnExpr, substitutions, checker);
 
   // Transform body and return expression first so ALL param symbols are registered
   // in context.symbolIdMaps before buildParamMap looks them up. A param that only
@@ -300,7 +290,7 @@ export function inlineExpressionBody(
   }
   const { substitutions } = classification;
 
-  const rewrittenExpr = rewriteInlineNode(target.bodyExpr, substitutions, checker);
+  const rewrittenExpr = rewriteWithConstSubstitutions(target.bodyExpr, substitutions, checker);
   const luaBody = context.transformExpression(rewrittenExpr);
   clearExpressionPositions(luaBody);
 
