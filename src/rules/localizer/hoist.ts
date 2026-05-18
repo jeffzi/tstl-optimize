@@ -5,6 +5,7 @@ import { getElseBranchStatements, getMutableElseBranchStatements } from "../../a
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import {
   buildChainExpression,
+  collectFunctionParameterNames,
   collectScopeInfo,
   isRootShadowedInActiveScopes,
   luaPropertyChain,
@@ -13,8 +14,7 @@ import { hasInterveningCallForChain, hasTopLevelChainAccess, STDLIB_ROOTS } from
 
 export function mergeNameSets(...sets: Array<ReadonlySet<string> | undefined>): Set<string> {
   const merged = new Set<string>();
-  for (const names of sets) {
-    if (names === undefined) continue;
+  for (const names of sets.filter((s) => s !== undefined)) {
     for (const name of names) {
       merged.add(name);
     }
@@ -27,13 +27,12 @@ export function allocateHoistName(baseName: string, unavailableNames: ReadonlySe
     return baseName;
   }
 
-  let suffix = 1;
-  let candidate = `${baseName}_${suffix}`;
-  while (unavailableNames.has(candidate)) {
-    suffix += 1;
-    candidate = `${baseName}_${suffix}`;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${baseName}_${suffix}`;
+    if (!unavailableNames.has(candidate)) {
+      return candidate;
+    }
   }
-  return candidate;
 }
 
 /** True if any prefix of the dotted chain (root, intermediate, or exact) is in scopeDefs. */
@@ -73,13 +72,7 @@ export function replaceChains(
       return Walk.keep;
     },
     funcEnter: (expr: tstl.FunctionExpression) => {
-      const params = new Set<string>();
-      for (const param of expr.params ?? []) {
-        if (tstl.isIdentifier(param)) {
-          params.add(param.text);
-        }
-      }
-      shadowStack.push(params);
+      shadowStack.push(collectFunctionParameterNames(expr));
     },
     funcExit: (_expr: tstl.FunctionExpression) => {
       shadowStack.pop();
@@ -103,7 +96,10 @@ export function hoistScope(
   extraBoundNames?: ReadonlySet<string>,
   elseBranchOwner?: tstl.IfStatement,
 ): Set<string> {
-  const { chainCounts, scopeDefs, firstChainUse } = collectScopeInfo(statements, shallow);
+  const { chainCounts, scopeDefs, firstChainUse, rootIdentifiers } = collectScopeInfo(
+    statements,
+    shallow,
+  );
   const unavailableNames = mergeNameSets(scopeDefs, reservedNames);
   const toHoist = new Map<string, tstl.Identifier>();
   const inBodyDecls: tstl.VariableDeclarationStatement[] = [];
@@ -139,7 +135,7 @@ export function hoistScope(
     const positionSource = firstChainUse.get(chain);
     const decl = tstl.createVariableDeclarationStatement(
       ident,
-      buildChainExpression(chain, positionSource),
+      buildChainExpression(chain, positionSource, rootIdentifiers.get(chain)),
     );
     if (positionSource) withPositionFrom(decl, positionSource);
     if (outDecls && !rootIsExternal) {
