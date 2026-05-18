@@ -441,15 +441,16 @@ function hasSideEffectBeforeParamUse(
     return found;
   }
 
-  function findFirstParamWithSEOrSE(expr: ts.Expression): "side-effect" | number | undefined {
-    // Returns: "side-effect" if SE found, param-index if param with SE arg found, undefined otherwise
+  type EvalHazard = { kind: "sideEffect" } | { kind: "seParam"; index: number };
+
+  function findFirstParamWithSEOrSE(expr: ts.Expression): EvalHazard | undefined {
     switch (expr.kind) {
       // --- Always side-effectful (handled specially below for CallExpression) ---
       case ts.SyntaxKind.PostfixUnaryExpression:
       case ts.SyntaxKind.AwaitExpression:
       case ts.SyntaxKind.YieldExpression:
       case ts.SyntaxKind.DeleteExpression:
-        return "side-effect";
+        return { kind: "sideEffect" };
 
       // --- Transparent wrappers ---
       case ts.SyntaxKind.TypeAssertionExpression:
@@ -472,14 +473,14 @@ function hasSideEffectBeforeParamUse(
         );
 
       case ts.SyntaxKind.SpreadElement:
-        return "side-effect";
+        return { kind: "sideEffect" };
 
       // --- Identifier: check if it's a parameter ---
       case ts.SyntaxKind.Identifier: {
         const sym = checker.getSymbolAtLocation(expr as ts.Identifier);
         for (let i = 0; i < paramSymbols.length; i++) {
           if (sym === paramSymbols[i]) {
-            return sideEffectArgIndices.has(i) ? i : undefined;
+            return sideEffectArgIndices.has(i) ? { kind: "seParam", index: i } : undefined;
           }
         }
         return undefined;
@@ -508,7 +509,7 @@ function hasSideEffectBeforeParamUse(
             bin.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) &&
           containsTargetParam(bin.right)
         ) {
-          return "side-effect";
+          return { kind: "sideEffect" };
         }
         return findFirstParamWithSEOrSE(bin.right);
       }
@@ -520,7 +521,7 @@ function hasSideEffectBeforeParamUse(
           prefix.operator === ts.SyntaxKind.PlusPlusToken ||
           prefix.operator === ts.SyntaxKind.MinusMinusToken
         ) {
-          return "side-effect";
+          return { kind: "sideEffect" };
         }
         return findFirstParamWithSEOrSE(prefix.operand);
       }
@@ -532,7 +533,7 @@ function hasSideEffectBeforeParamUse(
         if (objResult !== undefined) return objResult;
         // Property reads can invoke getters (arbitrary side effects), so conservatively treat
         // the read itself as a side effect even when the object expression is pure.
-        return "side-effect";
+        return { kind: "sideEffect" };
       }
 
       // --- Element access ---
@@ -542,7 +543,7 @@ function hasSideEffectBeforeParamUse(
         if (objResult !== undefined) return objResult;
         const indexResult = findFirstParamWithSEOrSE(elemAccess.argumentExpression);
         if (indexResult !== undefined) return indexResult;
-        return "side-effect";
+        return { kind: "sideEffect" };
       }
 
       // --- Call expression ---
@@ -554,7 +555,7 @@ function hasSideEffectBeforeParamUse(
           const argResult = findFirstParamWithSEOrSE(arg);
           if (argResult !== undefined) return argResult;
         }
-        return "side-effect";
+        return { kind: "sideEffect" };
       }
 
       // --- New expression ---
@@ -568,7 +569,7 @@ function hasSideEffectBeforeParamUse(
             if (argResult !== undefined) return argResult;
           }
         }
-        return "side-effect";
+        return { kind: "sideEffect" };
       }
 
       // --- Tagged template ---
@@ -583,7 +584,7 @@ function hasSideEffectBeforeParamUse(
             if (spanResult !== undefined) return spanResult;
           }
         }
-        return "side-effect";
+        return { kind: "sideEffect" };
       }
 
       // --- Template expression ---
@@ -601,7 +602,7 @@ function hasSideEffectBeforeParamUse(
         const arr = expr as ts.ArrayLiteralExpression;
         for (const elem of arr.elements) {
           if (ts.isSyntheticExpression(elem)) continue;
-          if (elem.kind === ts.SyntaxKind.SpreadElement) return "side-effect";
+          if (elem.kind === ts.SyntaxKind.SpreadElement) return { kind: "sideEffect" };
           const elemResult = findFirstParamWithSEOrSE(elem);
           if (elemResult !== undefined) return elemResult;
         }
@@ -627,7 +628,7 @@ function hasSideEffectBeforeParamUse(
               break;
             }
             case ts.SyntaxKind.SpreadAssignment:
-              return "side-effect";
+              return { kind: "sideEffect" };
             case ts.SyntaxKind.ShorthandPropertyAssignment:
             case ts.SyntaxKind.MethodDeclaration:
             case ts.SyntaxKind.GetAccessor:
@@ -635,7 +636,7 @@ function hasSideEffectBeforeParamUse(
               break;
             /* v8 ignore next -- defensive fallthrough for property kinds not present in valid inline bodies */
             default:
-              return "side-effect";
+              return { kind: "sideEffect" };
           }
         }
         return undefined;
@@ -653,7 +654,7 @@ function hasSideEffectBeforeParamUse(
         // If either branch has a param or SE, return side-effect
         // (params behind conditionals need eager temps)
         if (thenResult !== undefined || elseResult !== undefined) {
-          return "side-effect";
+          return { kind: "sideEffect" };
         }
         return undefined;
       }
@@ -665,12 +666,12 @@ function hasSideEffectBeforeParamUse(
 
       // --- Class expression ---
       case ts.SyntaxKind.ClassExpression:
-        return "side-effect";
+        return { kind: "sideEffect" };
 
       // --- Default ---
       /* v8 ignore next -- defensive fallthrough for expression kinds not present in valid inline bodies */
       default:
-        return "side-effect";
+        return { kind: "sideEffect" };
     }
   }
 
@@ -678,16 +679,15 @@ function hasSideEffectBeforeParamUse(
 
   // Need eager temps if:
   // 1. There's a side-effect before this param's first use
-  if (firstResult === "side-effect") {
+  if (firstResult?.kind === "sideEffect") {
     return true;
   }
 
   // 2. Another parameter with a side-effectful arg appears before the target in eval order
-  if (typeof firstResult === "number") {
-    // firstResult is a param index with SE arg
+  if (firstResult?.kind === "seParam") {
     // If this other param appears before target in eval but after in param list, or vice versa,
     // we need temps for both
-    if (firstResult !== targetParamIndex) {
+    if (firstResult.index !== targetParamIndex) {
       return true; // Different param with SE arg appears first
     }
   }
