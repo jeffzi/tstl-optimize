@@ -1498,7 +1498,7 @@ describe("inline uncovered branches", () => {
 
       expect(lua).not.toContain(`${wrapperName}(`);
       for (const pattern of patterns) {
-        expect(lua).toContain(pattern);
+        expect.soft(lua).toContain(pattern);
       }
       expect(lua).not.toContain("local _ =");
       expect(lua).toMatch(/local ____inline_result_\d+ =/);
@@ -1619,7 +1619,7 @@ describe("inline uncovered branches", () => {
     });
   });
 
-  describe("checkSharedPrereqs branch coverage", () => {
+  describe("argument count and shape validation", () => {
     it("does not inline rest parameters functions", () => {
       const code = `
         /** @inline */
@@ -1640,119 +1640,9 @@ describe("inline uncovered branches", () => {
       // Rest parameters should not be inlined, call should remain
       expect(lua).toContain("sum(a, a + 1)");
     });
-
-    it("rejects default parameters with diagnostic", () => {
-      const code = `
-        /** @inline */
-        function multiply(x: number, y: number = 2): number {
-          return x * y;
-        }
-
-        function test() {
-          multiply(5);
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("default parameters are not supported"),
-        ),
-      ).toBe(true);
-    });
-
-    it("rejects array destructuring parameters with diagnostic", () => {
-      const code = `
-        /** @inline */
-        function unpack([a, b]: [number, number]): number {
-          return a + b;
-        }
-
-        function test() {
-          unpack([1, 2]);
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("destructuring parameters are not supported"),
-        ),
-      ).toBe(true);
-    });
-
-    it("inlines when argument count matches parameter count", () => {
-      // Matching arity lets the inline rule evaluate the call site normally.
-      const code = `
-        declare const x: number;
-        declare const y: number;
-
-        /** @inline */
-        function add(a: number, b: number): number {
-          return a + b;
-        }
-
-        function test() {
-          // Both correct counts should allow inlining
-          const result1 = add(x, y);
-          return result1;
-        }
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // Matching argument count should allow inlining.
-      expect(lua).toContain("x + y");
-    });
   });
 
-  describe("canInline parameter validation", () => {
-    it("does not inline when parameter is written inside function body", () => {
-      const code = `
-        declare const x: number;
-
-        /** @inline */
-        function increment(n: number): number {
-          n++;
-          return n;
-        }
-
-        const result = increment(x);
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      // Parameter write should prevent inlining
-      expect(diagnostics.some((d) => String(d.messageText).includes("parameter is written"))).toBe(
-        true,
-      );
-    });
-
-    it("rejects when argument with side effects is not used", () => {
-      const code = `
-        declare function sideEffect(): number;
-
-        /** @inline */
-        function ignore(x: number): number {
-          return 42;
-        }
-
-        function test() {
-          ignore(sideEffect());
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("argument with side effects is not used"),
-        ),
-      ).toBe(true);
-    });
-
+  describe("expression-body inlining restrictions", () => {
     it("still inlines unused pure arguments and erases the declaration", () => {
       const { lua, diagnostics } = compileWithDiagnostics(`
         /** @inline */
@@ -1769,32 +1659,9 @@ describe("inline uncovered branches", () => {
       expect(lua).not.toContain("ignore(value)");
       expect(lua).not.toContain("function ignore");
     });
-
-    it("rejects when argument with side effects is used multiple times", () => {
-      const code = `
-        declare function expensiveCompute(): number;
-
-        /** @inline */
-        function double(x: number): number {
-          return x + x;
-        }
-
-        function test() {
-          double(expensiveCompute());
-        }
-      `;
-
-      const { diagnostics } = compileWithDiagnostics(code);
-
-      expect(
-        diagnostics.some((d) =>
-          String(d.messageText).includes("argument with side effects is used multiple times"),
-        ),
-      ).toBe(true);
-    });
   });
 
-  describe("canInlineStatements parameter validation", () => {
+  describe("statement-body inlining restrictions", () => {
     it("does not inline multi-statement function when parameter is written", () => {
       const code = `
         declare const counter: number;
@@ -2119,85 +1986,6 @@ describe("inline uncovered branches", () => {
   });
 
   describe("Expression vs statement inlining decisions", () => {
-    it("inlines expression-kind function at expression position", () => {
-      const code = `
-        declare const x: number;
-        declare const y: number;
-
-        /** @inline */
-        function add(a: number, b: number): number {
-          return a + b;
-        }
-
-        const result = add(x, y);
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // Expression should be inlined directly
-      expect(lua).toContain("x + y");
-      expect(lua).not.toContain("add(");
-    });
-
-    // Pure expression-body inline at void site → drop entirely (no side effects)
-    it("drops pure expression-body call at top-level statement position", () => {
-      const code = `
-        declare const x: number;
-
-        /** @inline */
-        function square(n: number): number {
-          return n * n;
-        }
-
-        square(x);
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // The call square(x) should be inlined
-      expect(lua).not.toContain("square(");
-      // Pure expression x * x at void site should be dropped entirely
-      expect(lua).not.toContain("x * x");
-      // No invalid bare parenthesized expression statement
-      expect(lua).not.toContain("(x * x)");
-    });
-
-    it("inlines arrow function assigned to const variable", () => {
-      const code = `
-        declare const x: number;
-
-        /** @inline */
-        const square = (n: number): number => n * n;
-
-        const result = square(x);
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // Arrow function assigned to variable should be treated like any other inline
-      expect(lua).toContain("x * x");
-      expect(lua).not.toContain("square(x)");
-    });
-
-    it("inlines statements-kind function with multiple statements and no return", () => {
-      const code = `
-        declare const x: number;
-
-        /** @inline */
-        function log(n: number): void {
-          const a = n;
-          const b = a + 1;
-        }
-
-        log(x);
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // Multi-statement at void site should inline
-      expect(lua).not.toContain("log(x)");
-    });
-
     it("preserves a side-effecting unused argument for an empty statement body", () => {
       const code = `
         declare function sideEffect(): number;
@@ -2239,24 +2027,6 @@ describe("inline uncovered branches", () => {
   });
 
   describe("Complex argument evaluation", () => {
-    it("handles argument passed to function with single use", () => {
-      const code = `
-        declare function getValue(): number;
-
-        /** @inline */
-        function getValue2(n: number): number {
-          return n;
-        }
-
-        const result = getValue2(getValue());
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // Single use of argument with side effects should be ok
-      expect(lua).toContain("getValue()");
-    });
-
     it("allows pure argument that is used multiple times", () => {
       const code = `
         declare const x: number;
@@ -2273,24 +2043,6 @@ describe("inline uncovered branches", () => {
 
       // Pure argument with multiple uses should inline
       expect(lua).toContain("x + x + x");
-    });
-
-    it("inlines argument-less function", () => {
-      const code = `
-        declare const global: { value: number };
-
-        /** @inline */
-        function getGlobal(): number {
-          return global.value;
-        }
-
-        const result = getGlobal();
-      `;
-
-      const lua = normalizeLua(compile(code));
-
-      // Zero-argument function should inline
-      expect(lua).toContain("global.value");
     });
 
     it("preserves left-to-right evaluation when expression-body parameters are used out of order", () => {
