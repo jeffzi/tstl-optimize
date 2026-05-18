@@ -80,6 +80,14 @@ export function replaceChains(
   });
 }
 
+export interface HoistScopeOptions {
+  reservedNames?: ReadonlySet<string>;
+  isRootAllowed?: (root: string) => boolean;
+  outDecls?: tstl.VariableDeclarationStatement[];
+  extraBoundNames?: ReadonlySet<string>;
+  elseBranchOwner?: tstl.IfStatement;
+}
+
 /**
  * Collect chains meeting threshold, create hoisted declarations, replace in-place,
  * and prepend declarations. Returns the set of newly hoisted chain strings.
@@ -90,12 +98,10 @@ export function hoistScope(
   shallow: boolean,
   alreadyHoisted: ReadonlySet<string>,
   context: tstl.TransformationContext,
-  reservedNames?: ReadonlySet<string>,
-  isRootAllowed?: (root: string) => boolean,
-  outDecls?: tstl.VariableDeclarationStatement[],
-  extraBoundNames?: ReadonlySet<string>,
-  elseBranchOwner?: tstl.IfStatement,
+  options?: HoistScopeOptions,
 ): Set<string> {
+  const { reservedNames, isRootAllowed, outDecls, extraBoundNames, elseBranchOwner } =
+    options ?? {};
   const { chainCounts, scopeDefs, firstChainUse, rootIdentifiers } = collectScopeInfo(
     statements,
     shallow,
@@ -160,32 +166,14 @@ export function hoistScope(
     for (const stmt of statements) {
       if (tstl.isIfStatement(stmt)) {
         // Process if-block independently
-        hoistScope(
-          stmt.ifBlock.statements,
-          threshold,
-          shallow,
-          alreadyHoisted,
-          context,
-          reservedNames,
-          isRootAllowed,
-          outDecls,
-          extraBoundNames,
-        );
+        hoistScope(stmt.ifBlock.statements, threshold, shallow, alreadyHoisted, context, options);
         // Process else-block independently
         if (stmt.elseBlock) {
           const elseBranchStatements = getElseBranchStatements(stmt.elseBlock);
-          hoistScope(
-            elseBranchStatements,
-            threshold,
-            shallow,
-            alreadyHoisted,
-            context,
-            reservedNames,
-            isRootAllowed,
-            outDecls,
-            extraBoundNames,
-            stmt,
-          );
+          hoistScope(elseBranchStatements, threshold, shallow, alreadyHoisted, context, {
+            ...options,
+            elseBranchOwner: stmt,
+          });
         }
       }
     }

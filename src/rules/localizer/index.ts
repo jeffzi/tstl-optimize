@@ -83,15 +83,9 @@ function processFile(
 ): void {
   const { threshold, scope } = config;
   const runModulePass = (): Set<string> =>
-    hoistScope(
-      file.statements,
-      threshold,
-      false,
-      new Set<string>(),
-      context,
-      undefined,
-      isRootAllowedStrict,
-    );
+    hoistScope(file.statements, threshold, false, new Set<string>(), context, {
+      isRootAllowed: isRootAllowedStrict,
+    });
   const functionContext = {
     threshold,
     context,
@@ -134,15 +128,10 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       if (tstl.isFunctionExpression(expr)) {
         const paramNames = new Set(expr.params?.filter(tstl.isIdentifier).map((p) => p.text));
         const functionReservedNames = mergeNameSets(scopeReservedNames, paramNames);
-        hoistScope(
-          expr.body.statements,
-          threshold,
-          true,
-          alreadyHoisted,
-          context,
-          functionReservedNames,
+        hoistScope(expr.body.statements, threshold, true, alreadyHoisted, context, {
+          reservedNames: functionReservedNames,
           isRootAllowed,
-        );
+        });
         processFunctionBodies(expr.body.statements, {
           ...ctx,
           reservedNames: functionReservedNames,
@@ -159,31 +148,19 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
       // Hoist chains inside if-block (pass outer snapshot of alreadyHoisted to each branch)
-      hoistScope(
-        stmt.ifBlock.statements,
-        threshold,
-        true,
-        alreadyHoisted,
-        context,
-        scopeReservedNames,
+      hoistScope(stmt.ifBlock.statements, threshold, true, alreadyHoisted, context, {
+        reservedNames: scopeReservedNames,
         isRootAllowed,
-      );
+      });
       processFunctionBodies(stmt.ifBlock.statements, ctx);
       // Hoist chains inside else-block independently
       if (stmt.elseBlock) {
         const elseBranchStatements = getElseBranchStatements(stmt.elseBlock);
-        hoistScope(
-          elseBranchStatements,
-          threshold,
-          true,
-          alreadyHoisted,
-          context,
-          scopeReservedNames,
+        hoistScope(elseBranchStatements, threshold, true, alreadyHoisted, context, {
+          reservedNames: scopeReservedNames,
           isRootAllowed,
-          undefined,
-          undefined,
-          stmt,
-        );
+          elseBranchOwner: stmt,
+        });
         processFunctionBodies(getElseBranchStatements(stmt.elseBlock), ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
@@ -194,17 +171,12 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
       // Collect chain decls for pre-loop (LICM) placement. The same safety gates that
       // allow hoisting (no intervening call, no prefix write) prove loop-invariance.
       const preLoopDecls: tstl.VariableDeclarationStatement[] = [];
-      hoistScope(
-        stmt.body.statements,
-        threshold,
-        true,
-        alreadyHoisted,
-        context,
-        loopReservedNames,
+      hoistScope(stmt.body.statements, threshold, true, alreadyHoisted, context, {
+        reservedNames: loopReservedNames,
         isRootAllowed,
-        preLoopDecls,
-        loopNames,
-      );
+        outDecls: preLoopDecls,
+        extraBoundNames: loopNames,
+      });
       // Array-element hoists depend on the loop variable -- they stay inside the body.
       hoistArrayElements(stmt.body.statements, loopNames, threshold, context, loopReservedNames);
       processFunctionBodies(stmt.body.statements, { ...ctx, reservedNames: loopReservedNames });
