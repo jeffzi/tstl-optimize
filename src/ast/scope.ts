@@ -3,6 +3,15 @@ import * as tstl from "typescript-to-lua";
 import { withPositionFrom } from "./deep-clone";
 import { type TraversalControl, Walk, walkStatements } from "./lua-walker";
 
+/** Extract root identifier from a table-index chain. */
+function extractRootIdentifier(expr: tstl.Expression): tstl.Identifier | undefined {
+  let current: tstl.Expression = expr;
+  while (tstl.isTableIndexExpression(current)) {
+    current = current.table;
+  }
+  return tstl.isIdentifier(current) ? current : undefined;
+}
+
 /** Build a dotted chain string from a Lua TableIndexExpression. */
 export function luaPropertyChain(node: tstl.TableIndexExpression): string | undefined {
   const parts: string[] = [];
@@ -29,12 +38,15 @@ export function luaPropertyChain(node: tstl.TableIndexExpression): string | unde
  *   excluding guarded accesses and shadowed chains.
  * - `scopeDefs`: All variable names defined in this scope via declarations or assignments.
  * - `firstChainUse`: First node (statement) observing each chain, used to position hoisted locals.
+ * - `rootIdentifiers`: Original root identifiers from hoisted chains, preserving symbolId.
  */
 export interface ScopeInfo {
   chainCounts: Map<string, number>;
   scopeDefs: Set<string>;
   /** First TableIndexExpression observed for each chain string (in source order). */
   firstChainUse: Map<string, tstl.Node>;
+  /** Original root identifier nodes for each chain, preserving symbolId for dead-local tracking. */
+  rootIdentifiers: Map<string, tstl.Identifier>;
 }
 
 export function isRootShadowedInActiveScopes(
@@ -42,6 +54,17 @@ export function isRootShadowedInActiveScopes(
   shadowStack: ReadonlyArray<ReadonlySet<string>>,
 ): boolean {
   return shadowStack.some((shadowFrame) => shadowFrame.has(root));
+}
+
+/** Collect parameter names from a function expression into a Set. */
+export function collectFunctionParameterNames(expr: tstl.FunctionExpression): Set<string> {
+  const names = new Set<string>();
+  for (const param of expr.params ?? []) {
+    if (tstl.isIdentifier(param)) {
+      names.add(param.text);
+    }
+  }
+  return names;
 }
 
 /**
@@ -61,6 +84,7 @@ export function collectScopeInfo(
 ): ScopeInfo {
   const chainCounts = new Map<string, number>();
   const firstChainUse = new Map<string, tstl.Node>();
+  const rootIdentifiers = new Map<string, tstl.Identifier>();
   const scopeDefs = new Set<string>();
   const shadowStack: Array<Set<string>> = []; // Stack of shadowed param names as we enter/exit nested funcs
   const shadowedChains = new Set<string>(); // Tracks chains with mixed outer + shadowed inner reads
@@ -94,6 +118,13 @@ export function collectScopeInfo(
               chainCounts.set(chain, (chainCounts.get(chain) ?? 0) + 1);
               if (!firstChainUse.has(chain) && currentStmt !== undefined) {
                 firstChainUse.set(chain, currentStmt);
+              }
+              // Capture the original root identifier to preserve its symbolId for dead-local tracking
+              if (!rootIdentifiers.has(chain)) {
+                const root = extractRootIdentifier(expr);
+                if (root !== undefined) {
+                  rootIdentifiers.set(chain, root);
+                }
               }
             }
           }
@@ -140,13 +171,7 @@ export function collectScopeInfo(
       }
     },
     funcEnter: (expr: tstl.FunctionExpression) => {
-      const params = new Set<string>();
-      for (const param of expr.params ?? []) {
-        if (tstl.isIdentifier(param)) {
-          params.add(param.text);
-        }
-      }
-      shadowStack.push(params);
+      shadowStack.push(collectFunctionParameterNames(expr));
     },
     funcExit: (_expr: tstl.FunctionExpression) => {
       shadowStack.pop();
@@ -158,7 +183,7 @@ export function collectScopeInfo(
     chainCounts.delete(chain);
   }
 
-  return { chainCounts, scopeDefs, firstChainUse };
+  return { chainCounts, scopeDefs, firstChainUse, rootIdentifiers };
 }
 
 /** Collected metadata about array-element accesses inside a loop.
@@ -268,26 +293,44 @@ export function collectArrayElementAccesses(
  *
  * When `source` is provided, every created node is stamped with `source`'s position
  * via `withPositionFrom` so hoisted declarations map to the first-use site.
+ *
+ * When `rootIdentifier` is provided (the original identifier from the chain),
+ * its symbolId is copied to the synthesized root identifier, ensuring dead-local
+ * tracking can see the reference to the original variable.
  */
-export function buildChainExpression(chain: string, source?: tstl.Node): tstl.TableIndexExpression {
+export function buildChainExpression(
+  chain: string,
+  source?: tstl.Node,
+  rootIdentifier?: tstl.Identifier,
+): tstl.TableIndexExpression {
   const parts = chain.split(".");
   if (parts.length < 2) {
     throw new Error(`buildChainExpression requires a dotted chain (got "${chain}")`);
   }
-  const root = tstl.createIdentifier(parts[0]);
-  if (source) withPositionFrom(root, source);
+
+  const applySource = (node: tstl.Node): void => {
+    if (source) withPositionFrom(node, source);
+  };
+
+  const root = rootIdentifier
+    ? tstl.createIdentifier(parts[0], undefined, rootIdentifier.symbolId)
+    : tstl.createIdentifier(parts[0]);
+  applySource(root);
+
   // Build the first TableIndexExpression from the root identifier. The parts.length < 2
   // guard above ensures parts[1] exists, so the non-null assertion is safe.
   // biome-ignore lint/style/noNonNullAssertion: length guard above proves parts[1] is defined
   const firstKey = tstl.createStringLiteral(parts[1]!);
-  if (source) withPositionFrom(firstKey, source);
+  applySource(firstKey);
   let result: tstl.TableIndexExpression = tstl.createTableIndexExpression(root, firstKey);
-  if (source) withPositionFrom(result, source);
+  applySource(result);
+
   for (const part of parts.slice(2)) {
     const key = tstl.createStringLiteral(part);
-    if (source) withPositionFrom(key, source);
+    applySource(key);
     result = tstl.createTableIndexExpression(result, key);
-    if (source) withPositionFrom(result, source);
+    applySource(result);
   }
+
   return result;
 }

@@ -394,6 +394,79 @@ describe("constant-folding", () => {
     expect(lua).toContain("print(2)");
   });
 
+  describe("Math.ceil and Math.round folding", () => {
+    // Only bare positive numeric literals in the TS source are foldable at compile
+    // time via the TS-AST visitor. Negative arguments (e.g. Math.ceil(-1.2)) are
+    // unary expressions in the TS AST, not numeric literals, and are not folded here.
+    describe("Math.ceil", () => {
+      it.each([
+        { label: "fractional", source: "const x = Math.ceil(1.2);", expected: "2" },
+        { label: "already integer", source: "const x = Math.ceil(3.0);", expected: "3" },
+        { label: "zero", source: "const x = Math.ceil(0);", expected: "0" },
+        {
+          label: "large finite",
+          source: "const x = Math.ceil(1e15);",
+          expected: "1000000000000000",
+        },
+      ])("folds with $label to a literal", ({ source, expected }) => {
+        const lua = compile(source);
+
+        expect(lua).toContain(`= ${expected}`);
+        expect(lua).not.toContain("math.ceil");
+      });
+
+      it("does not fold when argument is non-literal", () => {
+        const lua = compile("declare const x: number; const a = Math.ceil(x);");
+
+        expect(lua).toContain("math.ceil");
+      });
+
+      it("does not fold oversized numeric literal that overflows to Infinity", () => {
+        const lua = compile("const a = Math.ceil(1e309);");
+
+        expect(lua).toContain("math.ceil");
+      });
+    });
+
+    describe("Math.round", () => {
+      it.each([
+        { label: "rounds up at .5", source: "const x = Math.round(1.5);", expected: "2" },
+        { label: "rounds down below .5", source: "const x = Math.round(1.4);", expected: "1" },
+        { label: "already integer", source: "const x = Math.round(4.0);", expected: "4" },
+        { label: "zero", source: "const x = Math.round(0);", expected: "0" },
+      ])("folds with $label to a literal", ({ source, expected }) => {
+        const lua = compile(source);
+
+        expect(lua).toContain(`= ${expected}`);
+        expect(lua).not.toContain("math.round");
+      });
+
+      it("does not fold oversized numeric literal that overflows to Infinity", () => {
+        const lua = compile("const a = Math.round(1e309);");
+
+        // TSTL rewrites Math.round to math.floor(...), so verify no constant is folded in.
+        expect(lua).not.toMatch(/a = \d+/);
+      });
+
+      it("does not fold when argument is non-literal", () => {
+        // math-intrinsics rewrites Math.round(x) to math.floor(x + 0.5) — the result
+        // must still reference the variable, not collapse to a numeric literal.
+        const lua = compile("declare const x: number; const a = Math.round(x);");
+
+        expect(lua).toContain("x");
+        expect(lua).not.toMatch(/a = \d+/);
+      });
+    });
+
+    it("passes through unsupported Math methods unchanged", () => {
+      // Math.log is not handled by the optimizer — exercises the default branch in
+      // the math-intrinsics switch to ensure unrecognised methods are left alone.
+      const lua = compile("declare const x: number; const a = Math.log(x);");
+
+      expect(lua).toContain("math.log");
+    });
+  });
+
   describe("direct source-file visitor coverage", () => {
     function runSourceFileVisitor(file: tstl.File | tstl.Expression): tstl.File | tstl.Expression {
       const visitors = Reflect.apply(createVisitors, undefined, []);

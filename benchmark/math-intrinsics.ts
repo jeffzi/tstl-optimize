@@ -100,8 +100,13 @@ print(
   ),
 );
 
-// x ** 2 vs x * x (plugin output)
-const two = 2; // variable exponent prevents plugin optimization
+// x ** n vs x * x * ... (plugin output)
+// Variable exponents prevent plugin optimization in baseline arms.
+const two = 2;
+const three = 3;
+const four = 4;
+const divisor = 2;
+
 print("\n=== x ** 2 vs x * x ===");
 print(
   render(
@@ -114,6 +119,60 @@ print(
       "x ** 2 [optimized]": () => {
         for (let i = 0; i < N; i++) {
           x ** 2; // literal 2 → x * x (optimized)
+        }
+      },
+    }),
+  ),
+);
+
+print("\n=== x ** 3 vs x * x * x ===");
+print(
+  render(
+    compare_time({
+      "x ^ 3": () => {
+        for (let i = 0; i < N; i++) {
+          x ** three;
+        }
+      },
+      "x ** 3 [optimized]": () => {
+        for (let i = 0; i < N; i++) {
+          x ** 3; // literal 3 → x * x * x (optimized)
+        }
+      },
+    }),
+  ),
+);
+
+print("\n=== x ** 4 vs (x * x) * (x * x) ===");
+print(
+  render(
+    compare_time({
+      "x ^ 4": () => {
+        for (let i = 0; i < N; i++) {
+          x ** four;
+        }
+      },
+      "x ** 4 [optimized]": () => {
+        for (let i = 0; i < N; i++) {
+          x ** 4; // literal 4 → (x * x) * (x * x) (optimized)
+        }
+      },
+    }),
+  ),
+);
+
+print("\n=== x / 2 vs x * 0.5 ===");
+print(
+  render(
+    compare_time({
+      "x / 2": () => {
+        for (let i = 0; i < N; i++) {
+          x / divisor; // variable divisor → not optimized
+        }
+      },
+      "x / 2 [optimized]": () => {
+        for (let i = 0; i < N; i++) {
+          x / 2; // literal 2 → x * 0.5 (optimized)
         }
       },
     }),

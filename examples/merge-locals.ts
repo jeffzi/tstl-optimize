@@ -29,6 +29,7 @@ function forwardRef(): number {
 function closureCapture(): () => number {
   const a = 1;
   const f = () => a; // closure captures a — run ends before f
+  // @ts-expect-error TS6133 — intentionally unused: dead-local removes it
   const b = 2; // b absent from output — dead-local removes it (never used)
   return f;
 }

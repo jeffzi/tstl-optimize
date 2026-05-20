@@ -1,8 +1,14 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
-import { type LiteralKind, resolveConstLiteral } from "./const-literal";
+import {
+  type LiteralKind,
+  resolveConstLiteral,
+  unwrapTransparentExpression,
+} from "./const-literal";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import type { InlineTarget } from "./target";
+
+const CROSS_MODULE_WARNING_MESSAGE = "cross-module function references non-parameter identifiers";
 
 export function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
   let current: ts.Node | undefined = node;
@@ -26,6 +32,7 @@ export function hasCrossModuleFreeVariable(
 interface CrossModuleFreeVariableClassification {
   blocking: ts.Identifier[];
   substitutions: Map<ts.Symbol, LiteralKind>;
+  ambients: Set<ts.Symbol>;
 }
 
 function getParamSymbols(
@@ -49,39 +56,6 @@ function isSameFileNonDescendant(
   );
 }
 
-function getVariableStatement(declaration: ts.Declaration): ts.VariableStatement | undefined {
-  const declarationList = declaration.parent;
-  if (!ts.isVariableDeclarationList(declarationList)) return undefined;
-
-  const statement = declarationList.parent;
-  return ts.isVariableStatement(statement) ? statement : undefined;
-}
-
-function isExportedVariableDeclaration(declaration: ts.VariableDeclaration): boolean {
-  const statement = getVariableStatement(declaration);
-  /* v8 ignore next -- module-scope variable declarations have variable statements */
-  if (!statement) return false;
-
-  if (statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
-    return true;
-  }
-
-  /* v8 ignore next -- const literal substitutions only resolve identifier declarations */
-  if (!ts.isIdentifier(declaration.name)) return false;
-  const localName = declaration.name.text;
-  return statement
-    .getSourceFile()
-    .statements.some(
-      (sourceStatement) =>
-        ts.isExportDeclaration(sourceStatement) &&
-        sourceStatement.exportClause &&
-        ts.isNamedExports(sourceStatement.exportClause) &&
-        sourceStatement.exportClause.elements.some(
-          (element) => (element.propertyName?.text ?? element.name.text) === localName,
-        ),
-    );
-}
-
 function classifyAliasedIdentifier(
   symbol: ts.Symbol,
   node: ts.Identifier,
@@ -92,7 +66,7 @@ function classifyAliasedIdentifier(
   if (!(symbol.flags & ts.SymbolFlags.Alias)) return false;
 
   const aliasedSymbol = checker.getAliasedSymbol(symbol);
-  const literal = resolveConstLiteral(aliasedSymbol);
+  const literal = resolveConstLiteral(aliasedSymbol, checker);
   if (literal !== undefined && allowSubstitution) {
     classification.substitutions.set(aliasedSymbol, literal);
   } else {
@@ -108,27 +82,50 @@ function classifySameFileIdentifier(
   sourceDeclaration: ts.Node,
   classification: CrossModuleFreeVariableClassification,
   allowSubstitution: boolean,
-): void {
+  checker: ts.TypeChecker,
+): boolean {
   const declarations = symbol.getDeclarations();
   /* v8 ignore next -- checker symbols for source identifiers have declarations */
-  if (declarations === undefined) return;
+  if (declarations === undefined) return false;
 
   for (const declaration of declarations) {
     if (!isSameFileNonDescendant(declaration, sourceFile, sourceDeclaration)) continue;
 
-    const literal = resolveConstLiteral(symbol);
-    if (
-      allowSubstitution &&
-      literal !== undefined &&
-      ts.isVariableDeclaration(declaration) &&
-      isExportedVariableDeclaration(declaration)
-    ) {
+    const literal = resolveConstLiteral(symbol, checker);
+    if (allowSubstitution && literal !== undefined && ts.isVariableDeclaration(declaration)) {
       classification.substitutions.set(symbol, literal);
     } else {
       classification.blocking.push(node);
     }
-    return;
+    return true;
   }
+
+  return false;
+}
+
+function hasExternalValueDeclaration(symbol: ts.Symbol, sourceFile: ts.SourceFile): boolean {
+  const declarations = symbol.getDeclarations();
+  if (declarations === undefined) return false;
+
+  return declarations.some((declaration) => declaration.getSourceFile() !== sourceFile);
+}
+
+function hasNoValueDeclaration(symbol: ts.Symbol): boolean {
+  return symbol.getDeclarations() === undefined;
+}
+
+function isAmbientGlobalSymbol(symbol: ts.Symbol): boolean {
+  const declarations = symbol.getDeclarations();
+  if (declarations === undefined || declarations.length === 0) return false;
+  return declarations.every((d) => d.getSourceFile().isDeclarationFile);
+}
+
+function hasRuntimeDeclaration(symbol: ts.Symbol): boolean {
+  return symbol.getDeclarations()?.some((d) => !d.getSourceFile().isDeclarationFile) === true;
+}
+
+function isAllowedExternalIdentifier(node: ts.Identifier): boolean {
+  return node.text === "$multi";
 }
 
 function classifyIdentifierSymbol(
@@ -143,7 +140,9 @@ function classifyIdentifierSymbol(
 ): void {
   if (paramSymbols.has(symbol)) return;
 
-  if (!classifyAliasedIdentifier(symbol, node, checker, classification, allowSubstitution)) {
+  if (classifyAliasedIdentifier(symbol, node, checker, classification, allowSubstitution)) return;
+
+  if (
     classifySameFileIdentifier(
       symbol,
       node,
@@ -151,22 +150,22 @@ function classifyIdentifierSymbol(
       sourceDeclaration,
       classification,
       allowSubstitution,
-    );
-  }
-}
-
-function unwrapPropertyAccessReceiver(expr: ts.Expression): ts.Expression {
-  let current = expr;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isTypeAssertionExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isSatisfiesExpression(current)
+      checker,
+    )
   ) {
-    current = current.expression;
+    return;
   }
-  return current;
+
+  if (isAllowedExternalIdentifier(node)) return;
+
+  if (isAmbientGlobalSymbol(symbol)) {
+    classification.ambients.add(symbol);
+    return;
+  }
+
+  if (hasExternalValueDeclaration(symbol, sourceFile) || hasNoValueDeclaration(symbol)) {
+    classification.blocking.push(node);
+  }
 }
 
 export function classifyCrossModuleFreeVariables(
@@ -181,34 +180,45 @@ export function classifyCrossModuleFreeVariables(
   const classification: CrossModuleFreeVariableClassification = {
     blocking: [],
     substitutions: new Map<ts.Symbol, LiteralKind>(),
+    ambients: new Set<ts.Symbol>(),
   };
 
+  function classifyResolvedIdentifier(
+    symbol: ts.Symbol | undefined,
+    node: ts.Identifier,
+    allowSubstitution: boolean,
+  ): void {
+    if (symbol === undefined) {
+      classification.blocking.push(node);
+      return;
+    }
+
+    classifyIdentifierSymbol(
+      symbol,
+      node,
+      sourceFile,
+      sourceDeclaration,
+      checker,
+      paramSymbols,
+      classification,
+      allowSubstitution,
+    );
+  }
+
   function walk(node: ts.Node, allowSubstitution = true): void {
-    // Type annotations don't emit to Lua — skip them to avoid false positives
     if (ts.isTypeNode(node)) return;
+
     if (ts.isPropertyAccessExpression(node)) {
-      const receiver = unwrapPropertyAccessReceiver(node.expression);
+      const receiver = unwrapTransparentExpression(node.expression);
       if (ts.isIdentifier(receiver)) {
-        const sym = checker.getSymbolAtLocation(receiver);
-        if (sym) {
-          classifyIdentifierSymbol(
-            sym,
-            receiver,
-            sourceFile,
-            sourceDeclaration,
-            checker,
-            paramSymbols,
-            classification,
-            false,
-          );
-          return;
-        }
+        classifyResolvedIdentifier(checker.getSymbolAtLocation(receiver), receiver, false);
+        return;
       }
       walk(node.expression, allowSubstitution);
       return;
     }
     if (ts.isElementAccessExpression(node)) {
-      walk(node.expression, allowSubstitution);
+      walk(node.expression, false);
       walk(node.argumentExpression, false);
       return;
     }
@@ -220,39 +230,18 @@ export function classifyCrossModuleFreeVariables(
       return;
     }
     if (ts.isShorthandPropertyAssignment(node)) {
-      const sym =
-        checker.getShorthandAssignmentValueSymbol(node) ?? checker.getSymbolAtLocation(node.name);
-      if (sym) {
-        classifyIdentifierSymbol(
-          sym,
-          node.name,
-          sourceFile,
-          sourceDeclaration,
-          checker,
-          paramSymbols,
-          classification,
-          allowSubstitution,
-        );
-      }
+      classifyResolvedIdentifier(
+        checker.getShorthandAssignmentValueSymbol(node) ?? checker.getSymbolAtLocation(node.name),
+        node.name,
+        allowSubstitution,
+      );
       if (node.objectAssignmentInitializer) {
         walk(node.objectAssignmentInitializer, allowSubstitution);
       }
       return;
     }
     if (ts.isIdentifier(node)) {
-      const sym = checker.getSymbolAtLocation(node);
-      if (sym) {
-        classifyIdentifierSymbol(
-          sym,
-          node,
-          sourceFile,
-          sourceDeclaration,
-          checker,
-          paramSymbols,
-          classification,
-          allowSubstitution,
-        );
-      }
+      classifyResolvedIdentifier(checker.getSymbolAtLocation(node), node, allowSubstitution);
     }
     ts.forEachChild(node, (child) => walk(child, allowSubstitution));
   }
@@ -263,16 +252,57 @@ export function classifyCrossModuleFreeVariables(
   return classification;
 }
 
-/**
- * Classifies whether a cross-module function call can be inlined based on free variable analysis.
- *
- * Returns:
- * - `{ reject: true }` for cross-module calls with blocking non-const references
- * - `{ reject: false, substitutions: ... }` otherwise
- *
- * When reject is true, the caller should push diagnostic 90003 and not inline.
- * When reject is false, the caller can inline (with substitutions available if needed).
- */
+function isAmbientShadowedAtCallSite(
+  ambientSymbol: ts.Symbol,
+  callNode: ts.Node,
+  checker: ts.TypeChecker,
+): boolean {
+  const name = ambientSymbol.getName();
+  const localSymbols = checker.getSymbolsInScope(
+    callNode,
+    ts.SymbolFlags.Value | ts.SymbolFlags.Alias,
+  );
+  return localSymbols.some(
+    (scopedSymbol) =>
+      scopedSymbol !== ambientSymbol &&
+      scopedSymbol.getName() === name &&
+      isValueSpaceSymbol(scopedSymbol, checker) &&
+      hasRuntimeDeclaration(scopedSymbol),
+  );
+}
+
+function isTypeOnlyAliasDeclaration(declaration: ts.Declaration): boolean {
+  return ts.isTypeOnlyImportDeclaration(declaration) || ts.isTypeOnlyExportDeclaration(declaration);
+}
+
+function isValueSpaceSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): boolean {
+  if ((symbol.flags & ts.SymbolFlags.Value) !== 0) return true;
+  if ((symbol.flags & ts.SymbolFlags.Alias) === 0) return false;
+
+  const declarations = symbol.getDeclarations();
+  if (declarations?.every(isTypeOnlyAliasDeclaration) === true) {
+    return false;
+  }
+
+  return (checker.getAliasedSymbol(symbol).flags & ts.SymbolFlags.Value) !== 0;
+}
+
+function createCrossModuleRejection(
+  callNode: ts.CallExpression,
+  context: tstl.TransformationContext,
+  strict: boolean,
+): { reject: true } {
+  context.diagnostics.push(
+    createInlineWarning(
+      callNode,
+      CROSS_MODULE_WARNING_MESSAGE,
+      strict,
+      InlineDiagnosticCode.crossModule,
+    ),
+  );
+  return { reject: true };
+}
+
 export function classifyCrossModuleInline(
   callNode: ts.CallExpression,
   target: InlineTarget,
@@ -288,7 +318,7 @@ export function classifyCrossModuleInline(
     return { reject: false, substitutions: new Map() };
   }
 
-  const { blocking, substitutions } = classifyCrossModuleFreeVariables(
+  const { blocking, substitutions, ambients } = classifyCrossModuleFreeVariables(
     nodes,
     target.params,
     target.declaration,
@@ -296,15 +326,13 @@ export function classifyCrossModuleInline(
   );
 
   if (blocking.length > 0) {
-    context.diagnostics.push(
-      createInlineWarning(
-        callNode,
-        "cross-module function references non-parameter identifiers",
-        strict,
-        InlineDiagnosticCode.crossModule,
-      ),
-    );
-    return { reject: true };
+    return createCrossModuleRejection(callNode, context, strict);
+  }
+
+  for (const symbol of ambients) {
+    if (isAmbientShadowedAtCallSite(symbol, callNode, checker)) {
+      return createCrossModuleRejection(callNode, context, strict);
+    }
   }
 
   return { reject: false, substitutions };

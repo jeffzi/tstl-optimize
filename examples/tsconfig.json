@@ -10,7 +10,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "types": ["@typescript-to-lua/language-extensions"],
-    "noEmit": true
+    "noEmit": true,
+    "noUnusedLocals": true
   },
   "include": ["*.ts"]
 }

@@ -45,6 +45,15 @@ const PHASE_ENTRIES: [string, [keyof PluginConfig["rules"], RuleFactory][]][] = 
       ["debug-strip", debugStripVisitors],
     ],
   ],
+  [
+    "refold",
+    [
+      ["constant-folding", constantFoldingVisitors],
+      ["dead-local", deadLocalVisitors],
+      ["merge-locals", mergeLocalsVisitors],
+      ["remove-empty-branch", removeEmptyBranchVisitors],
+    ],
+  ],
 ];
 
 // Expression SyntaxKinds registered by our rules. When multiple rules share

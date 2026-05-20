@@ -55,6 +55,7 @@ function compile(
       luaTarget: tstl.LuaTarget.Lua51,
       luaLibImport: tstl.LuaLibImportKind.None,
       strict: true,
+      noUnusedLocals: true,
       target: ts.ScriptTarget.ESNext,
       lib: ["lib.esnext.d.ts"],
       types: ["@typescript-to-lua/language-extensions"],

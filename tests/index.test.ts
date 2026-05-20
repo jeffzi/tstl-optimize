@@ -348,21 +348,28 @@ describe("SourceFile visitor fallback", () => {
         conditionalCompilation: () => ({
           [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile) => [tstl.createDoStatement([], node)],
         }),
-        constantFolding: () => ({
-          [ts.SyntaxKind.SourceFile]: (
-            node: ts.SourceFile,
-            context: {
-              superTransformNode(node: ts.Node): unknown;
-              usedLuaLibFeatures: Set<tstl.LuaLibFeature>;
-            },
-          ) => {
-            const statements = context.superTransformNode(node);
-            if (!Array.isArray(statements)) {
-              throw new Error("expected statement array");
-            }
-            return tstl.createFile(statements, context.usedLuaLibFeatures, "", node);
-          },
-        }),
+        constantFolding: (() => {
+          let registered = false;
+          return () => {
+            if (registered) return {};
+            registered = true;
+            return {
+              [ts.SyntaxKind.SourceFile]: (
+                node: ts.SourceFile,
+                context: {
+                  superTransformNode(node: ts.Node): unknown;
+                  usedLuaLibFeatures: Set<tstl.LuaLibFeature>;
+                },
+              ) => {
+                const statements = context.superTransformNode(node);
+                if (!Array.isArray(statements)) {
+                  throw new Error("expected statement array");
+                }
+                return tstl.createFile(statements, context.usedLuaLibFeatures, "", node);
+              },
+            };
+          };
+        })(),
       },
       ({ OptimizePlugin: MockedOptimizePlugin }) => {
         const plugin = new MockedOptimizePlugin({ rules: VISITOR_MERGE_RULES });

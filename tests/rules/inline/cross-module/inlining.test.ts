@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { compileMultiFileWithDiagnostics, normalizeLua } from "../../../helpers";
 import { hasDiagnosticCode } from "../helpers";
 
+const CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC = 90003;
+
 describe("cross-module inlining", () => {
   describe("when the target has no blocking module state", () => {
     it("inlines a function that only uses parameters and local temporaries", () => {
@@ -90,6 +92,25 @@ describe("cross-module inlining", () => {
 
       expect(diagnostics).toHaveLength(0);
       expect(normalizeLua(lua)).not.toContain("alias(1)");
+    });
+
+    it("inlines a function whose body uses an ambient global (Math.floor)", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "shared.ts": `
+          /** @inline */
+          export function floorIt(x: number): number {
+            return Math.floor(x);
+          }
+        `,
+        "main.ts": `
+          import { floorIt } from "./shared";
+
+          export const result = floorIt(3.7);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      expect(normalizeLua(lua)).not.toContain("floorIt(");
     });
   });
 
@@ -218,7 +239,7 @@ describe("cross-module inlining", () => {
     ])("preserves $expectedCall for $name", ({ expectedCall, files }) => {
       const { diagnostics, lua } = compileMultiFileWithDiagnostics(files);
 
-      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
+      expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
       expect(normalizeLua(lua)).toContain(expectedCall);
     });
   });

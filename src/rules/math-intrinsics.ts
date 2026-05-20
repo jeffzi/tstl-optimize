@@ -273,6 +273,32 @@ function handleCallExpression(
       tstl.setNodeOriginal(floorResult, node);
       return floorResult;
     }
+    case "ceil": {
+      if (args.length !== 1) return undefined;
+      if (ts.isNumericLiteral(args[0])) {
+        const foldedValue = Number(args[0].text);
+        if (Number.isFinite(foldedValue)) {
+          const lit = tstl.createNumericLiteral(Math.ceil(foldedValue));
+          tstl.setNodeOriginal(lit, node);
+          return lit;
+        }
+      }
+      return undefined;
+    }
+    case "round": {
+      if (args.length !== 1) return undefined;
+      if (ts.isNumericLiteral(args[0])) {
+        const foldedValue = Number(args[0].text);
+        if (Number.isFinite(foldedValue)) {
+          // Math.round uses "round half toward positive infinity" — the same
+          // semantics as Lua's math.floor(x + 0.5) idiom emitted by TSTL.
+          const lit = tstl.createNumericLiteral(Math.round(foldedValue));
+          tstl.setNodeOriginal(lit, node);
+          return lit;
+        }
+      }
+      return undefined;
+    }
     case "abs": {
       if (args.length !== 1) return undefined;
       if (hasSideEffects(args[0])) return undefined;
@@ -319,23 +345,86 @@ export const createVisitors: RuleFactory = (checker, config) => {
 
     [ts.SyntaxKind.BinaryExpression]: (node, context) => {
       if (!ts.isBinaryExpression(node)) return undefined;
-      // Squaring is the common case where duplicating the operand is cheaper
-      // than a `POW` dispatch; only safe when the base is side-effect-free so
-      // it can be evaluated once and cloned in the Lua AST.
+
+      // Strength reduction: x / n → multiplication by reciprocal when:
+      // - operator is division
+      // - right side is a numeric literal that is a power of 2
+      // - left side is side-effect-free
+      if (
+        node.operatorToken.kind === ts.SyntaxKind.SlashToken &&
+        ts.isNumericLiteral(node.right) &&
+        !hasSideEffects(node.left, SideEffectOptions.ConsiderIdentityMutating)
+      ) {
+        const divisor = Number(node.right.text);
+        // Check if divisor is a positive power of 2:
+        // n > 0 && Math.log2(n) % 1 === 0 guarantees exact representation
+        if (divisor > 0 && Math.log2(divisor) % 1 === 0) {
+          const reciprocal = 1 / divisor;
+          const divResult = tstl.createBinaryExpression(
+            context.transformExpression(node.left),
+            tstl.createNumericLiteral(reciprocal),
+            tstl.SyntaxKind.MultiplicationOperator,
+          );
+          tstl.setNodeOriginal(divResult, node);
+          return divResult;
+        }
+      }
+
+      // Strength reduction: x ** n → multiplication when side-effect-free
+      // x ** 2 → x * x
+      // x ** 3 → x * x * x
+      // x ** 4 → (x * x) * (x * x)
       if (
         node.operatorToken.kind !== ts.SyntaxKind.AsteriskAsteriskToken ||
         !ts.isNumericLiteral(node.right) ||
-        node.right.text !== "2" ||
         hasSideEffects(node.left, SideEffectOptions.ConsiderIdentityMutating)
       ) {
         return undefined;
       }
+
+      const exponent = node.right.text;
       const luaBase = context.transformExpression(node.left);
-      const powResult = tstl.createBinaryExpression(
-        luaBase,
-        deepCloneExpression(luaBase),
-        tstl.SyntaxKind.MultiplicationOperator,
-      );
+
+      let powResult: tstl.Expression | undefined;
+      if (exponent === "2") {
+        powResult = tstl.createBinaryExpression(
+          luaBase,
+          deepCloneExpression(luaBase),
+          tstl.SyntaxKind.MultiplicationOperator,
+        );
+      } else if (exponent === "3") {
+        // Compute (x * x) * x to ensure left-associative grouping
+        const x2 = tstl.createBinaryExpression(
+          deepCloneExpression(luaBase),
+          deepCloneExpression(luaBase),
+          tstl.SyntaxKind.MultiplicationOperator,
+        );
+        powResult = tstl.createBinaryExpression(
+          x2,
+          deepCloneExpression(luaBase),
+          tstl.SyntaxKind.MultiplicationOperator,
+        );
+      } else if (exponent === "4" && config.target === "luajit") {
+        // Lua 5.1's C pow() is faster than 3 MUL bytecodes at this exponent
+        const x2a = tstl.createBinaryExpression(
+          deepCloneExpression(luaBase),
+          deepCloneExpression(luaBase),
+          tstl.SyntaxKind.MultiplicationOperator,
+        );
+        const x2b = tstl.createBinaryExpression(
+          deepCloneExpression(luaBase),
+          deepCloneExpression(luaBase),
+          tstl.SyntaxKind.MultiplicationOperator,
+        );
+        powResult = tstl.createBinaryExpression(
+          tstl.createParenthesizedExpression(x2a),
+          tstl.createParenthesizedExpression(x2b),
+          tstl.SyntaxKind.MultiplicationOperator,
+        );
+      }
+
+      if (!powResult) return undefined;
+
       tstl.setNodeOriginal(powResult, node);
       return powResult;
     },

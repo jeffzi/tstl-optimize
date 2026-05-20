@@ -483,7 +483,7 @@ describe("remove-empty-branch rule", () => {
             },
           }),
         ),
-      ).toBe("function test()\nlocal x = true\nlocal y = 2\nend");
+      ).toBe("function test()\nlocal x, y = true, 2\nend");
     });
   });
 

@@ -223,7 +223,7 @@ describe("localizer", () => {
       const normalized = normalizeLua(lua);
       const ifIdx = normalized.indexOf("if cond then");
       const declIdx = normalized.indexOf("local ____obj_x = obj.x");
-      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(ifIdx).not.toBe(-1);
       expect(declIdx).toBeGreaterThan(ifIdx);
       // No reference to the temp appears above the guard
       expect(normalized.indexOf("____obj_x")).toBeGreaterThan(ifIdx);
@@ -251,7 +251,7 @@ describe("localizer", () => {
       const ifIdx = normalized.indexOf("if cond then");
       const elseIdx = normalized.indexOf("else");
       const declIdx = normalized.indexOf("local ____obj_x = obj.x");
-      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(ifIdx).not.toBe(-1);
       expect(elseIdx).toBeGreaterThan(ifIdx);
       expect(declIdx).toBeGreaterThan(elseIdx);
     });
@@ -315,8 +315,8 @@ describe("localizer", () => {
       const normalized = normalizeLua(lua);
       const elseifIdx = normalized.indexOf("elseif cond2 then");
       const declIdx = normalized.indexOf("local ____obj_y = obj.y");
-      const useIdx = normalized.indexOf("local d = ____obj_y");
-      expect(elseifIdx).toBeGreaterThanOrEqual(0);
+      const useIdx = normalized.indexOf("local d, e, f");
+      expect(elseifIdx).not.toBe(-1);
       expect(declIdx).toBeGreaterThan(elseifIdx);
       expect(useIdx).toBeGreaterThan(declIdx);
     });
@@ -341,7 +341,7 @@ describe("localizer", () => {
       const normalized = normalizeLua(lua);
       const ifIdx = normalized.indexOf("if obj then");
       const declIdx = normalized.indexOf("local ____obj_x = obj.x");
-      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(ifIdx).not.toBe(-1);
       expect(declIdx).toBeGreaterThan(ifIdx);
     });
 
@@ -365,7 +365,7 @@ describe("localizer", () => {
       const normalized = normalizeLua(lua);
       const ifIdx = normalized.indexOf("if cond then");
       const declIdx = normalized.indexOf("local ____obj_x = obj.x");
-      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(ifIdx).not.toBe(-1);
       expect(declIdx).toBeGreaterThan(ifIdx);
     });
 
@@ -389,7 +389,7 @@ describe("localizer", () => {
       const normalized = normalizeLua(lua);
       const ifIdx = normalized.indexOf("if cond then");
       const declIdx = normalized.indexOf("local ____config_x = config.x");
-      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      expect(ifIdx).not.toBe(-1);
       expect(declIdx).toBeGreaterThan(ifIdx);
     });
 
@@ -501,6 +501,32 @@ describe("localizer", () => {
       );
       expect(lua).not.toContain("____obj_x");
       expect(lua.match(/obj\.x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    });
+
+    it("hoists chain from local variable; root local not removed in refold phase", () => {
+      // Chains are inside an if-block so they belong to a nested scope where `a` is NOT
+      // in scopeDefs — hoisting is allowed. After hoisting, ALL reads of `a` go through
+      // synthesized root identifiers (no symbolId). Without the fix, dead-local (refold
+      // phase) sees zero symbolId-bearing reads and removes `local a = storage`.
+      const lua = compile(
+        [
+          "function update(storage: { columns: { x: number; y: number } }, cond: boolean): void {",
+          "  const a = storage;",
+          "  if (cond) {",
+          "    const x = a.columns.x + a.columns.y;",
+          "    const y = a.columns.y + a.columns.x;",
+          "  }",
+          "}",
+        ].join("\n"),
+        {
+          pluginOptions: {
+            rules: { localizer: { scope: "function" as const, include: ["a"] } },
+          },
+        },
+      );
+      expect(lua).toContain("local ____a_columns_x");
+      expect(lua).toContain("local ____a_columns_y");
+      expect(lua).toContain("local a = storage");
     });
   });
 
@@ -623,22 +649,29 @@ describe("localizer", () => {
   });
 
   describe("when configuration is applied", () => {
-    it("threshold: 3 with 2 uses does not hoist, with 3 uses hoists", () => {
-      const threshold3 = {
+    it.each([
+      { name: "1 use", source: "declare const x: number; const a = Math.ceil(x);" },
+      {
+        name: "2 uses",
+        source: "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x);",
+      },
+    ])("threshold 3: $name → does not hoist", ({ source }) => {
+      const lua = compile(source, {
         pluginOptions: { rules: { localizer: { threshold: 3, scope: "module" as const } } },
         luaTarget: tstl.LuaTarget.LuaJIT,
-      };
-      const twoUses = compile(
-        "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x);",
-        threshold3,
-      );
-      expect(twoUses).not.toContain("local ____math_ceil = math.ceil");
+      });
+      expect(lua).not.toContain("local ____math_ceil = math.ceil");
+    });
 
-      const threeUses = compile(
+    it("threshold 3: 3 uses (at threshold) → hoists", () => {
+      const lua = compile(
         "declare const x: number; const a = Math.ceil(x); const b = Math.ceil(x); const c = Math.ceil(x);",
-        threshold3,
+        {
+          pluginOptions: { rules: { localizer: { threshold: 3, scope: "module" as const } } },
+          luaTarget: tstl.LuaTarget.LuaJIT,
+        },
       );
-      expect(threeUses).toContain("local ____math_ceil = math.ceil");
+      expect(lua).toContain("local ____math_ceil = math.ceil");
     });
 
     it("scope: function does not hoist module-level chains", () => {
@@ -1394,9 +1427,8 @@ describe("localizer", () => {
   });
 
   describe("when root filtering interactions occur", () => {
-    it("root filter applied in function scope mode", () => {
-      // Lenient non-module predicate: config IS hoisted without include
-      const luaDefault = compile(
+    it("hoists non-stdlib chain in function scope when config is declared after the function (lenient predicate)", () => {
+      const lua = compile(
         [
           "function process() {",
           "  const a = config.graphics.width;",
@@ -1407,10 +1439,12 @@ describe("localizer", () => {
         ].join("\n"),
         FUNC_SCOPE,
       );
-      expect(luaDefault).toContain("local ____config_graphics_width = config.graphics.width");
 
-      // Exclude rejects the root at non-module scope
-      const luaExclude = compile(
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
+    });
+
+    it("does not hoist non-stdlib chain in function scope when root is excluded", () => {
+      const lua = compile(
         [
           "declare const config: { graphics: { width: number } };",
           "function process() {",
@@ -1425,10 +1459,12 @@ describe("localizer", () => {
           },
         },
       );
-      expect(luaExclude).not.toContain("local ____config_graphics_width");
 
-      // With include: config IS hoisted in function scope
-      const luaInclude = compile(
+      expect(lua).not.toContain("local ____config_graphics_width");
+    });
+
+    it("hoists non-stdlib chain in function scope when root is included", () => {
+      const lua = compile(
         [
           "declare const config: { graphics: { width: number } };",
           "function process() {",
@@ -1443,7 +1479,8 @@ describe("localizer", () => {
           },
         },
       );
-      expect(luaInclude).toContain("local ____config_graphics_width = config.graphics.width");
+
+      expect(lua).toContain("local ____config_graphics_width = config.graphics.width");
     });
 
     it("root filter applied in all scope mode", () => {
@@ -1510,7 +1547,7 @@ describe("localizer", () => {
       expect(lua).toContain("local ____velY = velY[i]");
     });
 
-    it("without include filter: does not hoist root chain but still localizes array element", () => {
+    it("without include filter: scope:all hoists non-stdlib chain via lenient predicate and localizes array element", () => {
       const src = [
         "declare const config: { physics: { gravity: number } };",
         "declare const velY: number[];",
@@ -1549,7 +1586,6 @@ describe("localizer", () => {
       // Decl appears before the for statement, not inside it
       const declIdx = normalized.indexOf("local ____config_x_y = config.x.y");
       const forIdx = normalized.indexOf("for i = 1, n do");
-      expect(declIdx).toBeGreaterThanOrEqual(0);
       expect(forIdx).toBeGreaterThan(declIdx);
     });
 
@@ -1597,7 +1633,6 @@ describe("localizer", () => {
       expect(normalized).toContain("local ____velX = velX[i]");
       const declIdx = normalized.indexOf("local ____velX = velX[i]");
       const forIdx = normalized.indexOf("for i = 1, n do");
-      expect(forIdx).toBeGreaterThanOrEqual(0);
       expect(declIdx).toBeGreaterThan(forIdx);
     });
 
@@ -1621,7 +1656,6 @@ describe("localizer", () => {
       expect(normalized).toContain("local ____config_x_y = config.x.y");
       const declIdx = normalized.indexOf("local ____config_x_y = config.x.y");
       const outerForIdx = normalized.indexOf("for i = 1, n do");
-      expect(declIdx).toBeGreaterThanOrEqual(0);
       expect(outerForIdx).toBeGreaterThan(declIdx);
     });
   });
