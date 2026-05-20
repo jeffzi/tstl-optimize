@@ -41,6 +41,7 @@ const label = PLATFORM === "web" ? "Web" : PLATFORM === "desktop" ? "Desktop" : 
 
 // ! negation in condition
 if (!DEBUG) {
+  // @ts-expect-error TS6133 — intentionally unused: dead-local strips this after CC keeps the block
   const safeHp = hp;
 }
 
@@ -52,18 +53,22 @@ if (DEBUG && LOG_LEVEL > 0) {
 // || short-circuit — truthy left skips right evaluation
 declare const VERBOSE: boolean;
 if (PLATFORM === "desktop" || VERBOSE) {
+  // @ts-expect-error TS6133 — intentionally unused: dead-local strips this after CC keeps the block
   const x = hp + 1;
 }
 
 // !== comparison in if/else
 if (PLATFORM !== "web") {
+  // @ts-expect-error TS6133 — intentionally unused: dead-local strips this after CC keeps the block
   const offline = true;
 } else {
+  // @ts-expect-error TS6133 — intentionally unused: CC strips entire else branch
   const online = true;
 }
 
 // Parenthesized grouping
 if (!(DEBUG && PLATFORM === "web")) {
+  // @ts-expect-error TS6133 — intentionally unused: dead-local strips this after CC keeps the block
   const ok = true;
 }
 

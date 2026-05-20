@@ -3,6 +3,7 @@ declare function log(x: number): void;
 
 // Pure unused local — removed (never read, pure initializer)
 function pureUnused(): number {
+  // @ts-expect-error TS6133 — intentionally unused: demonstrates dead-local removal
   const dead = 42;
   const live = 10;
   return live;
@@ -22,6 +23,7 @@ function captureExample(): () => number {
 
 // Limitation: impure initializer — call must execute even though result is unused
 function impureUnused(): number {
+  // @ts-expect-error TS6133 — intentionally unused: demonstrates impure-initializer preservation
   const unused = compute(); // compute() has side effects, declaration preserved
   return 0;
 }
