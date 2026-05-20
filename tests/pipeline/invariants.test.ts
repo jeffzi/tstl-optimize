@@ -20,8 +20,8 @@ function ccConstants(name: string, env: string, defaultValue: boolean): Record<s
 
 const CASES: InvariantCase[] = [
   {
-    // Reproduces Issue #1: conditional-compilation folds !DEBUG=false → do local safeHp = hp end,
-    // then dead-local removes safeHp → do end. The cleanup phase must then remove the empty block.
+    // conditional-compilation folds !DEBUG=false → do local safeHp = hp end, then dead-local
+    // removes safeHp → do end. The cleanup phase must then remove the empty block.
     name: "conditional-compilation + dead-local",
     source: `
       declare const DEBUG: boolean;
@@ -54,6 +54,64 @@ const CASES: InvariantCase[] = [
       }
       declare const n: number;
       process(n);
+    `,
+    pluginOptions: {},
+  },
+  {
+    // Localizer hoists obj.x to a local inside a conditional branch.
+    // The refold phase re-runs dead-local + remove-empty-branch, which should
+    // remove the unused hoisted local and then eliminate the empty if-block.
+    name: "refold + localizer artifacts",
+    source: `
+      declare const obj: { x: number };
+      declare const cond: boolean;
+      function fn() {
+        if (cond) {
+          const dead = obj.x;
+        }
+      }
+    `,
+    pluginOptions: { rules: { localizer: { scope: "function", include: ["obj"] } } },
+  },
+  {
+    // Inline a function with an optional parameter where trailing args are omitted.
+    // The inlined body should not leave any empty block residue.
+    name: "inline + optional params",
+    source: `
+      /** @inline */
+      function greet(name: string, suffix?: string): string {
+        return name + (suffix ?? "");
+      }
+      declare const n: string;
+      const result = greet(n);
+    `,
+    pluginOptions: {},
+  },
+  {
+    // Inline a function that uses a computed const expression (2 ** BITS).
+    // The refold pass re-runs constant-folding, so the result must be fully
+    // folded — no if-true, no unfolded arithmetic surviving.
+    name: "inline + cross-module const folding",
+    source: `
+      const BITS = 8;
+      const MAX = 2 ** BITS;
+      /** @inline */
+      function isValid(x: number): boolean {
+        return x < MAX;
+      }
+      declare const n: number;
+      const ok = isValid(n);
+    `,
+    pluginOptions: {},
+  },
+  {
+    // Math intrinsics folds Math.ceil(2.3) and Math.round(2.7) to literals.
+    // After folding, no math.ceil or math.round call should appear in Lua output,
+    // and no if-true/if-false residue.
+    name: "math-intrinsics + constant-folding",
+    source: `
+      const a = Math.ceil(2.3);
+      const b = Math.round(2.7);
     `,
     pluginOptions: {},
   },
