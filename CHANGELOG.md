@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-20
+
+### Added
+
+- **inline** now supports optional parameters (`param?: T`) without default initializers. Functions
+  with optional params inline when all arguments are supplied or when trailing optional arguments
+  are omitted (substituted as `nil` in Lua). Arity enforcement rejects excess args and missing
+  required args, but allows omitted trailing optionals. Default initializers remain unsupported.
+- **inline** now folds computed const expressions during cross-module inlining, including
+  arithmetic (e.g., `2 ** BITS`), template literals, and const identifier chains. This
+  extends the set of constants that qualify for substitution beyond simple primitive literals.
+- **inline** cross-module inlining now permits functions that reference ambient globals (e.g.,
+  `Math`, `globalThis`, or any declaration-file symbol) and no longer requires referenced `const`
+  literals to be exported. Inlining is still blocked when an ambient name is shadowed by a local
+  binding at the call site, preserving runtime semantics.
+- **math-intrinsics** now constant-folds `Math.ceil` and `Math.round` at compile time. Adds
+  exponentiation strength reduction generalized to `x ** n` (with LuaJIT-specific `x ** 4` →
+  `(x * x) * (x * x)`) and division-by-power-of-2 strength reduction (`x / 2` → `x * 0.5`).
+- **refold** phase re-runs `constant-folding`, `dead-local`, `merge-locals`, and
+  `remove-empty-branch` after all other phases complete, catching cross-rule optimization
+  opportunities (e.g., consecutive locals introduced by `localizer` that `merge-locals` can
+  combine). Always active; individual rules are still gated by their own `rules.*` toggles.
+
+### Fixed
+
+- **localizer** hoisted chain locals (e.g., `local ____a_columns_x = a.columns.x`) could be
+  incorrectly removed by the `dead-local` pass in the refold phase because the synthesized root
+  identifier lacked the original variable's `symbolId`, making the read invisible to liveness
+  tracking.
+
 ## [0.8.0] - 2026-05-09
 
 ### Added
@@ -19,8 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **inline** now inlines call arguments that are provably evaluated before any side effect
-  directly, without wrapping them in an eager temporary. This reduces unnecessary IIFE wrappers
-  in the output.
+  directly, without wrapping them in an eager temporary. This reduces unnecessary wrapper
+  functions in the output.
 
 ## [0.7.1] - 2026-04-28
 
@@ -135,7 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **debug-strip** rule — remove calls to configurable function names and namespace prefixes
-  (e.g. debug/profiling helpers) from Lua output; off by default.
+  (e.g., debug or profiling helpers) from Lua output; off by default.
 
 ## [0.1.0] - 2026-03-02
 
@@ -155,7 +185,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
 - Runnable examples with generation script.
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.6.0...v0.6.1
