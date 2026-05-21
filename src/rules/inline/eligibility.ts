@@ -196,15 +196,49 @@ export function analyzeParamUsage(
 
 /**
  * Returns the set of parameter indices that can be substituted directly from the call argument
- * without creating an `____inline_arg_N` temp variable. A parameter qualifies when all of:
+ * without creating an `____inline_arg_N` temp variable.
  *
- * - The corresponding call argument exists and has no side effects.
- * - No call argument at a later position has side effects. (Without a temp, the param identifier
- *   would be read at its use-site inside the body, AFTER temps for later SE args are evaluated.
- *   That evaluation happens in param order, so a later SE arg could mutate the identifier before
- *   the body reads it — producing a value different from what left-to-right arg evaluation gives.)
- * - The param is not captured by a nested function in the body nodes. (Captured params need a
- *   stable snapshot at call time, not a late-bound reference.)
+ * **Why temps exist at all:** inlining must preserve left-to-right argument evaluation order.
+ * When an argument has side effects, it is eagerly assigned to a temp before the body runs,
+ * so the body always reads the value that was current at call time. Direct substitution skips
+ * this assignment and reads the original expression at the use-site instead.
+ *
+ * **Qualification criteria** — all three must hold:
+ *
+ * 1. The corresponding call argument exists and is side-effect-free.
+ *
+ * 2. No call argument at a *later* position has side effects.
+ *
+ *    Temps are generated in parameter order. Without a temp, the param identifier would be
+ *    read inside the body after all earlier temps have been assigned. If a later argument has
+ *    side effects — and therefore runs after the pure argument in that assignment sequence —
+ *    it could mutate the variable the earlier argument refers to before the body reads it.
+ *
+ *    ```ts
+ *    // f(v, se()) — v is arg 0, se() is arg 1
+ *    // se() runs AFTER v in temp-assignment order, so it could mutate the variable v
+ *    // refers to before the body reads x. Both must be temped.
+ *    f(v, se());   // x → temp, y → temp
+ *
+ *    // f(se(), v) — se() is arg 0, v is arg 1
+ *    // v comes AFTER all SE args in assignment order, so no later mutation is possible.
+ *    f(se(), v);   // x → temp, y → direct
+ *    ```
+ *
+ * 3. The parameter is not captured by a nested function in any of the body nodes.
+ *
+ *    A captured parameter must have a stable snapshot at call time; the nested closure
+ *    holds a reference, so substituting the original expression would bind to a live
+ *    variable rather than the value at the moment of the call.
+ *
+ * @param params - Formal parameter declarations from the TypeScript function body.
+ * @param callArgs - Actual argument expressions at the call site.
+ * @param bodyNodes - All body nodes to check for capture (typically all body statements plus
+ *   the return expression when present, so that a captured param in any part of the body is
+ *   detected).
+ * @param checker - TypeScript type checker, used to resolve parameter symbols.
+ * @returns The 0-based indices of parameters that are safe for direct substitution. Indices not
+ *   in the set must go through a temp variable.
  */
 export function computeDirectSubstitutableParams(
   params: readonly ts.ParameterDeclaration[],

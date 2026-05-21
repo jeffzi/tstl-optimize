@@ -19,6 +19,26 @@ import { createVisitors as removeEmptyBranchVisitors } from "./rules/remove-empt
 // - eliminate (dead-local, merge-locals) runs before cleanup (remove-empty-branch)
 //   so empty blocks are properly cleaned after local elimination
 // - remaining phases follow: rebase, hoist, emit-prep
+//
+// refold re-runs cleanup-class rules at the end. The hoist phase (localizer) and
+// emit-prep phase (inline, debug-strip) can produce code patterns that earlier
+// cleanup phases would have caught had they seen them:
+// - localizer creates consecutive `local` declarations that merge-locals can combine
+// - inline introduces new constant expressions, dead locals, and empty blocks
+// - debug-strip leaves empty branches and unused locals behind argument removal
+//
+// Refold runs once (not to fixpoint). This is sufficient because the cleanup
+// rules are shaped so their outputs don't create new opportunities for other
+// cleanup rules within the same pass — constant-folding produces literals
+// (no new merge sites), merge-locals combines declarations (no new constants
+// or empty blocks), etc. The within-refold order (fold → dead-local → merge
+// → remove-empty-branch) handles intra-pass dependencies. If you add a rule
+// to refold whose output could trigger another refold rule, this assumption
+// breaks and you'll need a second refold pass or a different structure.
+//
+// math-intrinsics is intentionally NOT in refold: inline's TS-level output
+// is re-visited by TSTL, so chained math-intrinsics visitors already catch
+// Math.* calls inside inlined bodies (see tests/pipeline/rule-interaction.test.ts).
 const PHASE_ENTRIES: [string, [keyof PluginConfig["rules"], RuleFactory][]][] = [
   [
     "fold",
