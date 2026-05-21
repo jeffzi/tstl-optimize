@@ -158,7 +158,7 @@ function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeCheck
   return count;
 }
 
-function analyzeParamUsage(
+export function analyzeParamUsage(
   body: ts.Node,
   paramSymbol: ts.Symbol,
   checker: ts.TypeChecker,
@@ -192,6 +192,51 @@ function analyzeParamUsage(
   }
   visit(body);
   return { isCaptured, isWritten, count };
+}
+
+/**
+ * Returns the set of parameter indices that can be substituted directly from the call argument
+ * without creating an `____inline_arg_N` temp variable. A parameter qualifies when all of:
+ *
+ * - The corresponding call argument exists and has no side effects.
+ * - No call argument at a later position has side effects. (Without a temp, the param identifier
+ *   would be read at its use-site inside the body, AFTER temps for later SE args are evaluated.
+ *   That evaluation happens in param order, so a later SE arg could mutate the identifier before
+ *   the body reads it — producing a value different from what left-to-right arg evaluation gives.)
+ * - The param is not captured by a nested function in the body nodes. (Captured params need a
+ *   stable snapshot at call time, not a late-bound reference.)
+ */
+export function computeDirectSubstitutableParams(
+  params: readonly ts.ParameterDeclaration[],
+  callArgs: ts.NodeArray<ts.Expression>,
+  bodyNodes: readonly ts.Node[],
+  checker: ts.TypeChecker,
+): ReadonlySet<number> {
+  // Find the rightmost SE arg index; any param before it cannot skip its temp.
+  let lastSEArgIndex = -1;
+  for (let j = 0; j < callArgs.length; j++) {
+    const arg = callArgs[j];
+    if (arg !== undefined && hasSideEffects(arg)) lastSEArgIndex = j;
+  }
+
+  const result = new Set<number>();
+  for (let i = 0; i < params.length; i++) {
+    const arg = callArgs[i];
+    if (arg === undefined) continue;
+    if (hasSideEffects(arg)) continue;
+    if (lastSEArgIndex > i) continue;
+
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) continue;
+
+    const captured = bodyNodes.some(
+      (node) => analyzeParamUsage(node, paramSymbol, checker).isCaptured,
+    );
+    if (captured) continue;
+
+    result.add(i);
+  }
+  return result;
 }
 
 function checkSharedPrereqs(
@@ -228,6 +273,18 @@ function checkSharedPrereqs(
       code: InlineDiagnosticCode.moduleScope,
     };
   return undefined;
+}
+
+function checkSideEffectArgument(usageCount: number): InlineRejection {
+  return usageCount === 0
+    ? {
+        reason: "argument with side effects is not used",
+        code: InlineDiagnosticCode.sideEffects,
+      }
+    : {
+        reason: "argument with side effects is used multiple times",
+        code: InlineDiagnosticCode.sideEffects,
+      };
 }
 
 export function canInline(
@@ -268,15 +325,7 @@ export function canInline(
         usageCount > 1 ? SideEffectOptions.ConsiderIdentityMutating : SideEffectOptions.None,
       )
     )
-      return usageCount === 0
-        ? {
-            reason: "argument with side effects is not used",
-            code: InlineDiagnosticCode.sideEffects,
-          }
-        : {
-            reason: "argument with side effects is used multiple times",
-            code: InlineDiagnosticCode.sideEffects,
-          };
+      return checkSideEffectArgument(usageCount);
   }
 
   return undefined;

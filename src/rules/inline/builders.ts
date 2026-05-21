@@ -5,7 +5,11 @@ import { hasSideEffects } from "../../ast/ts-ast";
 import type { LiteralKind } from "./const-literal";
 import { classifyCrossModuleInline } from "./cross-module";
 import { createInlineWarning } from "./diagnostics";
-import { canInline, needsEagerArgumentTemps } from "./eligibility";
+import {
+  canInline,
+  computeDirectSubstitutableParams,
+  needsEagerArgumentTemps,
+} from "./eligibility";
 import {
   clearExpressionPositions,
   clearNodePositions,
@@ -71,11 +75,28 @@ function stampCallSiteExpression(expr: tstl.Expression, callNode: ts.CallExpress
   });
 }
 
+/* v8 ignore start -- defensive: same-module TS identifiers always yield simple Lua nodes */
+function isSimpleLuaExpression(expr: tstl.Expression): boolean {
+  switch (expr.kind) {
+    case tstl.SyntaxKind.Identifier:
+    case tstl.SyntaxKind.NumericLiteral:
+    case tstl.SyntaxKind.StringLiteral:
+    case tstl.SyntaxKind.NilKeyword:
+    case tstl.SyntaxKind.TrueKeyword:
+    case tstl.SyntaxKind.FalseKeyword:
+      return true;
+    default:
+      return false;
+  }
+}
+/* v8 ignore stop */
+
 export function buildParamMap(
   params: readonly ts.ParameterDeclaration[],
   callArgs: ts.NodeArray<ts.Expression>,
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
+  directSubstituteParams?: ReadonlySet<number>,
 ): ParamMapResult | undefined {
   const tempDecls: tstl.VariableDeclarationStatement[] = [];
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
@@ -97,9 +118,15 @@ export function buildParamMap(
       continue;
     }
 
-    const tempId = context.nextSymbolId();
-    const tempIdent = tstl.createIdentifier(`____inline_arg_${i}`, undefined, tempId);
     const luaArg = context.transformExpression(callArg);
+
+    if (directSubstituteParams?.has(i) && isSimpleLuaExpression(luaArg)) {
+      paramMap.set(paramSymbolId, luaArg);
+      continue;
+    }
+
+    const tempId = context.nextSymbolId();
+    const tempIdent = tstl.createIdentifier(`____inline_arg_${tempId}`, undefined, tempId);
 
     tempDecls.push(tstl.createVariableDeclarationStatement([tempIdent], [luaArg]));
     paramMap.set(paramSymbolId, tstl.createIdentifier(tempIdent.text, undefined, tempId));
@@ -205,7 +232,13 @@ export function prepareReturnValueInline(
   const luaReturnExpr = context.transformExpression(rewrittenReturnExpr);
   clearExpressionPositions(luaReturnExpr);
 
-  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  const directSubs = computeDirectSubstitutableParams(
+    params,
+    callNode.arguments,
+    [...bodyStmts, returnExpr],
+    checker,
+  );
+  const mapped = buildParamMap(params, callNode.arguments, checker, context, directSubs);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
@@ -246,7 +279,13 @@ export function buildDoEndBlock(
     return effectfulArgs;
   }
 
-  const mapped = buildParamMap(params, callNode.arguments, checker, context);
+  const directSubs = computeDirectSubstitutableParams(
+    params,
+    callNode.arguments,
+    bodyStmts,
+    checker,
+  );
+  const mapped = buildParamMap(params, callNode.arguments, checker, context, directSubs);
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
@@ -349,9 +388,8 @@ export function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: stri
     if (ts.isBlock(stmt) && bodyDeclaresLocal(stmt.statements, name)) return true;
     if (ts.isIfStatement(stmt)) {
       if (bodyDeclaresLocal(getStatementBody(stmt.thenStatement), name)) return true;
-      if (stmt.elseStatement && bodyDeclaresLocal(getStatementBody(stmt.elseStatement), name)) {
+      if (stmt.elseStatement && bodyDeclaresLocal(getStatementBody(stmt.elseStatement), name))
         return true;
-      }
       continue;
     }
     if (
@@ -461,7 +499,13 @@ export function buildReturnSiteInline(
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
 
-    const mapped = buildParamMap(params, callNode.arguments, checker, context);
+    const directSubs = computeDirectSubstitutableParams(
+      params,
+      callNode.arguments,
+      [...bodyStmts, target.returnExpr],
+      checker,
+    );
+    const mapped = buildParamMap(params, callNode.arguments, checker, context, directSubs);
     // Defensive only: buildParamMap only fails when a param symbol can't be resolved,
     // which canInlineStatements would have rejected first
     /* v8 ignore next */

@@ -1,4 +1,8 @@
 import ts from "typescript";
+import { expect } from "vitest";
+import { compileMultiFileWithDiagnostics, normalizeLua } from "../../helpers";
+
+export const CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC = 90003;
 
 /**
  * Creates a single-file TypeScript program with strict mode enabled.
@@ -62,4 +66,24 @@ export function findNode<T extends ts.Node>(
 
 export function hasDiagnosticCode(diagnostics: { code?: number }[], code: number): boolean {
   return diagnostics.some((d) => d.code === code);
+}
+
+export function compileMultiFile(files: Record<string, string>): {
+  diagnostics: { code?: number }[];
+  normalized: string;
+} {
+  const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
+  return { diagnostics, normalized: normalizeLua(lua) };
+}
+
+export function compileAndExpectNoDiagnostics(files: Record<string, string>): string {
+  const { diagnostics, normalized } = compileMultiFile(files);
+  expect(diagnostics).toHaveLength(0);
+  return normalized;
+}
+
+export function compileAndExpectCrossModuleDiagnostic(files: Record<string, string>): string {
+  const { diagnostics, normalized } = compileMultiFile(files);
+  expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
+  return normalized;
 }
