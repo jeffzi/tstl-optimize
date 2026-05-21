@@ -6,8 +6,16 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js"
+    },
+    "./ts-ast": {
+      "types": "./dist/ast/ts-ast-public.d.ts",
+      "require": "./dist/ast/ts-ast-public.js"
+    },
+    "./transforms": {
+      "types": "./dist/lua-transforms/index.d.ts",
+      "require": "./dist/lua-transforms/index.js"
     }
   },
   "scripts": {
@@ -34,6 +42,7 @@
     "@biomejs/biome": "^2.4.0",
     "@commitlint/cli": "^21.0.0",
     "@commitlint/config-conventional": "^21.0.0",
+    "@types/luaparse": "^0.2.12",
     "@types/node": "^25.9.0",
     "@vitest/coverage-v8": "^4.1.0",
     "dprint": "^0.54.0",
@@ -61,6 +70,7 @@
     "performance"
   ],
   "dependencies": {
+    "luaparse": "^0.3.1",
     "ts-api-utils": "^2.5.0"
   }
 }
