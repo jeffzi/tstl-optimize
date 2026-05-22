@@ -10,54 +10,47 @@ flipped = (-offset)
 stats = {atk = {base = 100}}
 atkSquared = mul(stats.atk.base)
 playerHp = 75
-local ____inline_arg_0 = "hp"
-local ____inline_arg_1 = playerHp
 do
-    local msg = (____inline_arg_0 .. ": ") .. tostring(____inline_arg_1)
+    local msg = "hp: " .. tostring(playerHp)
     print(msg)
 end
 a = 10
 local r
-local ____inline_arg_0 = a
 do
-    local y = ____inline_arg_0 + 1
+    local y = a + 1
     r = y * 2
 end
 function caller()
-    local ____inline_arg_0 = a
-    local y = ____inline_arg_0 + 1
+    local y = a + 1
     return y * 2
 end
-local ____inline_result_29
-local ____inline_arg_0 = a
+local ____inline_result_25
 do
-    local pos = {x = ____inline_arg_0, y = ____inline_arg_0 + 10}
-    ____inline_result_29 = pos
+    local pos = {x = a, y = a + 10}
+    ____inline_result_25 = pos
 end
-local x = ____inline_result_29.x
-local y = ____inline_result_29.y
+local x = ____inline_result_25.x
+local y = ____inline_result_25.y
+local ____inline_result_32
+do
+    local hi = a + 100
+    ____inline_result_32 = {a, hi}
+end
+local lo, hi = unpack(____inline_result_32, 1, 2)
 local ____inline_result_37
-local ____inline_arg_0 = a
+local ____inline_result_38
+local ____inline_arg_42 = hp
+local ____inline_arg_43 = maxHp
 do
-    local hi = ____inline_arg_0 + 100
-    ____inline_result_37 = {____inline_arg_0, hi}
+    local tmp = ____inline_arg_42
+    ____inline_result_37, ____inline_result_38 = ____inline_arg_43, tmp
 end
-local lo, hi = unpack(____inline_result_37, 1, 2)
-local ____inline_result_43
+local s1, s2 = ____inline_result_37, ____inline_result_38
 local ____inline_result_44
-local ____inline_arg_0 = hp
-local ____inline_arg_1 = maxHp
-do
-    local tmp = ____inline_arg_0
-    ____inline_result_43, ____inline_result_44 = ____inline_arg_1, tmp
-end
-local s1, s2 = ____inline_result_43, ____inline_result_44
-local ____inline_result_50
-local ____inline_arg_0 = playerHp
 do
     local label
     repeat
-        local ____switch11 = ____inline_arg_0
+        local ____switch11 = playerHp
         local ____cond11 = ____switch11 == 0
         if ____cond11 then
             label = "zero"
@@ -73,9 +66,9 @@ do
             break
         end
     until true
-    ____inline_result_50 = label
+    ____inline_result_44 = label
 end
-local label = ____inline_result_50
+local label = ____inline_result_44
 function double(x)
     return x * 2
 end
