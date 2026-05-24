@@ -7,15 +7,18 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "require": "./dist/index.js"
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./ts-ast": {
       "types": "./dist/ast/ts-ast-public.d.ts",
-      "require": "./dist/ast/ts-ast-public.js"
+      "require": "./dist/ast/ts-ast-public.js",
+      "default": "./dist/ast/ts-ast-public.js"
     },
     "./transforms": {
       "types": "./dist/lua-transforms/index.d.ts",
-      "require": "./dist/lua-transforms/index.js"
+      "require": "./dist/lua-transforms/index.js",
+      "default": "./dist/lua-transforms/index.js"
     }
   },
   "scripts": {
