@@ -1,4 +1,5 @@
 import type luaparse from "luaparse";
+import { applyEdits, type Edit, nextLineOffset, walkAstNode } from "./ast-utils.js";
 import { collectExistingLocals, collectRequireBindings, parseLua } from "./parse.js";
 
 export interface HoistResult {
@@ -13,12 +14,6 @@ export interface HoistResult {
   localizedSymbols: ReadonlyMap<string, { moduleVar: string; memberName: string }>;
 }
 
-interface Edit {
-  offset: number;
-  length: number;
-  replacement: string;
-}
-
 interface RequireInfo {
   statement: luaparse.LocalStatement;
   index: number;
@@ -30,27 +25,6 @@ interface PreExistingHoist {
   name: string;
   moduleVar: string;
   node: luaparse.LocalStatement;
-}
-
-function walkAstNode(node: luaparse.Node, onNode: (n: luaparse.Node) => void): void {
-  if (node === null || typeof node !== "object" || Array.isArray(node)) {
-    return;
-  }
-
-  onNode(node);
-
-  for (const key in node as unknown as Record<string, unknown>) {
-    if (Object.hasOwn(node, key)) {
-      const value = (node as unknown as Record<string, unknown>)[key];
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          walkAstNode(item as luaparse.Node, onNode);
-        }
-      } else if (value !== null && typeof value === "object") {
-        walkAstNode(value as luaparse.Node, onNode);
-      }
-    }
-  }
 }
 
 /**
@@ -288,20 +262,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     source: transformedSource,
     localizedSymbols,
   };
-}
-
-function nextLineOffset(source: string, rangeEnd: number): number {
-  const nl = source.indexOf("\n", rangeEnd);
-  return nl === -1 ? source.length : nl + 1;
-}
-
-function applyEdits(source: string, edits: Edit[]): string {
-  edits.sort((a, b) => b.offset - a.offset);
-  let result = source;
-  for (const { offset, length, replacement } of edits) {
-    result = result.slice(0, offset) + replacement + result.slice(offset + length);
-  }
-  return result;
 }
 
 interface AccessReference {
