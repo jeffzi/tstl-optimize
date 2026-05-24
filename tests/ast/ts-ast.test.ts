@@ -1,6 +1,13 @@
 import ts from "typescript";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { hasSideEffects, SideEffectOptions } from "../../src/ast/ts-ast";
+import {
+  EXTENDED_TRANSPARENT_KINDS,
+  hasSideEffects,
+  isNilExpression,
+  SideEffectOptions,
+  STATIC_TRANSPARENT_KINDS,
+  unwrapTransparent,
+} from "../../src/ast/ts-ast";
 
 /** Parse a TS expression string into an AST node. */
 function parseExpr(code: string): ts.Expression {
@@ -111,13 +118,6 @@ describe("hasSideEffects", () => {
       { name: "delete expression", expr: "delete obj.x" },
       { name: "element access", expr: "arr[0]" },
     ])("returns true for $name", ({ expr }) => {
-      expect(hasSideEffects(parseExpr(expr))).toBe(true);
-    });
-
-    it.each([
-      { name: "array spread element", expr: "[...items]" },
-      { name: "object spread assignment", expr: "({ ...obj })" },
-    ])("returns true for spread syntax $name", ({ expr }) => {
       expect(hasSideEffects(parseExpr(expr))).toBe(true);
     });
 
@@ -329,7 +329,7 @@ describe("hasSideEffects", () => {
 
 describe("SideEffectOptions typing", () => {
   it("matches the supported bitmask combinations", () => {
-    type SupportedBitmask = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    type SupportedBitmask = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
 
     expectTypeOf<SideEffectOptions>().toEqualTypeOf<SupportedBitmask>();
     expect(
@@ -337,7 +337,210 @@ describe("SideEffectOptions typing", () => {
     ).toBe(3);
 
     // @ts-expect-error unsupported flags are outside the declared bitmask
-    const invalid: SideEffectOptions = 8;
-    expect(invalid).toBe(8);
+    const invalid: SideEffectOptions = 16;
+    expect(invalid).toBe(16);
+  });
+});
+
+describe("STATIC_TRANSPARENT_KINDS and EXTENDED_TRANSPARENT_KINDS", () => {
+  it("STATIC_TRANSPARENT_KINDS contains exactly 5 kinds", () => {
+    expect(STATIC_TRANSPARENT_KINDS.size).toBe(5);
+    expect(STATIC_TRANSPARENT_KINDS.has(ts.SyntaxKind.ParenthesizedExpression)).toBe(true);
+    expect(STATIC_TRANSPARENT_KINDS.has(ts.SyntaxKind.AsExpression)).toBe(true);
+    expect(STATIC_TRANSPARENT_KINDS.has(ts.SyntaxKind.TypeAssertionExpression)).toBe(true);
+    expect(STATIC_TRANSPARENT_KINDS.has(ts.SyntaxKind.NonNullExpression)).toBe(true);
+    expect(STATIC_TRANSPARENT_KINDS.has(ts.SyntaxKind.SatisfiesExpression)).toBe(true);
+  });
+
+  it("EXTENDED_TRANSPARENT_KINDS includes STATIC_TRANSPARENT_KINDS plus 3 additional kinds", () => {
+    expect(EXTENDED_TRANSPARENT_KINDS.size).toBe(8);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.ParenthesizedExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.AsExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.TypeAssertionExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.NonNullExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.SatisfiesExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.VoidExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.TypeOfExpression)).toBe(true);
+    expect(EXTENDED_TRANSPARENT_KINDS.has(ts.SyntaxKind.SpreadElement)).toBe(true);
+  });
+
+  it("EXTENDED_TRANSPARENT_KINDS is frozen", () => {
+    expect(Object.isFrozen(EXTENDED_TRANSPARENT_KINDS)).toBe(true);
+  });
+
+  it("STATIC_TRANSPARENT_KINDS is frozen", () => {
+    expect(Object.isFrozen(STATIC_TRANSPARENT_KINDS)).toBe(true);
+  });
+});
+
+describe("unwrapTransparent", () => {
+  it("peels static transparent wrappers by default", () => {
+    const expr = parseExpr("(x)"); // ParenthesizedExpression
+    const unwrapped = unwrapTransparent(expr);
+    expect(ts.isIdentifier(unwrapped)).toBe(true);
+  });
+
+  it("peels multiple layers of static transparent wrappers", () => {
+    const expr = parseExpr("((x as number)!)"); // nested: parens, as, non-null
+    const unwrapped = unwrapTransparent(expr);
+    expect(ts.isIdentifier(unwrapped)).toBe(true);
+  });
+
+  it("peels extended transparent wrappers when EXTENDED_TRANSPARENT_KINDS is passed", () => {
+    const expr = parseExpr("void 0"); // VoidExpression
+    const unwrapped = unwrapTransparent(expr, EXTENDED_TRANSPARENT_KINDS);
+    expect(ts.isNumericLiteral(unwrapped)).toBe(true);
+  });
+
+  it("peels typeof when EXTENDED_TRANSPARENT_KINDS is passed", () => {
+    const expr = parseExpr("typeof x"); // TypeOfExpression
+    const unwrapped = unwrapTransparent(expr, EXTENDED_TRANSPARENT_KINDS);
+    expect(ts.isIdentifier(unwrapped)).toBe(true);
+  });
+
+  it("returns expression unchanged when not a wrapper", () => {
+    const expr = parseExpr("42");
+    const unwrapped = unwrapTransparent(expr);
+    expect(unwrapped).toBe(expr);
+  });
+
+  it("stops unwrapping at non-transparent kinds", () => {
+    const unwrapped = unwrapTransparent(parseExpr("(foo())")); // CallExpression in parens
+    expect(ts.isCallExpression(unwrapped)).toBe(true);
+  });
+
+  it("peels void when using extended set", () => {
+    const expr = parseExpr("(void foo())");
+    const unwrapped = unwrapTransparent(expr, EXTENDED_TRANSPARENT_KINDS);
+    expect(ts.isCallExpression(unwrapped)).toBe(true);
+  });
+
+  it("stops at void when using static set", () => {
+    const expr = parseExpr("(void foo())");
+    const unwrapped = unwrapTransparent(expr);
+    expect(ts.isVoidExpression(unwrapped)).toBe(true);
+  });
+
+  it("peels spread element when using extended set", () => {
+    // SpreadElement is the element inside [...items]
+    const arr = parseExpr("[...items]") as ts.ArrayLiteralExpression;
+    const spreadElem = arr.elements[0];
+    if (!ts.isSpreadElement(spreadElem)) {
+      throw new Error("Expected SpreadElement");
+    }
+    const unwrapped = unwrapTransparent(spreadElem, EXTENDED_TRANSPARENT_KINDS);
+    expect(ts.isIdentifier(unwrapped)).toBe(true);
+  });
+});
+
+describe("isNilExpression", () => {
+  it("returns true for null literal", () => {
+    expect(isNilExpression(parseExpr("null"))).toBe(true);
+  });
+
+  it("returns true for undefined identifier", () => {
+    expect(isNilExpression(parseExpr("undefined"))).toBe(true);
+  });
+
+  it("returns true for void expression", () => {
+    expect(isNilExpression(parseExpr("void 0"))).toBe(true);
+  });
+
+  it("returns true for wrapped null (null as null)", () => {
+    expect(isNilExpression(parseExpr("null as null"))).toBe(true);
+  });
+
+  it("returns true for wrapped undefined ((undefined))", () => {
+    expect(isNilExpression(parseExpr("(undefined)"))).toBe(true);
+  });
+
+  it("returns true for wrapped void expression", () => {
+    expect(isNilExpression(parseExpr("(void 0)"))).toBe(true);
+  });
+
+  it("returns false for number literal", () => {
+    expect(isNilExpression(parseExpr("42"))).toBe(false);
+  });
+
+  it("returns false for string literal", () => {
+    expect(isNilExpression(parseExpr('"hello"'))).toBe(false);
+  });
+
+  it("returns false for identifier that is not undefined", () => {
+    expect(isNilExpression(parseExpr("x"))).toBe(false);
+  });
+
+  it("returns false for function call", () => {
+    expect(isNilExpression(parseExpr("foo()"))).toBe(false);
+  });
+});
+
+describe("hasSideEffects relaxations with AssumePropertyAccessPure", () => {
+  describe("when AssumePropertyAccessPure is NOT set", () => {
+    it("returns true for simple property access", () => {
+      expect(hasSideEffects(parseExpr("obj.x"))).toBe(true);
+    });
+
+    it("returns true for simple array element access", () => {
+      expect(hasSideEffects(parseExpr("arr[0]"))).toBe(true);
+    });
+
+    it("returns true for array access with pure index and pure object", () => {
+      expect(hasSideEffects(parseExpr("arr[0]"), SideEffectOptions.None)).toBe(true);
+    });
+  });
+
+  describe("when AssumePropertyAccessPure is set", () => {
+    it("returns false for property access on pure identifier", () => {
+      expect(hasSideEffects(parseExpr("obj.x"), SideEffectOptions.AssumePropertyAccessPure)).toBe(
+        false,
+      );
+    });
+
+    it("returns true for property access on impure object", () => {
+      expect(hasSideEffects(parseExpr("foo().x"), SideEffectOptions.AssumePropertyAccessPure)).toBe(
+        true,
+      );
+    });
+
+    it("returns false for array access with pure object and pure index", () => {
+      expect(hasSideEffects(parseExpr("arr[0]"), SideEffectOptions.AssumePropertyAccessPure)).toBe(
+        false,
+      );
+    });
+
+    it("returns true for array access with impure index", () => {
+      expect(
+        hasSideEffects(parseExpr("arr[foo()]"), SideEffectOptions.AssumePropertyAccessPure),
+      ).toBe(true);
+    });
+
+    it("returns true for array access with impure object", () => {
+      expect(
+        hasSideEffects(parseExpr("foo()[0]"), SideEffectOptions.AssumePropertyAccessPure),
+      ).toBe(true);
+    });
+
+    it("returns true for array access with both impure", () => {
+      expect(
+        hasSideEffects(parseExpr("foo()[bar()]"), SideEffectOptions.AssumePropertyAccessPure),
+      ).toBe(true);
+    });
+  });
+});
+
+describe("hasSideEffects spread relaxations", () => {
+  it.each([
+    { name: "array spread with pure identifier", expr: "[...items]" },
+    { name: "object spread with pure identifier", expr: "({ ...obj })" },
+  ])("returns false for $name (inner expression is pure)", ({ expr }) => {
+    expect(hasSideEffects(parseExpr(expr))).toBe(false);
+  });
+
+  it.each([
+    { name: "array spread with call", expr: "[...items(foo())]" },
+    { name: "object spread with call", expr: "({ ...foo() })" },
+  ])("returns true for $name (inner expression has side effects)", ({ expr }) => {
+    expect(hasSideEffects(parseExpr(expr))).toBe(true);
   });
 });

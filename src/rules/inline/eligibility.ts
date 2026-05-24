@@ -158,7 +158,7 @@ function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeCheck
   return count;
 }
 
-function analyzeParamUsage(
+export function analyzeParamUsage(
   body: ts.Node,
   paramSymbol: ts.Symbol,
   checker: ts.TypeChecker,
@@ -192,6 +192,85 @@ function analyzeParamUsage(
   }
   visit(body);
   return { isCaptured, isWritten, count };
+}
+
+/**
+ * Returns the set of parameter indices that can be substituted directly from the call argument
+ * without creating an `____inline_arg_N` temp variable.
+ *
+ * **Why temps exist at all:** inlining must preserve left-to-right argument evaluation order.
+ * When an argument has side effects, it is eagerly assigned to a temp before the body runs,
+ * so the body always reads the value that was current at call time. Direct substitution skips
+ * this assignment and reads the original expression at the use-site instead.
+ *
+ * **Qualification criteria** — all three must hold:
+ *
+ * 1. The corresponding call argument exists and is side-effect-free.
+ *
+ * 2. No call argument at a *later* position has side effects.
+ *
+ *    Temps are generated in parameter order. Without a temp, the param identifier would be
+ *    read inside the body after all earlier temps have been assigned. If a later argument has
+ *    side effects — and therefore runs after the pure argument in that assignment sequence —
+ *    it could mutate the variable the earlier argument refers to before the body reads it.
+ *
+ *    ```ts
+ *    // f(v, se()) — v is arg 0, se() is arg 1
+ *    // se() runs AFTER v in temp-assignment order, so it could mutate the variable v
+ *    // refers to before the body reads x. Both must be temped.
+ *    f(v, se());   // x → temp, y → temp
+ *
+ *    // f(se(), v) — se() is arg 0, v is arg 1
+ *    // v comes AFTER all SE args in assignment order, so no later mutation is possible.
+ *    f(se(), v);   // x → temp, y → direct
+ *    ```
+ *
+ * 3. The parameter is not captured by a nested function in any of the body nodes.
+ *
+ *    A captured parameter must have a stable snapshot at call time; the nested closure
+ *    holds a reference, so substituting the original expression would bind to a live
+ *    variable rather than the value at the moment of the call.
+ *
+ * @param params - Formal parameter declarations from the TypeScript function body.
+ * @param callArgs - Actual argument expressions at the call site.
+ * @param bodyNodes - All body nodes to check for capture (typically all body statements plus
+ *   the return expression when present, so that a captured param in any part of the body is
+ *   detected).
+ * @param checker - TypeScript type checker, used to resolve parameter symbols.
+ * @returns The 0-based indices of parameters that are safe for direct substitution. Indices not
+ *   in the set must go through a temp variable.
+ */
+export function computeDirectSubstitutableParams(
+  params: readonly ts.ParameterDeclaration[],
+  callArgs: ts.NodeArray<ts.Expression>,
+  bodyNodes: readonly ts.Node[],
+  checker: ts.TypeChecker,
+): ReadonlySet<number> {
+  // Find the rightmost SE arg index; any param before it cannot skip its temp.
+  let lastSEArgIndex = -1;
+  for (let j = 0; j < callArgs.length; j++) {
+    const arg = callArgs[j];
+    if (arg !== undefined && hasSideEffects(arg)) lastSEArgIndex = j;
+  }
+
+  const result = new Set<number>();
+  for (let i = 0; i < params.length; i++) {
+    const arg = callArgs[i];
+    if (arg === undefined) continue;
+    if (hasSideEffects(arg)) continue;
+    if (lastSEArgIndex > i) continue;
+
+    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    if (!paramSymbol) continue;
+
+    const captured = bodyNodes.some(
+      (node) => analyzeParamUsage(node, paramSymbol, checker).isCaptured,
+    );
+    if (captured) continue;
+
+    result.add(i);
+  }
+  return result;
 }
 
 function checkSharedPrereqs(
@@ -228,6 +307,18 @@ function checkSharedPrereqs(
       code: InlineDiagnosticCode.moduleScope,
     };
   return undefined;
+}
+
+function checkSideEffectArgument(usageCount: number): InlineRejection {
+  return usageCount === 0
+    ? {
+        reason: "argument with side effects is not used",
+        code: InlineDiagnosticCode.sideEffects,
+      }
+    : {
+        reason: "argument with side effects is used multiple times",
+        code: InlineDiagnosticCode.sideEffects,
+      };
 }
 
 export function canInline(
@@ -268,15 +359,7 @@ export function canInline(
         usageCount > 1 ? SideEffectOptions.ConsiderIdentityMutating : SideEffectOptions.None,
       )
     )
-      return usageCount === 0
-        ? {
-            reason: "argument with side effects is not used",
-            code: InlineDiagnosticCode.sideEffects,
-          }
-        : {
-            reason: "argument with side effects is used multiple times",
-            code: InlineDiagnosticCode.sideEffects,
-          };
+      return checkSideEffectArgument(usageCount);
   }
 
   return undefined;

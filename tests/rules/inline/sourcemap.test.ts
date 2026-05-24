@@ -106,20 +106,24 @@ describe("inline: call-site position propagation", () => {
   // Statement-body void-call: do...end block
   // -------------------------------------------------------------------------
   describe("statement-body void-call: do...end block", () => {
-    // line 1: /** @inline */
-    // line 2: function twoOps(a: number, b: number): void {
-    // line 3:   const sum = a + b;
-    // line 4:   const product = a * b;
-    // line 5: }
-    // line 6: twoOps(1, 2);
-    const CALL_TS_LINE = 6;
+    // line 1: declare function s1(): number;
+    // line 2: declare function s2(): number;
+    // line 3: /** @inline */
+    // line 4: function twoOps(a: number, b: number): void {
+    // line 5:   const sum = a + b;
+    // line 6:   const product = a * b;
+    // line 7: }
+    // line 8: twoOps(s1(), s2());
+    const CALL_TS_LINE = 8;
     const source = `\
+declare function s1(): number;
+declare function s2(): number;
 /** @inline */
 function twoOps(a: number, b: number): void {
   const sum = a + b;
   const product = a * b;
 }
-twoOps(1, 2);`;
+twoOps(s1(), s2());`;
 
     // TSTL's printer emits `do` and `end` keywords via concatNodes (no createSourceNode),
     // so those lines never appear in the external sourcemap or the traceback table.
@@ -128,7 +132,7 @@ twoOps(1, 2);`;
 
     it("every inlined Lua line maps to the call site", async () => {
       const { lua, externalMap, traceback } = compileWithSourceMap(source);
-      const firstArgLine = findLuaLine(lua, "____inline_arg_0");
+      const firstArgLine = findLuaLine(lua, /____inline_arg_\d+/);
       const endLine = findLuaLine(lua, /^\s*end\s*$/);
       await assertEveryLineMapped(
         externalMap,
@@ -147,7 +151,7 @@ twoOps(1, 2);`;
 
     it("arg temp decl maps to call TS line", async () => {
       const { lua, externalMap, traceback } = compileWithSourceMap(source);
-      const tempDeclLine = findLuaLine(lua, "____inline_arg_0");
+      const tempDeclLine = findLuaLine(lua, /____inline_arg_\d+/);
       await assertLineMapsTo(externalMap, tempDeclLine, CALL_TS_LINE);
       assertTracebackMapsTo(traceback, tempDeclLine, CALL_TS_LINE);
     });
@@ -157,20 +161,22 @@ twoOps(1, 2);`;
   // Statement-body var-decl inline: result decl + do...end
   // -------------------------------------------------------------------------
   describe("statement-body var-decl inline: structural nodes map to call site", () => {
-    // line 1: /** @inline */
-    // line 2: function compute(x: number): number {
-    // line 3:   const y = x + 1;
-    // line 4:   return y * 2;
-    // line 5: }
-    // line 6: const r = compute(10);
-    const CALL_TS_LINE = 6;
+    // line 1: declare function s(): number;
+    // line 2: /** @inline */
+    // line 3: function compute(x: number): number {
+    // line 4:   const y = x + 1;
+    // line 5:   return y * 2;
+    // line 6: }
+    // line 7: const r = compute(s());
+    const CALL_TS_LINE = 7;
     const source = `\
+declare function s(): number;
 /** @inline */
 function compute(x: number): number {
   const y = x + 1;
   return y * 2;
 }
-const r = compute(10);`;
+const r = compute(s());`;
 
     // TSTL's printer emits `do` and `end` keywords via concatNodes (no createSourceNode),
     // so those lines never appear in the external sourcemap or the traceback table.
@@ -197,14 +203,14 @@ const r = compute(10);`;
 
     it("arg temp decl maps to call TS line", async () => {
       const { lua, externalMap, traceback } = compileWithSourceMap(source);
-      const tempDeclLine = findLuaLine(lua, "____inline_arg_0");
+      const tempDeclLine = findLuaLine(lua, /____inline_arg_\d+/);
       await assertLineMapsTo(externalMap, tempDeclLine, CALL_TS_LINE);
       assertTracebackMapsTo(traceback, tempDeclLine, CALL_TS_LINE);
     });
 
     it("body local maps to call TS line", async () => {
       const { lua, externalMap, traceback } = compileWithSourceMap(source);
-      const bodyLocalLine = findLuaLine(lua, "local y = ____inline_arg_0 + 1");
+      const bodyLocalLine = findLuaLine(lua, /local y = ____inline_arg_\d+ \+ 1/);
       await assertLineMapsTo(externalMap, bodyLocalLine, CALL_TS_LINE);
       assertTracebackMapsTo(traceback, bodyLocalLine, CALL_TS_LINE);
     });
@@ -244,26 +250,26 @@ const result = lerp(0, 100, 0.5);`;
   // the temp-decl line.
   // -------------------------------------------------------------------------
   describe("argument-leaf invariant: multi-line call", () => {
-    // line 1: declare const argValue: number;
+    // line 1: declare function s(): number;
     // line 2: /** @inline */
     // line 3: function compute(x: number): number {
     // line 4:   const y = x + 1;
     // line 5:   return y * 2;
     // line 6: }
     // line 7: const r = compute(
-    // line 8:   argValue
+    // line 8:   s()
     // line 9: );
     const CALL_START_TS_LINE = 7;
     const ARG_TS_LINE = 8;
     const source = `\
-declare const argValue: number;
+declare function s(): number;
 /** @inline */
 function compute(x: number): number {
   const y = x + 1;
   return y * 2;
 }
 const r = compute(
-  argValue
+  s()
 );`;
 
     it("result decl (structural) maps to call start TS line", async () => {
@@ -274,17 +280,17 @@ const r = compute(
 
     it("arg temp decl (structural) maps to call start TS line", async () => {
       const { lua, externalMap } = compileWithSourceMap(source);
-      const tempDeclLine = findLuaLine(lua, "____inline_arg_0");
+      const tempDeclLine = findLuaLine(lua, /____inline_arg_\d+/);
       await assertLineMapsTo(externalMap, tempDeclLine, CALL_START_TS_LINE);
     });
 
     it("argument expression RHS maps to arg TS line at column granularity", async () => {
       const { lua, externalMap } = compileWithSourceMap(source);
-      const argDeclLine = findLuaLine(lua, "____inline_arg_0");
+      const argDeclLine = findLuaLine(lua, /____inline_arg_\d+/);
       const argDeclText = lua.split("\n")[argDeclLine - 1] ?? "";
-      // "argValue" starts at the column after "local ____inline_arg_0 = "
-      // Use the declared variable so constant-folding can't simplify the argument away.
-      const rhsColumn = argDeclText.indexOf("argValue");
+      // "s()" starts at the column after "local ____inline_arg_N = "
+      // Use a side-effectful call so direct substitution can't eliminate the temp.
+      const rhsColumn = argDeclText.indexOf("s()");
       expect(rhsColumn).toBeGreaterThan(0);
       const argMapping = await assertMapped(externalMap, argDeclLine, rhsColumn);
       expect(argMapping.line).toBe(ARG_TS_LINE);

@@ -3,11 +3,8 @@
 [![CI](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that optimizes Lua output
-with configurable rules. Primary targets are **Lua 5.1 (PUC)** and **LuaJIT**. Other TSTL targets
-(5.2-5.4) compile without errors but are not tuned, so treat optimizations as best-effort there.
-Every rule is independently toggleable. All rules are on by default **except**
-`conditional-compilation` and `debug-strip`, which are off because they remove code.
+A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that rewrites the generated
+Lua for better runtime performance — fewer table lookups, smaller closures, and tighter loops.
 
 ```typescript
 // TypeScript input
@@ -28,6 +25,11 @@ ____math_floor(a) + ____math_floor(b)
 -- (inlined at call sites)
 local y = 5 * 2
 ```
+
+Primary targets are **Lua 5.1 (PUC-Rio)** and **LuaJIT**. Other TSTL targets (5.2–5.4) compile
+without errors but are not specifically tuned — treat optimizations as best-effort on those targets.
+Every rule is independently toggleable. All rules are on by default **except**
+`conditional-compilation` and `debug-strip`, which remove code.
 
 ## Contents
 
@@ -62,6 +64,11 @@ npm install --save-dev typescript-to-lua tstl-optimize
 ```
 
 Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
+
+The package also exports two utility subpaths for library consumers:
+
+- `tstl-optimize/ts-ast`: TypeScript expression analysis (`hasSideEffects`, `unwrapTransparent`, `isNilExpression`, …)
+- `tstl-optimize/transforms`: Lua source transforms (`hoistCrossModuleAccesses`, `getRequireBindings`, `getModuleExports`)
 
 ## Usage
 
@@ -205,7 +212,7 @@ This profile is better for projects that need platform-specific code and log str
 - Prefer `conditional-compilation` for platform gates, feature flags, and dev/prod branches.
 - Prefer `debug-strip` for release builds that should remove logs, tracing, and profiling calls.
 - Use `inline` on hot paths and allocation-heavy helpers, not as a blanket annotation strategy.
-- Measure `math-intrinsics` on your target interpreter. Some rewrites help on PUC Lua, some are
+- Measure `math-intrinsics` on your target interpreter. Some rewrites help on PUC-Rio Lua, some are
   neutral, and LuaJIT may prefer the built-in C calls.
 - Keep separate dev and release configs when you enable code-removal rules.
 
@@ -306,28 +313,35 @@ local greeting = "hello world"
 
 ### `math-intrinsics`
 
-Replaces `Math.*` calls with inline Lua expressions and avoids the dispatch overhead of going
-through the `math` table. The rule skips LuaJIT targets, which already handle C calls efficiently.
+Replaces `Math.*` calls and arithmetic patterns with inline Lua expressions. Call-expression
+rewrites (`Math.sqrt`, `Math.floor`, etc.) skip LuaJIT targets, which already handle C calls
+efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless noted otherwise.
 
-| Source | Lua output | Notes |
-| --- | --- | --- |
-| `Math.sqrt(x)` | `x ^ 0.5` | Lossless |
-| `Math.floor(x)` | `(x == math.huge or x == -math.huge) and math.floor(x) or x - x % 1` | Lossless; guard preserves `math.huge` for ±∞ inputs |
-| `Math.abs(x)` | `(x == 0) and 0 or ((x < 0) and -x or x)` | Lossless; zero-check preserves `+0` for `-0` input |
-| `Math.max(1, 2)` | `(1 > 2) and 1 or 2` | 2-arg, numeric literals only |
-| `Math.min(1, 2)` | `(1 < 2) and 1 or 2` | 2-arg, numeric literals only |
-| `x ** 2` | `x * x` | Lossless. Literal `2` exponent only |
+| Source               | Lua output                                                           | Notes                                                          |
+| -------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `Math.sqrt(x)`       | `x ^ 0.5`                                                            | Lossless                                                       |
+| `Math.floor(x)`      | `(x == math.huge or x == -math.huge) and math.floor(x) or x - x % 1` | Lossless; guard preserves `math.huge` for ±∞ inputs            |
+| `Math.ceil(n)`       | Literal folded (e.g. `Math.ceil(1.5)` → `2`)                         | Numeric-literal argument only; non-literal falls through       |
+| `Math.round(n)`      | Literal folded (e.g. `Math.round(1.5)` → `2`)                        | Numeric-literal argument only; non-literal falls through       |
+| `Math.abs(x)`        | `(x == 0) and 0 or ((x < 0) and -x or x)`                            | Lossless; zero-check preserves `+0` for `-0` input             |
+| `Math.max(1, 2)`     | `(1 > 2) and 1 or 2`                                                 | 2-arg, numeric literals only                                   |
+| `Math.min(1, 2)`     | `(1 < 2) and 1 or 2`                                                 | 2-arg, numeric literals only                                   |
+| `x ** 2`             | `x * x`                                                              | Lossless                                                       |
+| `x ** 3`             | `(x * x) * x`                                                        | Lossless                                                       |
+| `x ** 4`             | `(x * x) * (x * x)`                                                  | LuaJIT only; PUC-Rio keeps `^` (C `pow` is faster than 3 MULs) |
+| `x / n` (power of 2) | `x * (1/n)`                                                          | e.g. `x / 4` → `x * 0.25`; positive power-of-2 divisor only    |
 
-*Lossless: the rewrite produces bit-identical results to the original call for all finite inputs.*
+_Lossless: the rewrite produces bit-identical results to the original call for all finite inputs._
 
-`abs` and `floor` rewrite only side-effect-free arguments, so duplicating them is safe. `max` and
-`min` rewrite only when **both** arguments are numeric literals, which — combined with
-`constant-folding` — collapses the pattern at compile time; non-literal arguments fall through to
-`math.max` / `math.min`.
+`abs` and `floor` rewrite only side-effect-free arguments, so duplicating them is safe. `ceil` and
+`round` fold only when the argument is a numeric literal — non-literal arguments pass through to
+`math.ceil` / `math.round`. `max` and `min` rewrite only when **both** arguments are numeric
+literals, which — combined with `constant-folding` — collapses the pattern at compile time;
+non-literal arguments fall through to `math.max` / `math.min`.
 
-> **Edge cases:** `x ** 2` assumes `x` is numeric; the rewrite skips non-numeric operands where
-> `__mul` and `__pow` metamethods could produce different results. If you rely on operator-overloaded
-> arithmetic, disable this rule.
+> **Edge cases:** `x ** n` and `x / n` rewrites assume `x` is numeric; they skip non-numeric
+> operands where `__mul`, `__pow`, and `__div` metamethods could produce different results. If you
+> rely on operator-overloaded arithmetic, disable this rule.
 
 ### `dead-local`
 
@@ -398,10 +412,10 @@ end
 
 **Limitations:**
 
-- Removes conditions only when checking truthiness cannot trigger side effects or metamethod-based
-  behavior.
-- Leaves non-empty branches alone unless it is only inverting an empty `if` with a plain `else`.
-- Keeps branches with side-effecting conditions such as function calls.
+- The rule removes a condition only when the truthiness check has no side effects and cannot trigger
+  metamethods.
+- Non-empty branches are left alone unless the rule is inverting an empty `if` with a plain `else`.
+- Branches with side-effecting conditions such as function calls are preserved.
 
 ### `loop-rebase`
 
@@ -421,7 +435,7 @@ for (const i of $range(0, n - 1)) {
 -- After:  for i = 1, n do arr[i] = value end
 ```
 
-The rule skips the loop when the body assigns the control variable, uses the control variable without `+ 1`, or shadows it in a nested declaration.
+The rule skips the loop when the body assigns the control variable, reads it without an accompanying `+ 1` offset (rebasing would produce a wrong index), or shadows it in a nested declaration.
 
 ### `inline`
 
@@ -473,7 +487,7 @@ A function must meet these conditions to be inlined:
 
 The plugin supports multi-statement function bodies at statement-level call sites. It expands these in-place, wrapping them in a `do...end` block (except at return sites) to keep declared variables from escaping into the caller's scope.
 
-#### Pattern 1 — Void statement site
+#### Pattern 1 — void statement site
 
 ```typescript
 /** @inline */
@@ -493,7 +507,7 @@ do
 end
 ```
 
-#### Pattern 2 — Variable-declaration site
+#### Pattern 2 — variable-declaration site
 
 ```typescript
 /** @inline */
@@ -514,7 +528,7 @@ do
 end
 ```
 
-#### Pattern 3 — Return site
+#### Pattern 3 — return site
 
 ```typescript
 /** @inline */
@@ -535,7 +549,7 @@ local y = ____inline_arg_0 + 1
 return y * 2
 ```
 
-#### Pattern 4 — Destructuring site
+#### Pattern 4 — destructuring site
 
 ```typescript
 /** @inline */
@@ -660,12 +674,12 @@ Array element localization handles the simple case only:
 
 Options:
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `threshold` | `number` | `2` | Minimum read-count before hoisting |
-| `scope` | `"module" \| "function" \| "all"` | `"all"` | Where the rule hoists locals |
-| `include` | `string[]` | `[]` | Additional root globals to hoist alongside stdlib. Use `["*"]` to allow all roots (opt-out mode). Explicit entries override the internal blocklist. |
-| `exclude` | `string[]` | `[]` | Root globals to block from hoisting, even if in stdlib or `include`. |
+| Option      | Type                              | Default | Description                                                                                                                                         |
+| ----------- | --------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `threshold` | `number`                          | `2`     | Minimum read-count before hoisting                                                                                                                  |
+| `scope`     | `"module" \| "function" \| "all"` | `"all"` | Where the rule hoists locals                                                                                                                        |
+| `include`   | `string[]`                        | `[]`    | Additional root globals to hoist alongside stdlib. Use `["*"]` to allow all roots (opt-out mode). Explicit entries override the internal blocklist. |
+| `exclude`   | `string[]`                        | `[]`    | Root globals to block from hoisting, even if in stdlib or `include`.                                                                                |
 
 #### Scope modes
 
@@ -751,10 +765,10 @@ variable initializer, return statement, or function argument.
 
 Options:
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `functions` | `string[]` | `["print", "assert"]` | Bare function names to strip |
-| `namespaces` | `string[]` | `["debug"]` | Namespace prefixes to strip (`debug.*()`) |
+| Option       | Type       | Default               | Description                               |
+| ------------ | ---------- | --------------------- | ----------------------------------------- |
+| `functions`  | `string[]` | `["print", "assert"]` | Bare function names to strip              |
+| `namespaces` | `string[]` | `["debug"]`           | Namespace prefixes to strip (`debug.*()`) |
 
 **Limitations:**
 
@@ -837,35 +851,35 @@ Precedence:
 
 All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of the codes below.
 
-| Code | Rule | Meaning |
-| --- | --- | --- |
-| 90001 | `inline` | Generic inline failure (fallback when no more specific code applies) |
-| 90002 | `conditional-compilation` | Condition mixes compile-time constants with runtime variables; branch cannot be folded |
-| 90003 | `inline` | Cross-module inline rejected — body references captured module-scope variables |
-| 90004 | `inline` | Direct or mutual recursion detected |
-| 90005 | `inline` | Unsupported parameter shape (rest / default / optional / destructuring / parameter write) |
-| 90006 | `inline` | Argument has side effects but the parameter is used more than once in an expression body |
-| 90007 | `inline` | Body contains an early `return`, unscoped `break`, `continue`, or labeled statement |
-| 90008 | `inline` | Target is not module-scope |
-| 90009 | `inline` | Multi-statement body used at a void site with disallowed shape |
-| 90010 | `inline` | Multi-statement body used at an expression position where `do...end` cannot fit |
+| Code  | Rule                      | Meaning                                                                                   |
+| ----- | ------------------------- | ----------------------------------------------------------------------------------------- |
+| 90001 | `inline`                  | Generic inline failure (fallback when no more specific code applies)                      |
+| 90002 | `conditional-compilation` | Condition mixes compile-time constants with runtime variables; branch cannot be folded    |
+| 90003 | `inline`                  | Cross-module inline rejected — body references captured module-scope variables            |
+| 90004 | `inline`                  | Direct or mutual recursion detected                                                       |
+| 90005 | `inline`                  | Unsupported parameter shape (rest / default / optional / destructuring / parameter write) |
+| 90006 | `inline`                  | Argument has side effects but the parameter is used more than once in an expression body  |
+| 90007 | `inline`                  | Body contains an early `return`, unscoped `break`, `continue`, or labeled statement       |
+| 90008 | `inline`                  | Target is not module-scope                                                                |
+| 90009 | `inline`                  | Multi-statement body used at a void site with disallowed shape                            |
+| 90010 | `inline`                  | Multi-statement body used at an expression position where `do...end` cannot fit           |
 
 ## Configuration reference
 
-| Key | Type | Default | Description |
-| --- | --- | --- | --- |
-| `strict` | `boolean` | `false` | Promote optimization warnings to compilation errors globally. `conditional-compilation` uses code 90002; `inline` emits 90001 and more specific 90003-90010 diagnostics. See [Strict mode](#strict-mode). |
-| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig` | `false` | Strip dead branches based on compile-time constants. Accepts `{ constants: ...; strict?: boolean }` for per-rule error promotion. |
-| `rules.constant-folding` | `boolean` | `true` | Evaluate side-effect-free constant arithmetic, comparison, logical, unary, and string expressions. |
-| `rules.math-intrinsics` | `boolean` | `true` | Inline math calls as Lua expressions. |
-| `rules.dead-local` | `boolean` | `true` | Remove unused single-name locals inside function bodies when the initializer is pure. |
-| `rules.merge-locals` | `boolean` | `true` | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics. |
-| `rules.remove-empty-branch` | `boolean` | `true` | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks. |
-| `rules.loop-rebase` | `boolean` | `true` | Convert 0-based loops to 1-based. |
-| `rules.inline` | `boolean \| { enabled?: boolean; strict?: boolean }` | `true` | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)). |
-| `rules.localizer` | `boolean \| LocalizerConfig` | `true` | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options. |
-| `rules.debug-strip` | `boolean \| DebugStripConfig` | `false` | Strip debug and profiling calls. |
-| `target` | `"puc" \| "luajit"` | auto-detected | Lua interpreter target. When omitted, the plugin derives it from TSTL's `luaTarget`. |
+| Key                             | Type                                                 | Default       | Description                                                                                                                                                                                               |
+| ------------------------------- | ---------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strict`                        | `boolean`                                            | `false`       | Promote optimization warnings to compilation errors globally. `conditional-compilation` uses code 90002; `inline` emits 90001 and more specific 90003-90010 diagnostics. See [Strict mode](#strict-mode). |
+| `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig`            | `false`       | Strip dead branches based on compile-time constants. Accepts `{ constants: ...; strict?: boolean }` for per-rule error promotion.                                                                         |
+| `rules.constant-folding`        | `boolean`                                            | `true`        | Evaluate side-effect-free constant arithmetic, comparison, logical, unary, and string expressions.                                                                                                        |
+| `rules.math-intrinsics`         | `boolean`                                            | `true`        | Inline math calls as Lua expressions.                                                                                                                                                                     |
+| `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function bodies when the initializer is pure.                                                                                                                     |
+| `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
+| `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
+| `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
+| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)).                          |
+| `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
+| `rules.debug-strip`             | `boolean \| DebugStripConfig`                        | `false`       | Strip debug and profiling calls.                                                                                                                                                                          |
+| `target`                        | `"puc" \| "luajit"`                                  | auto-detected | Lua interpreter target. When omitted, the plugin derives it from TSTL's `luaTarget`.                                                                                                                      |
 
 ### Refold phase
 
@@ -887,7 +901,7 @@ details.
 
 Microbenchmarks for `math-intrinsics`, `localizer`, `loop-rebase`, and `inline` live in the
 [`benchmark/`](benchmark/) directory and run via `npm run bench`. See
-[`benchmark/README.md`](benchmark/README.md) for measured speedups on PUC Lua 5.1 and LuaJIT.
+[`benchmark/README.md`](benchmark/README.md) for measured speedups on PUC-Rio Lua 5.1 and LuaJIT.
 
 ## FAQ
 
@@ -905,10 +919,10 @@ which condition failed.
 
 ### A local variable sharing a stdlib name got rewritten
 
-All rules that match identifiers (`conditional-compilation`, `debug-strip`, `localizer`,
-`math-intrinsics`) match Lua-level text, not TypeScript types — TSTL has already lowered the file
-by the time rules run. A local named `print` will be stripped by `debug-strip` just like the
-global. Rename the local, or remove the identifier from the rule's match list (e.g. `exclude` for
+Rules that match identifiers (`conditional-compilation`, `debug-strip`, `localizer`,
+`math-intrinsics`) operate on Lua-level text, not TypeScript types — TSTL has already lowered the
+file by the time rules run. A local named `print` is stripped by `debug-strip` just like the
+global. Rename the local, or remove the identifier from the rule's match list (`exclude` for
 `localizer`, `functions` for `debug-strip`).
 
 ### `conditional-compilation` doesn't substitute my constant
@@ -944,7 +958,7 @@ upgrade TSTL first.
 ### Can I use this on Lua 5.2 / 5.3 / 5.4?
 
 TSTL accepts those targets, and the plugin will compile without errors, but `math-intrinsics` and
-`localizer` are tuned for Lua 5.1 (PUC) and LuaJIT. Rewrites that are neutral on 5.1 may be
+`localizer` are tuned for Lua 5.1 (PUC-Rio) and LuaJIT. Rewrites that are neutral on 5.1 may be
 slower on 5.3 (which has a native integer type and a dedicated `//` floor-divide operator). Benchmark
 before shipping, and disable specific rules if they regress.
 

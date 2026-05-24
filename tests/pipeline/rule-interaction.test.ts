@@ -88,7 +88,7 @@ describe("optimize rule interactions", () => {
       `);
       const normalizedLua = normalizeLua(lua);
       expect(normalizedLua).toContain(
-        "local y = (____inline_arg_0 == math.huge or ____inline_arg_0 == -(math.huge)) and math.floor(____inline_arg_0) or ____inline_arg_0 - ____inline_arg_0 % 1",
+        "local y = (v == math.huge or v == -(math.huge)) and math.floor(v) or v - v % 1",
       );
       expect(normalizedLua).not.toContain("doFloor(v)");
     });
@@ -126,9 +126,9 @@ describe("optimize rule interactions", () => {
       });
       const normalizedLua = normalizeLua(lua);
       expect(normalizedLua).toContain("local ____math_floor = math.floor");
-      expect(normalizedLua).toContain("local a = ____math_floor(____inline_arg_0)");
-      expect(normalizedLua).toContain("local b = ____math_floor(____inline_arg_0 + 1)");
-      expect(normalizedLua).toContain("local c = ____math_floor(____inline_arg_0 + 2)");
+      expect(normalizedLua).toContain("local a = ____math_floor(v)");
+      expect(normalizedLua).toContain("local b = ____math_floor(v + 1)");
+      expect(normalizedLua).toContain("local c = ____math_floor(v + 2)");
       expect(normalizedLua).not.toContain("doWork(v)");
     });
   });
@@ -164,7 +164,7 @@ describe("optimize rule interactions", () => {
       );
       const normalized = normalizeLua(lua);
       expect(normalized).not.toContain("doLog");
-      expect(normalized).toContain("doWork(____inline_arg_0)");
+      expect(normalized).toContain("doWork(msg)");
       expect(normalized).not.toContain("process(msg)");
     });
 
@@ -208,8 +208,7 @@ describe("optimize rule interactions", () => {
         ccOpts({ DEBUG: { env: "TSTL_OPT_DEAD_BRANCH_RETURN", default: false } }),
       );
       const normalized = normalizeLua(lua);
-      expect(normalized).toContain("local ____inline_arg_0 = input");
-      expect(normalized).toContain("return ____inline_arg_0");
+      expect(normalized).toContain("return input");
       expect(normalized).not.toContain("identityAfterCc(input)");
       expect(normalized).not.toContain("function identityAfterCc");
     });
@@ -245,8 +244,8 @@ describe("optimize rule interactions", () => {
 
   describe("when inline and dead-local interact", () => {
     it("preserves arg temp that is read inside the substituted do...end block", () => {
-      // x is used twice (x*x and sq+x) → canInline creates ____inline_arg_0 = n.
-      // dead-local must NOT remove it because collectReadSymbols recurses into the do...end.
+      // x is used twice (x*x and sq+x). When the arg is a pure identifier,
+      // direct substitution embeds it at every use site — no temp variable.
       const lua = compile(`
         /** @inline */
         function sumSquare(x: number): number {
@@ -256,7 +255,8 @@ describe("optimize rule interactions", () => {
         declare const n: number;
         const r = sumSquare(n);
       `);
-      expect(lua).toContain("____inline_arg_0 = n");
+      expect(lua).not.toContain("____inline_arg_");
+      expect(lua).toContain("n * n");
       expect(lua).not.toContain("sumSquare(n)");
     });
   });
@@ -352,8 +352,10 @@ describe("optimize rule interactions", () => {
               const r = add(${callArgs});
             `);
           for (let i = 0; i < n - 1; i++) {
-            const posI = lua.indexOf(`____inline_arg_${i} = sideEffect${i}()`);
-            const posNext = lua.indexOf(`____inline_arg_${i + 1} = sideEffect${i + 1}()`);
+            const posI = lua.search(new RegExp(`____inline_arg_\\d+ = sideEffect${i}\\(\\)`));
+            const posNext = lua.search(
+              new RegExp(`____inline_arg_\\d+ = sideEffect${i + 1}\\(\\)`),
+            );
             if (posI < 0 || posNext < 0 || posI >= posNext) return false;
           }
           return true;

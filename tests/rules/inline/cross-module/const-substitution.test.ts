@@ -1,25 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { compileMultiFileWithDiagnostics, normalizeLua } from "../../../helpers";
-import { hasDiagnosticCode } from "../helpers";
-
-const CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC = 90003;
-
-function compileMultiFile(files: Record<string, string>) {
-  const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
-  return { diagnostics, normalized: normalizeLua(lua) };
-}
-
-function compileAndExpectNoDiagnostics(files: Record<string, string>): string {
-  const { diagnostics, normalized } = compileMultiFile(files);
-  expect(diagnostics).toHaveLength(0);
-  return normalized;
-}
-
-function compileAndExpectCrossModuleDiagnostic(files: Record<string, string>): string {
-  const { diagnostics, normalized } = compileMultiFile(files);
-  expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
-  return normalized;
-}
+import { compileMultiFileWithDiagnostics } from "../../../helpers";
+import {
+  CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC,
+  compileAndExpectCrossModuleDiagnostic,
+  compileAndExpectNoDiagnostics,
+  hasDiagnosticCode,
+} from "../helpers";
 
 describe("cross-module const literal inlining", () => {
   describe("when substituting literals inside rewritten bodies", () => {
@@ -710,7 +696,7 @@ describe("cross-module const literal inlining", () => {
     it.each<{ name: string; files: Record<string, string>; assertion: string }>([
       {
         name: "number-returning",
-        assertion: "3",
+        assertion: "15",
         files: {
           "utils.ts": `
             export const MULTIPLIER = 3;

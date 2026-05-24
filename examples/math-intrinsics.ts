@@ -24,8 +24,9 @@ const bounded = Math.max(0, speed);
 
 // --- Limitations ---
 
-// x ** 2 is expanded to x * x (avoids ^ dispatch), but higher exponents fall
-// through to Lua's ^ operator since the expansion grows combinatorially
+// x ** 2 → x * x, x ** 3 → (x * x) * x on all targets.
+// x ** 4 → (x * x) * (x * x) on LuaJIT only; PUC keeps ^ (C pow is faster).
+// Higher exponents fall through to Lua's ^ operator.
 const cubed = x ** 3;
 
 // Math.max/min is rewritten to (a > b) and a or b only when both args are

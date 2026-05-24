@@ -6,13 +6,101 @@ export const SideEffectOptions = {
   AssumeTaggedTemplatePure: 1,
   AssumeConstructorPure: 2,
   ConsiderIdentityMutating: 4,
+  AssumePropertyAccessPure: 8,
 } as const;
 
 /**
  * Bitwise flag set for side effect assumptions.
  * Combine flags using bitwise OR: `SideEffectOptions.AssumeTaggedTemplatePure | SideEffectOptions.AssumeConstructorPure`
  */
-export type SideEffectOptions = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type SideEffectOptions = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+
+/**
+ * Syntax kinds that are transparent wrappers — the expression type cannot invoke getters.
+ * These are peeled by `unwrapTransparent` by default.
+ */
+export const STATIC_TRANSPARENT_KINDS = Object.freeze(
+  new Set<ts.SyntaxKind>([
+    ts.SyntaxKind.ParenthesizedExpression,
+    ts.SyntaxKind.AsExpression,
+    ts.SyntaxKind.TypeAssertionExpression,
+    ts.SyntaxKind.NonNullExpression,
+    ts.SyntaxKind.SatisfiesExpression,
+  ]),
+);
+
+/**
+ * Extended set of transparent kinds, including kinds with no type-observable effect.
+ * Includes `STATIC_TRANSPARENT_KINDS` plus `VoidExpression`, `TypeOfExpression`, `SpreadElement`.
+ */
+export const EXTENDED_TRANSPARENT_KINDS = Object.freeze(
+  new Set<ts.SyntaxKind>([
+    ts.SyntaxKind.ParenthesizedExpression,
+    ts.SyntaxKind.AsExpression,
+    ts.SyntaxKind.TypeAssertionExpression,
+    ts.SyntaxKind.NonNullExpression,
+    ts.SyntaxKind.SatisfiesExpression,
+    ts.SyntaxKind.VoidExpression,
+    ts.SyntaxKind.TypeOfExpression,
+    ts.SyntaxKind.SpreadElement,
+  ]),
+);
+
+/**
+ * Unwraps transparent wrapper expressions until reaching a kind not in `kindSet`.
+ *
+ * By default, uses `STATIC_TRANSPARENT_KINDS` — peels type-only wrappers
+ * (parens, type assertions, non-null, satisfies, as-expression).
+ *
+ * Pass `EXTENDED_TRANSPARENT_KINDS` to also peel `void`, `typeof`, and `SpreadElement`.
+ */
+export function unwrapTransparent(
+  expr: ts.Expression,
+  kindSet: ReadonlySet<ts.SyntaxKind> = STATIC_TRANSPARENT_KINDS,
+): ts.Expression {
+  let current = expr;
+  while (kindSet.has(current.kind)) {
+    const nextExpr = (
+      current as
+        | ts.ParenthesizedExpression
+        | ts.AssertionExpression
+        | ts.SatisfiesExpression
+        | ts.NonNullExpression
+        | ts.VoidExpression
+        | ts.TypeOfExpression
+        | ts.SpreadElement
+    ).expression;
+    current = nextExpr;
+  }
+  return current;
+}
+
+/**
+ * Returns true if the expression is a nil value: `null`, `undefined`, or `void expr`.
+ *
+ * Unwraps static transparent wrappers first (type-only wrappers that cannot
+ * invoke getters).
+ */
+export function isNilExpression(node: ts.Expression): boolean {
+  const unwrapped = unwrapTransparent(node);
+
+  // Check for null keyword
+  if (unwrapped.kind === ts.SyntaxKind.NullKeyword) {
+    return true;
+  }
+
+  // Check for void expression
+  if (unwrapped.kind === ts.SyntaxKind.VoidExpression) {
+    return true;
+  }
+
+  // Check for undefined identifier
+  if (ts.isIdentifier(unwrapped) && unwrapped.text === "undefined") {
+    return true;
+  }
+
+  return false;
+}
 
 function queueTemplateSpans(templateNode: ts.TemplateExpression, queue: ts.Expression[]): void {
   for (const span of templateNode.templateSpans) queue.push(span.expression);
@@ -22,7 +110,8 @@ function queueTemplateSpans(templateNode: ts.TemplateExpression, queue: ts.Expre
  * Returns true if the expression could have side effects.
  *
  * By default, `new` and tagged templates are treated as side-effectful.
- * Pass `SideEffectOptions` flags to opt out of either assumption.
+ * Pass `SideEffectOptions` flags to opt out of either assumption or to treat
+ * property/element access as pure.
  */
 export function hasSideEffects(
   node: ts.Expression,
@@ -31,6 +120,10 @@ export function hasSideEffects(
   const queue: ts.Expression[] = [];
   let current: ts.Expression = node;
   while (true) {
+    // Peel void, typeof, and spread — their side-effect profile depends only on the inner
+    // expression, so hasSideEffects only cares about "could this do something?".
+    current = unwrapTransparent(current, EXTENDED_TRANSPARENT_KINDS);
+
     switch (current.kind) {
       // --- Always side-effectful ---
       case ts.SyntaxKind.CallExpression:
@@ -40,31 +133,15 @@ export function hasSideEffects(
       case ts.SyntaxKind.DeleteExpression:
         return true;
 
-      // --- Transparent wrappers: unwrap .expression and continue ---
-      case ts.SyntaxKind.TypeAssertionExpression:
-      case ts.SyntaxKind.AsExpression:
-      case ts.SyntaxKind.SatisfiesExpression:
-      case ts.SyntaxKind.ParenthesizedExpression:
-      case ts.SyntaxKind.NonNullExpression:
-      case ts.SyntaxKind.VoidExpression:
-      case ts.SyntaxKind.TypeOfExpression:
-        current = (
-          current as
-            | ts.AssertionExpression
-            | ts.SatisfiesExpression
-            | ts.ParenthesizedExpression
-            | ts.NonNullExpression
-            | ts.VoidExpression
-            | ts.TypeOfExpression
-        ).expression;
-        continue;
-
-      case ts.SyntaxKind.SpreadElement:
-        return true;
-
-      case ts.SyntaxKind.PropertyAccessExpression:
+      case ts.SyntaxKind.PropertyAccessExpression: {
+        if (options & SideEffectOptions.AssumePropertyAccessPure) {
+          const pa = current as ts.PropertyAccessExpression;
+          queue.push(pa.expression);
+          break;
+        }
         // Property reads can invoke getters, so duplicating them is not semantics-preserving.
         return true;
+      }
 
       case ts.SyntaxKind.PrefixUnaryExpression:
         switch ((current as ts.PrefixUnaryExpression).operator) {
@@ -85,6 +162,11 @@ export function hasSideEffects(
       }
 
       case ts.SyntaxKind.ElementAccessExpression: {
+        if (options & SideEffectOptions.AssumePropertyAccessPure) {
+          const ea = current as ts.ElementAccessExpression;
+          queue.push(ea.expression, ea.argumentExpression);
+          break;
+        }
         return true;
       }
 
@@ -141,7 +223,8 @@ export function hasSideEffects(
               queue.push(child.initializer);
               break;
             case ts.SyntaxKind.SpreadAssignment:
-              return true;
+              queue.push((child as ts.SpreadAssignment).expression);
+              break;
             // Shorthand ({x}), methods, getters, setters — defining these is pure.
             // Computed keys on any of them are already handled above.
             case ts.SyntaxKind.ShorthandPropertyAssignment:

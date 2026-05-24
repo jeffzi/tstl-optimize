@@ -19,11 +19,11 @@ describe("inline", () => {
     }
 
     it.each([
-      { name: "spread argument", code: "keep(...items);" },
-      { name: "object spread argument", code: "keep({ ...obj });" },
-    ])("treats $name as impure at a void site", ({ code }) => {
+      { name: "spread argument with pure inner", code: "keep(...items);" },
+      { name: "object spread argument with pure inner", code: "keep({ ...obj });" },
+    ])("treats $name as pure at a void site", ({ code }) => {
       const args = parseCallArguments(code);
-      expect(isPureAtVoidSite(ts.factory.createIdentifier("value"), args)).toBe(false);
+      expect(isPureAtVoidSite(ts.factory.createIdentifier("value"), args)).toBe(true);
     });
   });
 
@@ -524,8 +524,8 @@ describe("inline", () => {
       `),
       );
 
-      expect(lua).toContain("____inline_arg_0 = x");
-      expect(lua).toContain("return function() return ____inline_arg_0 end");
+      expect(lua).toMatch(/____inline_arg_\d+ = x/);
+      expect(lua).toMatch(/return function\(\) return ____inline_arg_\d+ end/);
       expect(lua).not.toContain("g = function() return x end");
     });
   });
@@ -539,8 +539,7 @@ describe("inline", () => {
         setup(10);
       `);
       expect(lua).toContain("do");
-      // It might use an arg temp: ____inline_arg_0 = 10
-      expect(lua).toMatch(/10 \+ 1|____inline_arg_0 \+ 1/);
+      expect(lua).toMatch(/11|10 \+ 1|____inline_arg_\d+ \+ 1/);
       expect(lua).not.toContain("setup(10)");
     });
 
@@ -552,8 +551,8 @@ describe("inline", () => {
         declare function s1(): number; declare function s2(): number;
         foo(s1(), s2());
       `);
-      expect(lua).toContain("____inline_arg_0 = s1()");
-      expect(lua).toContain("____inline_arg_1 = s2()");
+      expect(lua).toMatch(/____inline_arg_\d+ = s1\(\)/);
+      expect(lua).toMatch(/____inline_arg_\d+ = s2\(\)/);
     });
   });
 
@@ -576,7 +575,7 @@ describe("inline", () => {
         function caller() { return compute(10); }
       `);
       expect(lua).not.toMatch(/\bdo\b/);
-      expect(lua).toMatch(/10 \+ 1|____inline_arg_0 \+ 1/);
+      expect(lua).toMatch(/11|10 \+ 1|____inline_arg_\d+ \+ 1/);
       expect(lua).toContain("return y * 2");
     });
 
@@ -734,6 +733,106 @@ describe("inline", () => {
         const tempName = collisionTempMatch[1];
         expect(lua).toMatch(new RegExp(`\\bdi = ${tempName}\\b|local di = ${tempName}\\b`));
       }
+    });
+  });
+
+  describe("direct argument substitution", () => {
+    describe("simple args bypass temp variables", () => {
+      it("Case A: single identifier arg substitutes directly — no ____inline_arg_ temp", () => {
+        const lua = compile(`
+          /** @inline */
+          function f(x: number): number {
+            const a = x * 2;
+            return a;
+          }
+          declare const v: number;
+          const r = f(v);
+        `);
+        expect(lua).not.toContain("____inline_arg_");
+        expect(lua).toContain("v * 2");
+      });
+
+      it("Case B: all identifier args substitute directly — no ____inline_arg_ temps", () => {
+        const lua = compile(`
+          /** @inline */
+          function f(x: number, y: number): number {
+            const a = y * 2;
+            const b = a + 1;
+            return b + x;
+          }
+          declare const u: number;
+          declare const v: number;
+          const r = f(u, v);
+        `);
+        expect(lua).not.toContain("____inline_arg_");
+        expect(lua).toContain("v * 2");
+        expect(lua).toContain("u");
+      });
+
+      it("Case C: literal arg substitutes directly — no ____inline_arg_ temp", () => {
+        const lua = compile(`
+          /** @inline */
+          function f(x: number): number {
+            const a = x + 1;
+            return a;
+          }
+          const r = f(10);
+        `);
+        expect(lua).not.toContain("____inline_arg_");
+        expect(lua).toMatch(/11|10 \+ 1/);
+      });
+
+      it("Case D: caller function params passed as identifier args — no ____inline_arg_ temps", () => {
+        const lua = compile(`
+          /** @inline */
+          function resolve(storage: { world: any }, id: number): number {
+            const w = storage.world;
+            return w.entity_dense[id];
+          }
+          function caller(storage: { world: any; entity_dense: number[] }, id: number): number {
+            const di = resolve(storage, id);
+            return storage.entity_dense[di];
+          }
+        `);
+        expect(lua).not.toContain("____inline_arg_");
+        expect(lua).toContain("storage.world");
+        expect(lua).toContain("id");
+      });
+    });
+
+    describe("side-effectful args still create temps (no regression)", () => {
+      it("Case E: both args have side effects — temps MUST be created for both", () => {
+        const lua = compile(`
+          /** @inline */
+          function f(x: number, y: number): number {
+            const a = x + y;
+            return a;
+          }
+          declare function s1(): number;
+          declare function s2(): number;
+          const r = f(s1(), s2());
+        `);
+        expect(lua).toMatch(/____inline_arg_\d+.*= s1\(\)/);
+        expect(lua).toMatch(/____inline_arg_\d+.*= s2\(\)/);
+      });
+
+      it("Case F: earlier identifier arg gets a temp when a later arg has side effects", () => {
+        const lua = compile(`
+          /** @inline */
+          function f(x: number, y: number): number {
+            const a = x + y;
+            return a;
+          }
+          declare const v: number;
+          declare function se(): number;
+          const r = f(v, se());
+        `);
+        // v (arg 0) must be temped because se() (arg 1) has side effects
+        // and se() runs after v in left-to-right evaluation, potentially
+        // mutating the variable that v refers to.
+        expect(lua).toMatch(/____inline_arg_\d+.*= v\b/);
+        expect(lua).toMatch(/____inline_arg_\d+.*= se\(\)/);
+      });
     });
   });
 
@@ -1028,8 +1127,8 @@ describe("inline", () => {
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).not.toContain("swap(");
-      expect(lua).toContain("____inline_arg_0 = s1()");
-      expect(lua).toContain("____inline_arg_1 = s2()");
+      expect(lua).toMatch(/____inline_arg_\d+ = s1\(\)/);
+      expect(lua).toMatch(/____inline_arg_\d+ = s2\(\)/);
       expect(lua).toMatch(/local p, q = .*____inline_result_/);
     });
   });
@@ -1099,7 +1198,7 @@ describe("inline", () => {
   });
 });
 
-describe("inline public API coverage", () => {
+describe("inline: Lua AST utilities", () => {
   it("maps method-call, conditional, for-loop, and return Lua nodes", () => {
     const statements = mapLuaStatements(
       [
@@ -1279,7 +1378,7 @@ describe("inline public API coverage", () => {
   });
 });
 
-describe("inline coverage", () => {
+describe("inline rejection guard rails", () => {
   it("preserves recursive @inline function call", () => {
     const code = `
       /** @inline */
@@ -1347,7 +1446,7 @@ describe("inline coverage", () => {
     expect(lua).toContain("foo()");
   });
 
-  it("buildObjectDestructureInline coverage", () => {
+  it("inlines multi-statement body at object destructuring site", () => {
     const code = `
       declare function print(...args: unknown[]): void;
       /** @inline */
@@ -1366,7 +1465,7 @@ describe("inline coverage", () => {
     expect(lua).toContain("b");
   });
 
-  it("buildObjectDestructureInline rejection (nested)", () => {
+  it("preserves call when object destructuring has nested binding patterns", () => {
     const code = `
       declare function print(...args: unknown[]): void;
       /** @inline */
@@ -1383,7 +1482,7 @@ describe("inline coverage", () => {
     expect(lua).toContain("getObj()");
   });
 
-  it("buildArrayDestructureInline coverage (non-multi)", () => {
+  it("inlines multi-statement body at array destructuring site (non-multi-return)", () => {
     const code = `
       declare function print(...args: unknown[]): void;
       /** @inline */
@@ -1416,7 +1515,7 @@ describe("inline coverage", () => {
   });
 });
 
-describe("inline uncovered branches", () => {
+describe("inline: statement-position and argument handling", () => {
   describe("Expression-kind inline at statement position (handleExpressionStatement)", () => {
     // Pure expression-body inline at void site → drop entirely (no side effects)
     it("drops pure expression-body call at statement position", () => {
@@ -2060,9 +2159,9 @@ describe("inline uncovered branches", () => {
         `),
       );
 
-      expect(lua).toContain("____inline_arg_0 = s1()");
-      expect(lua).toContain("____inline_arg_1 = s2()");
-      expect(lua).toContain("return ____inline_arg_1 - ____inline_arg_0");
+      expect(lua).toMatch(/____inline_arg_\d+ = s1\(\)/);
+      expect(lua).toMatch(/____inline_arg_\d+ = s2\(\)/);
+      expect(lua).toMatch(/return ____inline_arg_\d+ - ____inline_arg_\d+/);
     });
 
     it("preserves eager evaluation for arguments that would otherwise sit behind a conditional", () => {
@@ -2081,10 +2180,10 @@ describe("inline uncovered branches", () => {
         `),
       );
 
-      expect(lua).toContain("____inline_arg_0 = choose()");
-      expect(lua).toContain("____inline_arg_1 = s1()");
-      expect(lua).toContain("____inline_arg_2 = s2()");
-      expect(lua).toContain("return ____inline_arg_0 and ____inline_arg_1 or ____inline_arg_2");
+      expect(lua).toMatch(/____inline_arg_\d+ = choose\(\)/);
+      expect(lua).toMatch(/____inline_arg_\d+ = s1\(\)/);
+      expect(lua).toMatch(/____inline_arg_\d+ = s2\(\)/);
+      expect(lua).toMatch(/return ____inline_arg_\d+ and ____inline_arg_\d+ or ____inline_arg_\d+/);
     });
 
     it.each([
@@ -2304,7 +2403,7 @@ describe("inline uncovered branches", () => {
     });
   });
 
-  describe("additional control-flow rejection coverage", () => {
+  describe("control-flow early-return rejections", () => {
     it.each([
       {
         name: "an else branch returns",
@@ -2462,7 +2561,7 @@ describe("inline uncovered branches", () => {
     });
   });
 
-  describe("additional variable and return inlining coverage", () => {
+  describe("variable and return site edge cases", () => {
     it("reports unsupported default parameters from a return-site call", () => {
       const { diagnostics } = compileWithDiagnostics(`
         /** @inline */
@@ -2504,7 +2603,7 @@ describe("inline uncovered branches", () => {
     });
   });
 
-  describe("additional destructuring rejection coverage", () => {
+  describe("destructuring fall-back cases", () => {
     it("falls back to the call for object destructuring with a rest element", () => {
       const lua = normalizeLua(
         compile(`
@@ -2639,7 +2738,7 @@ describe("inline uncovered branches", () => {
     });
   });
 
-  describe("direct visitor branch coverage", () => {
+  describe("direct visitor guard rails", () => {
     interface TestProgram {
       checker: ts.TypeChecker;
       getSourceFile(path: string): ts.SourceFile;
@@ -3036,67 +3135,58 @@ describe("inline uncovered branches", () => {
     });
 
     describe("statement-position visitor diagnostics", () => {
-      it.each([
-        {
-          name: "expression-statement visitor rejects labeled statements",
-          kind: ts.SyntaxKind.ExpressionStatement as const,
-          source: `
-            /** @inline */
-            function run(flag: boolean): void {
-              loop: {
-                if (flag) {
-                  break loop;
-                }
-              }
-            }
-
-            run(true);
-          `,
-          messageFragment: "labeled statement in body",
-        },
-      ])("$name", ({ kind, source, messageFragment }) => {
+      it("expression-statement visitor rejects labeled statements", () => {
         const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
 
         const result = runDirectStatementVisitor({
-          files: { "/main.ts": source },
-          kind,
+          files: {
+            "/main.ts": `
+              /** @inline */
+              function run(flag: boolean): void {
+                loop: {
+                  if (flag) {
+                    break loop;
+                  }
+                }
+              }
+
+              run(true);
+            `,
+          },
+          kind: ts.SyntaxKind.ExpressionStatement,
           statementIndex: 1,
           context,
         });
 
         expect(result).toBeUndefined();
-        expectDiagnosticFragment(context.diagnostics, messageFragment);
+        expectDiagnosticFragment(context.diagnostics, "labeled statement in body");
       });
     });
 
     describe("return visitor diagnostics", () => {
-      it.each([
-        {
-          name: "reports parameter writes from return expressions",
-          source: `
-            /** @inline */
-            function bump(value: number): number {
-              const keep = value;
-              return ++value;
-            }
-
-            function run() {
-              return bump(1);
-            }
-          `,
-          messageFragment: "parameter is written inside body",
-        },
-      ])("$name", ({ source, messageFragment }) => {
+      it("reports parameter writes from return expressions", () => {
         const context = createDirectContext({ diagnostics: [] as ts.Diagnostic[] });
 
         const result = runDirectReturnVisitor({
-          files: { "/main.ts": source },
+          files: {
+            "/main.ts": `
+              /** @inline */
+              function bump(value: number): number {
+                const keep = value;
+                return ++value;
+              }
+
+              function run() {
+                return bump(1);
+              }
+            `,
+          },
           functionStatementIndex: 1,
           context,
         });
 
         expect(result).toBeUndefined();
-        expectDiagnosticFragment(context.diagnostics, messageFragment);
+        expectDiagnosticFragment(context.diagnostics, "parameter is written inside body");
       });
     });
 
