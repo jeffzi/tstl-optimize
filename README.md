@@ -9,7 +9,7 @@ Lua for better runtime performance — fewer table lookups, smaller closures, an
 ```typescript
 // TypeScript input
 Math.sqrt(x)
-math.floor(a) + math.floor(b)
+math.abs(a) + math.abs(b)
 /** @inline */
 function double(x: number) {
   return x * 2;
@@ -20,8 +20,8 @@ const y = double(5);
 ```lua
 -- Lua output (with plugin)
 x ^ 0.5
-local ____math_floor = math.floor
-____math_floor(a) + ____math_floor(b)
+local ____math_abs = math.abs
+____math_abs(a) + ____math_abs(b)
 -- (inlined at call sites)
 local y = 5 * 2
 ```
@@ -318,13 +318,13 @@ local greeting = "hello world"
 ### `math-intrinsics`
 
 Replaces `Math.*` calls and arithmetic patterns with inline Lua expressions. Call-expression
-rewrites (`Math.sqrt`, `Math.floor`, etc.) skip LuaJIT targets, which already handle C calls
+rewrites (`Math.sqrt`, `Math.abs`, etc.) skip LuaJIT targets, which already handle C calls
 efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless noted otherwise.
 
 | Source               | Lua output                                                           | Notes                                                          |
 | -------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `Math.sqrt(x)`       | `x ^ 0.5`                                                            | Lossless                                                       |
-| `Math.floor(x)`      | `(x == math.huge or x == -math.huge) and math.floor(x) or x - x % 1` | Lossless; guard preserves `math.huge` for ±∞ inputs            |
+| `Math.floor(n)`      | Literal folded (e.g. `Math.floor(1.7)` → `1`)                        | Numeric-literal argument only; non-literal falls through       |
 | `Math.ceil(n)`       | Literal folded (e.g. `Math.ceil(1.5)` → `2`)                         | Numeric-literal argument only; non-literal falls through       |
 | `Math.round(n)`      | Literal folded (e.g. `Math.round(1.5)` → `2`)                        | Numeric-literal argument only; non-literal falls through       |
 | `Math.abs(x)`        | `(x == 0) and 0 or ((x < 0) and -x or x)`                            | Lossless; zero-check preserves `+0` for `-0` input             |
@@ -337,10 +337,10 @@ efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless no
 
 _Lossless: the rewrite produces bit-identical results to the original call for all finite inputs._
 
-`abs` and `floor` rewrite only side-effect-free arguments, so duplicating them is safe. `ceil` and
+`abs` rewrites only side-effect-free arguments, so duplicating them is safe. `floor`, `ceil`, and
 `round` fold only when the argument is a numeric literal — non-literal arguments pass through to
-`math.ceil` / `math.round`. `max` and `min` rewrite only when **both** arguments are numeric
-literals, which — combined with `constant-folding` — collapses the pattern at compile time;
+`math.floor` / `math.ceil` / `math.round`. `max` and `min` rewrite only when **both** arguments are
+numeric literals, which — combined with `constant-folding` — collapses the pattern at compile time;
 non-literal arguments fall through to `math.max` / `math.min`.
 
 > **Edge cases:** `x ** n` and `x / n` rewrites assume `x` is numeric; they skip non-numeric
@@ -641,23 +641,23 @@ bail(n); // warns: @inline ignored — early return in body
 #### Rule interaction
 
 Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined
-body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as
+body calls `math.sqrt(x)` multiple times, the `localizer` rule hoists a `____math_sqrt` local as
 it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside inlined bodies the
 same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations
 as the rest of the file.
 
 ### `localizer`
 
-Hoists repeated table-index chains (e.g., `math.floor`, `game.players.count`) into local variables
+Hoists repeated table-index chains (e.g., `math.sqrt`, `game.players.count`) into local variables
 at the top of the scope. Inside loop bodies, the rule also localizes repeated `arr[i]` accesses
 (where `i` is the loop control variable) and appends a write-back when the element is assigned.
 
 ```lua
 -- Static chain hoisting
 -- Before                          -- After
-math.floor(x)                      local ____math_floor = math.floor
-math.floor(y)                      ____math_floor(x)
-                                   ____math_floor(y)
+math.sqrt(x)                       local ____math_sqrt = math.sqrt
+math.sqrt(y)                       ____math_sqrt(x)
+                                   ____math_sqrt(y)
 
 -- Array element localization (loop bodies)
 -- Before                          -- After

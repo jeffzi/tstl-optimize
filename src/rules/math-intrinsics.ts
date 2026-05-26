@@ -94,57 +94,6 @@ function buildSqrt(luaArg: tstl.Expression): tstl.Expression {
 }
 
 /**
- * Lua 5.1's `math.floor` returns a float, and `arg - arg % 1` is the
- * idiomatic integer-truncation trick.  However it breaks for ±infinity
- * (infinity mod 1 is NaN in IEEE 754), so the generated expression guards
- * with `(arg == math.huge or arg == -math.huge) and math.floor(arg) or ...`
- * to fall back to the library call only for those two special values.
- */
-function buildFloor(luaArg: tstl.Expression): tstl.Expression {
-  const positiveInfinity = tstl.createTableIndexExpression(
-    tstl.createIdentifier("math"),
-    tstl.createStringLiteral("huge"),
-  );
-  const negativeInfinity = tstl.createUnaryExpression(
-    tstl.createParenthesizedExpression(deepCloneExpression(positiveInfinity)),
-    tstl.SyntaxKind.NegationOperator,
-  );
-  const isPositiveInfinity = tstl.createBinaryExpression(
-    deepCloneExpression(luaArg),
-    positiveInfinity,
-    tstl.SyntaxKind.EqualityOperator,
-  );
-  const isNegativeInfinity = tstl.createBinaryExpression(
-    deepCloneExpression(luaArg),
-    negativeInfinity,
-    tstl.SyntaxKind.EqualityOperator,
-  );
-  const isInfinite = tstl.createBinaryExpression(
-    isPositiveInfinity,
-    isNegativeInfinity,
-    tstl.SyntaxKind.OrOperator,
-  );
-  const guardedCall = tstl.createCallExpression(
-    tstl.createTableIndexExpression(
-      tstl.createIdentifier("math"),
-      tstl.createStringLiteral("floor"),
-    ),
-    [deepCloneExpression(luaArg)],
-  );
-  const right = tstl.createBinaryExpression(
-    deepCloneExpression(luaArg),
-    tstl.createNumericLiteral(1),
-    tstl.SyntaxKind.ModuloOperator,
-  );
-  const fastPath = tstl.createBinaryExpression(luaArg, right, tstl.SyntaxKind.SubtractionOperator);
-  return tstl.createBinaryExpression(
-    tstl.createBinaryExpression(isInfinite, guardedCall, tstl.SyntaxKind.AndOperator),
-    fastPath,
-    tstl.SyntaxKind.OrOperator,
-  );
-}
-
-/**
  * Lua 5.1 has no `math.abs` intrinsic, so we emit the standard
  * `and`/`or` ternary idiom.  The zero branch `(arg == 0) and 0 or ...`
  * is required to normalise `-0` → `0`, matching IEEE 754 `Math.abs`
@@ -268,10 +217,7 @@ function handleCallExpression(
           return lit;
         }
       }
-      if (hasSideEffects(args[0])) return undefined;
-      const floorResult = buildFloor(context.transformExpression(args[0]));
-      tstl.setNodeOriginal(floorResult, node);
-      return floorResult;
+      return undefined;
     }
     case "ceil": {
       if (args.length !== 1) return undefined;
@@ -309,7 +255,6 @@ function handleCallExpression(
     case "max":
     case "min": {
       if (args.length !== 2) return undefined;
-      if (hasSideEffects(args[0]) || hasSideEffects(args[1])) return undefined;
       if (!isSafeMinMaxRewriteArg(args[0]) || !isSafeMinMaxRewriteArg(args[1])) {
         return undefined;
       }

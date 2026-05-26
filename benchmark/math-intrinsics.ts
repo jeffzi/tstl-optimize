@@ -5,25 +5,6 @@ const a = 13.7;
 const b = 4.2;
 const N = 1000;
 
-// Math.floor: math.floor(x) vs x - x % 1 (plugin output)
-print("=== Math.floor ===");
-print(
-  render(
-    compare_time({
-      "[baseline]  math.floor(x)": () => {
-        for (let i = 0; i < N; i++) {
-          math.floor(x);
-        }
-      },
-      "[optimized] Math.floor(x)": () => {
-        for (let i = 0; i < N; i++) {
-          Math.floor(x);
-        }
-      },
-    }),
-  ),
-);
-
 // Math.sqrt: math.sqrt(x) vs x ^ 0.5 (plugin output)
 print("\n=== Math.sqrt ===");
 print(
