@@ -55,6 +55,7 @@ Rule reference:
 - [`loop-rebase`](#loop-rebase)
 - [`inline`](#inline)
 - [`localizer`](#localizer)
+- [`unspill`](#unspill)
 - [`debug-strip`](#debug-strip)
 
 ## Installation
@@ -65,10 +66,11 @@ npm install --save-dev typescript-to-lua tstl-optimize
 
 Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
 
-The package also exports two utility subpaths for library consumers:
+The package also exports three utility subpaths for library consumers:
 
 - `tstl-optimize/ts-ast`: TypeScript expression analysis (`hasSideEffects`, `unwrapTransparent`, `isNilExpression`, …)
-- `tstl-optimize/transforms`: Lua source transforms (`hoistCrossModuleAccesses`, `getRequireBindings`, `getModuleExports`)
+- `tstl-optimize/lua-ast`: Lua AST transforms (`unspillStatements`, `isLuaRhsPure`) — operate on the TSTL Lua AST before emit
+- `tstl-optimize/transforms`: Lua source transforms (`hoistCrossModuleAccesses`, `getRequireBindings`, `getModuleExports`) — post-emit string-to-string
 
 ## Usage
 
@@ -127,7 +129,7 @@ Use the rules in two groups:
 
 - **Build specialization:** `conditional-compilation`, `debug-strip`
 - **Performance optimization:** `constant-folding`, `dead-local`, `merge-locals`, `localizer`,
-  `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`
+  `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`, `unspill`
 
 `conditional-compilation` and `debug-strip` are useful even when raw speed is not the main goal.
 Lua has no native preprocessor, so these rules let you remove platform-specific branches, debug
@@ -155,6 +157,7 @@ avoids relying on aggressive call-site rewrites everywhere:
           "remove-empty-branch": true,
           "localizer": { "scope": "function", "threshold": 2 },
           "loop-rebase": true,
+          "unspill": true,
           "inline": false,
           "math-intrinsics": true,
           "conditional-compilation": false,
@@ -187,6 +190,7 @@ This profile is better for projects that need platform-specific code and log str
           "remove-empty-branch": true,
           "localizer": { "scope": "function", "threshold": 2 },
           "loop-rebase": true,
+          "unspill": true,
           "inline": true,
           "math-intrinsics": true,
           "conditional-compilation": {
@@ -746,6 +750,73 @@ in `include`:
 "localizer": { "include": ["assert"] }
 ```
 
+### `unspill`
+
+Removes the redundant base/key temporaries TSTL emits when lowering a compound assignment on an
+element/index access. When `arr[i] += rhs` is rewritten by TSTL into
+`local ____v1, ____v2 = arr, i; ____v1[____v2] = ____v1[____v2] + rhs`, the rule folds it back to
+`arr[i] = arr[i] + rhs` once the cached base (`arr`) and key (`i`) are provably side-effect-free.
+
+```typescript
+// Input
+const arr: number[] = [];
+const brr: number[] = [];
+for (const i of $range(0, 999)) {
+  arr[i] += brr[i] * 0.016;
+}
+```
+
+```lua
+-- Before (TSTL default)              -- After (with unspill)
+for i = 1, 1000 do                    for i = 1, 1000 do
+    local ____arr_0, ____temp_1 =         arr[i] = arr[i] + brr[i] * 0.016
+        arr, i                        end
+    ____arr_0[____temp_1] =
+        ____arr_0[____temp_1] +
+        brr[i] * 0.016
+end
+```
+
+The rule also handles the expression / value-temp form (`return (arr[i] += 5)`), where TSTL caches
+base and key unconditionally and emits a third "value" temp for downstream use. When the value temp
+is consumed (`return ____v3`), the base/key temps are still removed and the value temp is kept;
+when the value temp has no other reads, the full pattern collapses to a single assignment.
+
+The rule runs **after** `loop-rebase` because a `$range` loop emits `arr[i + 1]` (whose key `i + 1`
+is a `BinaryExpression`, not pure); rebasing rewrites it to bare `i`, which is what makes the
+cached key foldable.
+
+**Limitations:**
+
+- Property/static-key compound assignment (`obj.field += y`, `arr[5] += y`) is already temp-free in
+  statement position — the rule does nothing on those forms.
+- Non-`$range` C-style `for` loops keep an `i + 1` index — declined under strict purity.
+- Impure base/key (function calls in the chain, non-rebased `i + 1`) is declined unconditionally.
+- Property/column-chain bases (`obj.a.b += y`) are declined by the strict default — a property read
+  could fire `__index`. Callers of the `tstl-optimize/lua-ast` export whose tables are
+  metatable-free can pass a permissive purity predicate to fold these too.
+
+#### Public `lua-ast` export
+
+The rule's AST-level core is also published as `tstl-optimize/lua-ast`:
+
+```typescript
+import { unspillStatements, isLuaRhsPure } from "tstl-optimize/lua-ast";
+// import * as tstl from "typescript-to-lua";
+
+// Strict default — matches the in-plugin rule.
+const out = unspillStatements(stmts);
+
+// Permissive override — additionally fold pure-part property/column chains
+// (safe only when the involved tables are guaranteed metatable-free).
+const folded = unspillStatements(stmts, {
+  isPure: (e) => isLuaRhsPure(e) || (tstl.isTableIndexExpression(e) && ...),
+});
+```
+
+This is intended for downstream plugins that need to perform the same fold before their own
+hoisting pass; the in-plugin rule (`rules.unspill`) is unaffected by callers of the export.
+
 ### `debug-strip`
 
 Strips debug and profiling calls from the Lua output. **Off by default**; enable it explicitly,
@@ -878,6 +949,7 @@ All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
 | `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)).                          |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
+| `rules.unspill`                 | `boolean`                                            | `true`        | Fold the base/key temporaries TSTL emits for compound assignment on element/index access (`arr[i] += rhs`) when the cached parts are pure.                                                                |
 | `rules.debug-strip`             | `boolean \| DebugStripConfig`                        | `false`       | Strip debug and profiling calls.                                                                                                                                                                          |
 | `target`                        | `"puc" \| "luajit"`                                  | auto-detected | Lua interpreter target. When omitted, the plugin derives it from TSTL's `luaTarget`.                                                                                                                      |
 

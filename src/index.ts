@@ -12,6 +12,7 @@ import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
 import { createVisitors as mathIntrinsicsVisitors } from "./rules/math-intrinsics";
 import { createVisitors as mergeLocalsVisitors } from "./rules/merge-locals";
 import { createVisitors as removeEmptyBranchVisitors } from "./rules/remove-empty-branch";
+import { createVisitors as unspillVisitors } from "./rules/unspill";
 
 // Phase-based rule ordering. Phases execute in order; within each phase,
 // rules execute in the order listed. This ensures critical dependencies:
@@ -57,6 +58,7 @@ const PHASE_ENTRIES: [string, [keyof PluginConfig["rules"], RuleFactory][]][] = 
   ],
   ["cleanup", [["remove-empty-branch", removeEmptyBranchVisitors]]],
   ["rebase", [["loop-rebase", loopRebaseVisitors]]],
+  ["desugar", [["unspill", unspillVisitors]]],
   ["hoist", [["localizer", localizerVisitors]]],
   [
     "emit-prep",

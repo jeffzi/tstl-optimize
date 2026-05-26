@@ -45,6 +45,7 @@ export interface RulesConfig {
   "remove-empty-branch": boolean;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
+  unspill: boolean;
   inline: boolean | InlineConfig;
   "dead-local": boolean;
   "merge-locals": boolean;
@@ -80,6 +81,7 @@ const DEFAULT_RULES: RulesConfig = {
   "remove-empty-branch": true,
   "math-intrinsics": true,
   "loop-rebase": true,
+  unspill: true,
   inline: true,
   "dead-local": true,
   "merge-locals": true,
