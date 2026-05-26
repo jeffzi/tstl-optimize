@@ -25,42 +25,40 @@ function add_inline(a: number, b: number) {
 
 // Simple arithmetic: double(x) → x * 2
 print("=== Inline: double(x) ===");
-let double_acc = 0;
+let _double_acc = 0;
 print(
   render(
     compare_time({
-      "double(x) [call]": () => {
+      "[baseline]  double(x)": () => {
         for (let i = 0; i < N; i++) {
-          double_acc += double_baseline(x);
+          _double_acc += double_baseline(x);
         }
       },
-      "double(x) [inlined]": () => {
+      "[optimized] double(x)": () => {
         for (let i = 0; i < N; i++) {
-          double_acc += double_inline(x);
+          _double_acc += double_inline(x);
         }
       },
     }),
   ),
 );
-print(double_acc); // prevent DCE
 
 // Multi-param: add(a, b) → a + b
 print("\n=== Inline: add(a, b) ===");
-let add_acc = 0;
+let _add_acc = 0;
 print(
   render(
     compare_time({
-      "add(a, b) [call]": () => {
+      "[baseline]  add(a, b)": () => {
         for (let i = 0; i < N; i++) {
-          add_acc += add_baseline(a, b);
+          _add_acc += add_baseline(a, b);
         }
       },
-      "add(a, b) [inlined]": () => {
+      "[optimized] add(a, b)": () => {
         for (let i = 0; i < N; i++) {
-          add_acc += add_inline(a, b);
+          _add_acc += add_inline(a, b);
         }
       },
     }),
   ),
 );
-print(add_acc); // prevent DCE
