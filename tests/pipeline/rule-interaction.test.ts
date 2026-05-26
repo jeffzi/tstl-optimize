@@ -66,31 +66,28 @@ describe("optimize rule interactions", () => {
     it("replaces Math functions inside inlined expression body", () => {
       const lua = compile(`
         /** @inline */
-        function fastFloor(x: number) { return Math.floor(x); }
+        function fastSqrt(x: number) { return Math.sqrt(x); }
         declare const v: number;
-        const r = fastFloor(v);
+        const r = fastSqrt(v);
       `);
       const normalizedLua = normalizeLua(lua);
-      expect(normalizedLua).not.toContain("fastFloor(v)");
-      expect(normalizedLua).toContain("math.floor(v)");
-      expect(normalizedLua).toContain("v - v % 1");
+      expect(normalizedLua).not.toContain("fastSqrt(v)");
+      expect(normalizedLua).toContain("v ^ 0.5");
     });
 
     it("replaces Math functions inside inlined do...end block", () => {
       const lua = compile(`
         /** @inline */
-        function doFloor(x: number): void {
-          const y = Math.floor(x);
+        function doSqrt(x: number): void {
+          const y = Math.sqrt(x);
           const z = y + 1;
         }
         declare const v: number;
-        doFloor(v);
+        doSqrt(v);
       `);
       const normalizedLua = normalizeLua(lua);
-      expect(normalizedLua).toContain(
-        "local y = (v == math.huge or v == -(math.huge)) and math.floor(v) or v - v % 1",
-      );
-      expect(normalizedLua).not.toContain("doFloor(v)");
+      expect(normalizedLua).toContain("local y = v ^ 0.5");
+      expect(normalizedLua).not.toContain("doSqrt(v)");
     });
   });
 

@@ -107,7 +107,7 @@ describe("localizer sourcemap: math-intrinsics hoisted declarations", () => {
   // line 2: declare const x: number;
   // line 3: declare const y: number;
   // line 4: declare const speed: number;
-  // line 5: const tileX = Math.floor(x / 32);   first math.huge use
+  // line 5: const tileX = Math.floor(x / 32);   first math.floor use
   // line 6: const tileY = Math.floor(y / 32);
   // line 7: const bounded = Math.max(0, speed); first non-rewritten math.max use
   // line 8: const biggest = Math.max(x, y, speed);
@@ -125,7 +125,7 @@ print(tileX, tileY, bounded, biggest);`;
   const { lua, externalMap, traceback } = compileWithSourceMap(source);
 
   it.each<{ name: string; pattern: string; expectedLine: number }>([
-    { name: "____math_huge", pattern: "local ____math_huge = math.huge", expectedLine: 5 },
+    { name: "____math_floor", pattern: "local ____math_floor = math.floor", expectedLine: 5 },
     { name: "____math_max", pattern: "local ____math_max = math.max", expectedLine: 7 },
   ])("local $name maps to first Math.* call site (TS line $expectedLine)", async ({
     pattern,

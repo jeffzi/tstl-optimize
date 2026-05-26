@@ -5,7 +5,7 @@ describe("index chaining", () => {
   it("chains multiple rules for the same SyntaxKind", () => {
     const code = `
       declare const val: number;
-      const x = Math.floor(val);
+      const x = Math.sqrt(val);
       /** @inline */
       function f() { return 1; }
       const y = f();
@@ -19,7 +19,7 @@ describe("index chaining", () => {
       },
     };
     const lua = normalizeLua(compile(code, options));
-    expect(lua).toContain("val - val % 1");
+    expect(lua).toContain("val ^ 0.5");
     expect(lua).toContain("y = 1");
   });
 });
@@ -27,13 +27,13 @@ describe("index chaining", () => {
 describe("index chaining — SourceFile visitor fallback", () => {
   it("chains statement visitors when two rules both handle ExpressionStatement", () => {
     // conditional-compilation and constant-folding both register for ExpressionStatement.
-    // math-intrinsics is active via defaults and produces "val - val % 1", proving
+    // math-intrinsics is active via defaults and produces "val ^ 0.5", proving
     // the full chain ran without any rule being silenced by another.
     const code = `
       declare const val: number;
 
-      const x = Math.floor(val);
-      const doubled = Math.floor(val) + Math.floor(val);
+      const x = Math.sqrt(val);
+      const doubled = Math.sqrt(val) + Math.sqrt(val);
     `;
     const options = {
       pluginOptions: {
@@ -46,7 +46,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("val - val % 1");
+    expect(lua).toContain("val ^ 0.5");
     expect(lua).toContain("doubled =");
   });
 
@@ -60,7 +60,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
         function getValue() { return 1; }
 
         const x = getValue();
-        const y = Math.floor(n);
+        const y = Math.sqrt(n);
       `,
       expectedInline: "x = 1",
     },
@@ -74,7 +74,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
           return 42;
         }
 
-        const x = Math.floor(n);
+        const x = Math.sqrt(n);
         const y = getValue();
       `,
       expectedInline: "= 42",
@@ -91,7 +91,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("n - n % 1");
+    expect(lua).toContain("n ^ 0.5");
     expect(lua).toContain(expectedInline);
   });
 
@@ -102,7 +102,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
       /** @inline */
       function helper(v: number): number {
-        return Math.floor(v);
+        return Math.sqrt(v);
       }
 
       const a = helper(value);
@@ -123,7 +123,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("value - value % 1");
+    expect(lua).toContain("value ^ 0.5");
     expect(lua).not.toContain("helper(");
     expect(lua).toContain("math.ceil"); // Math.ceil preserved (not in math-intrinsics)
   });
@@ -133,7 +133,7 @@ describe("index chaining — SourceFile visitor fallback", () => {
       declare const n: number;
 
       if (true) {
-        const x = Math.floor(n);
+        const x = Math.sqrt(n);
         {
           const y = Math.ceil(x);
           const z = y + Math.floor(5.5);
@@ -156,8 +156,8 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    // math-intrinsics transforms Math.floor(n) → n - n % 1
-    expect(lua).toContain("n - n % 1");
+    // math-intrinsics transforms Math.sqrt(n) → n ^ 0.5
+    expect(lua).toContain("n ^ 0.5");
     // math-intrinsics + constant-folding collapses Math.floor(5.5) → 5
     expect(lua).toContain("y + 5");
     // all Math.* calls are rewritten to lowercase math.*
@@ -170,7 +170,7 @@ describe("index chaining — SourceFile statement fallback chains through superT
     const code = `
       declare const val: number;
 
-      const x = Math.floor(val);
+      const x = Math.sqrt(val);
       const y = x + x;
       const z = y + 1;
     `;
@@ -186,8 +186,8 @@ describe("index chaining — SourceFile statement fallback chains through superT
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("val - val % 1"); // Math.floor transformed
-    expect(lua).not.toContain("Math.floor"); // math-intrinsics and constant-folding were applied
+    expect(lua).toContain("val ^ 0.5"); // Math.sqrt transformed
+    expect(lua).not.toContain("Math.sqrt"); // math-intrinsics applied
   });
 
   it.each([
@@ -253,8 +253,8 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
     const code = `
       declare const val: number;
 
-      const x = Math.floor(val);
-      const y = Math.floor(val) + Math.floor(val);
+      const x = Math.sqrt(val);
+      const y = Math.sqrt(val) + Math.sqrt(val);
     `;
     const options = {
       pluginOptions: {
@@ -268,7 +268,7 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("val - val % 1");
+    expect(lua).toContain("val ^ 0.5");
     expect(lua).toContain("x =");
     expect(lua).toContain("y =");
   });
@@ -278,8 +278,8 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
       declare const a: number;
       declare const b: number;
 
-      const sum = Math.floor(a) + Math.floor(b);
-      const prod = Math.floor(a) * Math.floor(b);
+      const sum = Math.sqrt(a) + Math.sqrt(b);
+      const prod = Math.sqrt(a) * Math.sqrt(b);
     `;
     const options = {
       pluginOptions: {
@@ -294,8 +294,8 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    expect(lua).toContain("a - a % 1");
-    expect(lua).toContain("b - b % 1");
+    expect(lua).toContain("a ^ 0.5");
+    expect(lua).toContain("b ^ 0.5");
   });
 
   it("preserves correct behavior after visitor merge cleanup", () => {
@@ -332,7 +332,7 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
     const code = `
       declare const obj: { prop: number };
 
-      const result = Math.floor(obj.prop);
+      const result = Math.ceil(obj.prop);
       const doubled = result + result;
     `;
     const options = {
@@ -348,8 +348,8 @@ describe("index chaining — visitor cleanup with multiple rules", () => {
 
     const lua = normalizeLua(compile(code, options));
 
-    // math-intrinsics is disabled → Math.floor stays as math.floor(obj.prop)
-    expect(lua).toContain("math.floor(obj.prop)");
+    // math-intrinsics is disabled → Math.ceil stays as math.ceil(obj.prop)
+    expect(lua).toContain("math.ceil(obj.prop)");
     expect(lua).toContain("result + result");
   });
 });

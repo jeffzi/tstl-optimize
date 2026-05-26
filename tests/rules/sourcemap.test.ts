@@ -192,17 +192,17 @@ for (const i of $range(0, n - 1)) {
 // the two cases distinguishable.
 // ---------------------------------------------------------------------------
 
-// buildFloor: Math.floor(x) → complex ternary
-// Root `or` BinaryExpression starts at Lua col 4 (before first `x` at col 5).
+// Math.floor(x) falls through to math.floor(x) (no inline rewrite).
+// Verify the passthrough still maps to the original call site.
 
-describe("math-intrinsics sourcemap: buildFloor root maps to call site", () => {
+describe("math-intrinsics sourcemap: Math.floor passthrough maps to call site", () => {
   // line 1: declare const x: number;
   // line 2: const a = Math.floor(x);
   const source = `\
 declare const x: number;
 const a = Math.floor(x);`;
 
-  it("rewritten expression root column maps to Math.floor call (external map)", async () => {
+  it("passthrough math.floor column maps to Math.floor call (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
       pluginOptions: { rules: { "math-intrinsics": true } },
     });

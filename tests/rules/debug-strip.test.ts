@@ -231,15 +231,14 @@ describe("debug-strip", () => {
         [
           "declare function print(...args: unknown[]): void;",
           "declare const x: number;",
-          "const a = Math.floor(x);",
+          "const a = Math.sqrt(x);",
           'print("debug");',
         ].join("\n"),
         enabled,
       );
       const normalized = normalizeLua(lua);
       expect(normalized).toContain("a =");
-      expect(normalized).toContain("% 1");
-      expect(normalized).toContain("math.floor");
+      expect(normalized).toContain("^ 0.5");
     });
   });
 
