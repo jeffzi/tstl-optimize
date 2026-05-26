@@ -4,7 +4,12 @@ import { deepCloneExpression, withPositionFrom } from "../../ast/deep-clone";
 import { isLuaRhsPure } from "../../ast/lua-ast";
 import { forEachAccess } from "../../ast/lua-references";
 import { Walk, walkStatements } from "../../ast/lua-walker";
-import { matchUnspillPair, matchUnspillValueTemp } from "./match";
+import {
+  matchUnspillPair,
+  matchUnspillValueTemp,
+  type UnspillMatch,
+  type UnspillValueTempMatch,
+} from "./match";
 
 /**
  * Counts how many access slots reference the identifier named `name` across
@@ -97,7 +102,7 @@ function substituteTemps(
  * Produces an `AssignmentStatement` of the form `base[key] = <rhs substituted>`,
  * positioned from the original decl statement (to preserve sourcemap info).
  */
-function applyUnspill(match: ReturnType<typeof matchUnspillPair> & {}): tstl.AssignmentStatement {
+function applyUnspill(match: UnspillMatch): tstl.AssignmentStatement {
   const { assignStmt, base, key, v1Name, v2Name } = match;
 
   // Build the new LHS: base[key]
@@ -122,7 +127,7 @@ function applyUnspill(match: ReturnType<typeof matchUnspillPair> & {}): tstl.Ass
  * The `local v1, v2 = E1, E2` decl is dropped. v3 and its downstream consumer are kept.
  */
 function applyUnspillValueTemp(
-  match: ReturnType<typeof matchUnspillValueTemp> & {},
+  match: UnspillValueTempMatch,
 ): [tstl.VariableDeclarationStatement, tstl.AssignmentStatement] {
   const { valueDeclStmt, valueInit, assignStmt, base, key, v1Name, v2Name } = match;
 
