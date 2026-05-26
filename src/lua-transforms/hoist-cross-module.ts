@@ -65,7 +65,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
   // Build require info with body indices for insertion point logic
   const requireInfos = new Map<string, RequireInfo>();
   for (const [moduleVar, binding] of requireBindings) {
-    const index = ast.body.findIndex((stmt) => stmt === binding.node);
+    const index = ast.body.indexOf(binding.node);
     if (index >= 0) {
       requireInfos.set(moduleVar, {
         statement: binding.node,
@@ -156,7 +156,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
         if (requireInfos.has(moduleVar)) {
           const memberName = (member.identifier as luaparse.Identifier).name;
           const preExisting = preExistingHoists.get(moduleVar);
-          if (!preExisting || !preExisting.some((h) => h.name === memberName)) {
+          if (!preExisting?.some((h) => h.name === memberName)) {
             const offset = (member as unknown as { range: [number, number] }).range[0];
             memberAccesses.push({ name: memberName, moduleVar, offset });
           }
@@ -174,16 +174,19 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     if (!accessesToHoist.has(name)) {
       accessesToHoist.set(name, { moduleVar, order: i });
     }
-    if (!accessesByModule.has(name)) {
-      accessesByModule.set(name, new Set());
+    let moduleSet = accessesByModule.get(name);
+    if (!moduleSet) {
+      moduleSet = new Set();
+      accessesByModule.set(name, moduleSet);
     }
-    accessesByModule.get(name)!.add(moduleVar);
+    moduleSet.add(moduleVar);
   }
 
   // Detect collisions: two modules same name or shadowing existing local
   for (const [name] of accessesToHoist) {
-    if (accessesByModule.get(name)?.size && accessesByModule.get(name)!.size > 1) {
-      const mods = Array.from(accessesByModule.get(name)!);
+    const moduleSet = accessesByModule.get(name);
+    if (moduleSet && moduleSet.size > 1) {
+      const mods = Array.from(moduleSet);
       throw new Error(
         `Collision: member name "${name}" contributed by multiple modules: ${mods.join(", ")}`,
       );
@@ -213,7 +216,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     for (const [name, { moduleVar: originModule, order }] of accessesToHoist) {
       if (originModule === moduleVar) {
         const preExisting = preExistingHoists.get(moduleVar);
-        if (!preExisting || !preExisting.some((h) => h.name === name)) {
+        if (!preExisting?.some((h) => h.name === name)) {
           toInsertUnsorted.push({ name, order });
           localizedSymbols.set(name, { moduleVar, memberName: name });
         }
@@ -239,7 +242,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
       edits.push({
         offset: insertPoint,
         length: 0,
-        replacement: hoistCode + "\n",
+        replacement: `${hoistCode}\n`,
       });
     }
   }

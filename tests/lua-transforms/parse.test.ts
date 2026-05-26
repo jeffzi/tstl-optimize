@@ -15,22 +15,15 @@ describe("parseLua", () => {
 
   it("throws on syntax errors with message that includes the source", () => {
     const source = "local x = ";
-    expect(() => {
-      parseLua(source);
-    }).toThrow();
-    try {
-      parseLua(source);
-    } catch (e) {
-      expect(String(e)).toContain(source);
-    }
+    expect(() => parseLua(source)).toThrow(source);
   });
 
   it("the returned AST has ranges on each node", () => {
     const source = "local x = 1";
     const ast = parseLua(source);
-    // @types/luaparse omits range from the Base type despite runtime presence.
-    const range = (ast as unknown as { range: unknown }).range;
-    expect(range).toBeDefined();
+    // @types/luaparse omits `range` from the Base type despite its runtime presence.
+    // Cast through `unknown` first to satisfy the type checker.
+    const range: unknown = (ast as unknown as Record<string, unknown>).range;
     expect(Array.isArray(range)).toBe(true);
     expect((range as unknown[]).length).toBe(2);
   });
@@ -45,8 +38,8 @@ describe("collectRequireBindings", () => {
     expect(bindings.has("____mod")).toBe(true);
     const binding = bindings.get("____mod");
     expect(binding).toBeDefined();
-    expect(binding!.path).toBe("mod/path");
-    expect(binding!.node).toBeDefined();
+    expect(binding?.path).toBe("mod/path");
+    expect(binding?.node).toBeDefined();
   });
 
   it("returns empty map when there are no require statements", () => {
