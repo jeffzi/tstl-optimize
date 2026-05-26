@@ -25,6 +25,15 @@ export function walkAstNode(node: luaparse.Node, onNode: (n: luaparse.Node) => v
   }
 }
 
+/**
+ * luaparse emits `range` when `options.range = true`, but the type
+ * declarations don't include it. This accessor avoids triple-cast noise
+ * (`as unknown as { range: … }`) at every call site.
+ */
+export function nodeRange(node: luaparse.Node): [start: number, end: number] {
+  return (node as unknown as { range: [number, number] }).range;
+}
+
 export function nextLineOffset(source: string, rangeEnd: number): number {
   const nl = source.indexOf("\n", rangeEnd);
   return nl === -1 ? source.length : nl + 1;

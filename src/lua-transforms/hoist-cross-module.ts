@@ -1,5 +1,5 @@
 import type luaparse from "luaparse";
-import { applyEdits, type Edit, nextLineOffset, walkAstNode } from "./ast-utils.js";
+import { applyEdits, type Edit, nextLineOffset, nodeRange, walkAstNode } from "./ast-utils.js";
 import { collectExistingLocals, collectRequireBindings, parseLua } from "./parse.js";
 
 export interface HoistResult {
@@ -130,23 +130,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     moduleVar: string;
     offset: number;
   }> = [];
-  const declarationLhses = new Set<luaparse.Node>();
-
-  walkAstNode(ast, (node) => {
-    if (node.type === "FunctionDeclaration") {
-      const func = node as luaparse.FunctionDeclaration;
-      if (func.identifier && func.identifier.type === "MemberExpression") {
-        declarationLhses.add(func.identifier);
-      }
-    } else if (node.type === "AssignmentStatement") {
-      const assign = node as luaparse.AssignmentStatement;
-      for (const variable of assign.variables) {
-        if (variable.type === "MemberExpression") {
-          declarationLhses.add(variable);
-        }
-      }
-    }
-  });
+  const declarationLhses = collectDeclarationLhses(ast);
 
   walkAstNode(ast, (node) => {
     if (node.type === "MemberExpression" && !declarationLhses.has(node as luaparse.Node)) {
@@ -157,7 +141,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
           const memberName = (member.identifier as luaparse.Identifier).name;
           const preExisting = preExistingHoists.get(moduleVar);
           if (!preExisting?.some((h) => h.name === memberName)) {
-            const offset = (member as unknown as { range: [number, number] }).range[0];
+            const offset = nodeRange(member)[0];
             memberAccesses.push({ name: memberName, moduleVar, offset });
           }
         }
@@ -234,7 +218,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
         insertAfterNode = preExisting[preExisting.length - 1].node;
       }
 
-      const insertAfterRange = (insertAfterNode as unknown as { range: [number, number] }).range;
+      const insertAfterRange = nodeRange(insertAfterNode);
       const insertPoint = nextLineOffset(luaSource, insertAfterRange[1]);
 
       // Combine all insertions into a single replacement to maintain order
@@ -267,6 +251,26 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
   };
 }
 
+function collectDeclarationLhses(root: luaparse.Node): Set<luaparse.Node> {
+  const lhses = new Set<luaparse.Node>();
+  walkAstNode(root, (n) => {
+    if (n.type === "FunctionDeclaration") {
+      const func = n as luaparse.FunctionDeclaration;
+      if (func.identifier && func.identifier.type === "MemberExpression") {
+        lhses.add(func.identifier);
+      }
+    } else if (n.type === "AssignmentStatement") {
+      const assign = n as luaparse.AssignmentStatement;
+      for (const variable of assign.variables) {
+        if (variable.type === "MemberExpression") {
+          lhses.add(variable);
+        }
+      }
+    }
+  });
+  return lhses;
+}
+
 interface AccessReference {
   offset: number;
   length: number;
@@ -279,23 +283,7 @@ function collectAccessReferences(
   accessesToHoist: Map<string, { moduleVar: string; order: number }>,
 ): AccessReference[] {
   const references: AccessReference[] = [];
-  const declarationLhses = new Set<luaparse.Node>();
-
-  walkAstNode(node, (n) => {
-    if (n.type === "FunctionDeclaration") {
-      const func = n as luaparse.FunctionDeclaration;
-      if (func.identifier && func.identifier.type === "MemberExpression") {
-        declarationLhses.add(func.identifier);
-      }
-    } else if (n.type === "AssignmentStatement") {
-      const assign = n as luaparse.AssignmentStatement;
-      for (const variable of assign.variables) {
-        if (variable.type === "MemberExpression") {
-          declarationLhses.add(variable);
-        }
-      }
-    }
-  });
+  const declarationLhses = collectDeclarationLhses(node);
 
   walkAstNode(node, (n) => {
     if (n.type === "MemberExpression" && !declarationLhses.has(n as luaparse.Node)) {
@@ -305,7 +293,7 @@ function collectAccessReferences(
         if (requireInfos.has(moduleVar)) {
           const memberName = (member.identifier as luaparse.Identifier).name;
           if (accessesToHoist.has(memberName)) {
-            const range = (n as unknown as { range: [number, number] }).range;
+            const range = nodeRange(n);
             references.push({
               offset: range[0],
               length: range[1] - range[0],
