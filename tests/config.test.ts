@@ -55,12 +55,23 @@ describe("resolveConditionalCompilationConfig", () => {
 
 describe("resolveInlineConfig", () => {
   it.each([
-    { input: false, expected: { enabled: false, strict: false } },
-    { input: undefined, expected: { enabled: true, strict: false } },
-    { input: true, expected: { enabled: true, strict: false } },
-    { input: { enabled: false }, expected: { enabled: false, strict: false } },
-    { input: { strict: true }, expected: { enabled: true, strict: true } },
-    { input: { enabled: false, strict: true }, expected: { enabled: false, strict: true } },
+    { input: false, expected: { enabled: false, strict: false, warnCrossModule: false } },
+    { input: undefined, expected: { enabled: true, strict: false, warnCrossModule: false } },
+    { input: true, expected: { enabled: true, strict: false, warnCrossModule: false } },
+    {
+      input: { enabled: false },
+      expected: { enabled: false, strict: false, warnCrossModule: false },
+    },
+    { input: { strict: true }, expected: { enabled: true, strict: true, warnCrossModule: false } },
+    {
+      input: { enabled: false, strict: true },
+      expected: { enabled: false, strict: true, warnCrossModule: false },
+    },
+    { input: {}, expected: { enabled: true, strict: false, warnCrossModule: false } },
+    {
+      input: { warnCrossModule: true },
+      expected: { enabled: true, strict: false, warnCrossModule: true },
+    },
   ])("resolves $input to $expected", ({ input, expected }) => {
     expect(resolveInlineConfig(input)).toStrictEqual(expected);
   });
@@ -76,6 +87,16 @@ describe("parseConfig", () => {
     ])("parses inline: $input as $expected", ({ input, expected }) => {
       const config = parseConfig({ rules: { inline: input } });
       expect(config.rules.inline).toStrictEqual(expected);
+    });
+
+    it("preserves warnCrossModule: true", () => {
+      const config = parseConfig({ rules: { inline: { warnCrossModule: true } } });
+      expect(config.rules.inline).toStrictEqual({ warnCrossModule: true });
+    });
+
+    it("drops invalid warnCrossModule value", () => {
+      const config = parseConfig({ rules: { inline: { warnCrossModule: "invalid" } } });
+      expect(config.rules.inline).toStrictEqual({});
     });
   });
 
@@ -124,6 +145,7 @@ describe("isRuleEnabled", () => {
 const EXPECTED_RULE_KEYS: ReadonlyArray<keyof RulesConfig> = [
   "conditional-compilation",
   "constant-folding",
+  "constant-propagation",
   "dead-local",
   "debug-strip",
   "inline",

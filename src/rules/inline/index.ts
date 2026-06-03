@@ -53,6 +53,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
       : undefined
     : undefined;
   const strictMode = resolveEffectiveStrict(config.strict ?? false, perRuleStrict);
+  const warnCrossModule = inlineCfg.warnCrossModule;
 
   // Returning undefined signals "not handled" to the merge wrapper; the strict
   // tstl.Visitors type doesn't model this protocol, so we cast here.
@@ -60,15 +61,21 @@ export const createVisitors: RuleFactory = (checker, config) => {
   const visitors: Record<number, LooseVisitor> = {
     [ts.SyntaxKind.CallExpression]: (node, context) => {
       if (!ts.isCallExpression(node)) return undefined;
-      return handleCallExpression(node, checker, context, strictMode);
+      return handleCallExpression(node, checker, context, strictMode, warnCrossModule);
     },
     [ts.SyntaxKind.ExpressionStatement]: (node, context) => {
       if (!ts.isExpressionStatement(node)) return undefined;
-      return handleExpressionStatement(node, checker, context, strictMode);
+      return handleExpressionStatement(node, checker, context, strictMode, warnCrossModule);
     },
     [ts.SyntaxKind.VariableStatement]: (node, context) => {
       if (!ts.isVariableStatement(node)) return undefined;
-      const callSiteResult = handleVariableStatement(node, checker, context, strictMode);
+      const callSiteResult = handleVariableStatement(
+        node,
+        checker,
+        context,
+        strictMode,
+        warnCrossModule,
+      );
       if (callSiteResult !== undefined) return callSiteResult;
       const declResult = handleVariableStatementDeclaration(node, checker);
       if (declResult !== undefined) return declResult; // erased (return [])
@@ -81,7 +88,7 @@ export const createVisitors: RuleFactory = (checker, config) => {
     },
     [ts.SyntaxKind.ReturnStatement]: (node, context) => {
       if (!ts.isReturnStatement(node)) return undefined;
-      return handleReturnStatement(node, checker, context, strictMode);
+      return handleReturnStatement(node, checker, context, strictMode, warnCrossModule);
     },
     [ts.SyntaxKind.FunctionDeclaration]: (node, context) => {
       if (!ts.isFunctionDeclaration(node)) return undefined;

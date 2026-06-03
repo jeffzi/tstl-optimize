@@ -68,11 +68,14 @@ export function hasDiagnosticCode(diagnostics: { code?: number }[], code: number
   return diagnostics.some((d) => d.code === code);
 }
 
-export function compileMultiFile(files: Record<string, string>): {
+export function compileMultiFile(
+  files: Record<string, string>,
+  options?: Parameters<typeof compileMultiFileWithDiagnostics>[1],
+): {
   diagnostics: { code?: number }[];
   normalized: string;
 } {
-  const { lua, diagnostics } = compileMultiFileWithDiagnostics(files);
+  const { lua, diagnostics } = compileMultiFileWithDiagnostics(files, options);
   return { diagnostics, normalized: normalizeLua(lua) };
 }
 
@@ -83,7 +86,9 @@ export function compileAndExpectNoDiagnostics(files: Record<string, string>): st
 }
 
 export function compileAndExpectCrossModuleDiagnostic(files: Record<string, string>): string {
-  const { diagnostics, normalized } = compileMultiFile(files);
+  const { diagnostics, normalized } = compileMultiFile(files, {
+    pluginOptions: { rules: { inline: { warnCrossModule: true } } },
+  });
   expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
   return normalized;
 }

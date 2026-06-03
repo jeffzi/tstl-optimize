@@ -291,15 +291,18 @@ function createCrossModuleRejection(
   callNode: ts.CallExpression,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): { reject: true } {
-  context.diagnostics.push(
-    createInlineWarning(
-      callNode,
-      CROSS_MODULE_WARNING_MESSAGE,
-      strict,
-      InlineDiagnosticCode.crossModule,
-    ),
-  );
+  if (warnCrossModule) {
+    context.diagnostics.push(
+      createInlineWarning(
+        callNode,
+        CROSS_MODULE_WARNING_MESSAGE,
+        strict,
+        InlineDiagnosticCode.crossModule,
+      ),
+    );
+  }
   return { reject: true };
 }
 
@@ -310,6 +313,7 @@ export function classifyCrossModuleInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): { reject: true } | { reject: false; substitutions: Map<ts.Symbol, LiteralKind> } {
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
@@ -326,12 +330,12 @@ export function classifyCrossModuleInline(
   );
 
   if (blocking.length > 0) {
-    return createCrossModuleRejection(callNode, context, strict);
+    return createCrossModuleRejection(callNode, context, strict, warnCrossModule);
   }
 
   for (const symbol of ambients) {
     if (isAmbientShadowedAtCallSite(symbol, callNode, checker)) {
-      return createCrossModuleRejection(callNode, context, strict);
+      return createCrossModuleRejection(callNode, context, strict, warnCrossModule);
     }
   }
 
