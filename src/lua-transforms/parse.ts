@@ -62,8 +62,7 @@ export function collectRequireBindings(
 
     const init = local.init[0];
     if (
-      !init ||
-      init.type !== "CallExpression" ||
+      init?.type !== "CallExpression" ||
       init.base.type !== "Identifier" ||
       (init.base as luaparse.Identifier).name !== "require" ||
       init.arguments.length !== 1
@@ -72,7 +71,7 @@ export function collectRequireBindings(
     }
 
     const arg = init.arguments[0];
-    if (!arg || arg.type !== "StringLiteral") {
+    if (arg?.type !== "StringLiteral") {
       continue;
     }
 
