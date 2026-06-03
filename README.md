@@ -3,8 +3,9 @@
 [![CI](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffzi/tstl-optimize/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A [TypeScriptToLua](https://typescripttolua.github.io/) compiler plugin that rewrites the generated
-Lua for better runtime performance — fewer table lookups, smaller closures, and tighter loops.
+A [TypeScriptToLua](https://typescripttolua.github.io/) (TSTL) compiler plugin that rewrites the
+generated Lua for better runtime performance — fewer table lookups, smaller closures, and tighter
+loops.
 
 ```typescript
 // TypeScript input
@@ -39,6 +40,7 @@ Every rule is independently toggleable. All rules are on by default **except**
 - [Rules](#rules)
 - [Strict mode](#strict-mode)
 - [Configuration reference](#configuration-reference)
+- [Composing into another plugin](#composing-into-another-plugin)
 - [Examples](#examples)
 - [Benchmarks](#benchmarks)
 - [FAQ](#faq)
@@ -67,8 +69,9 @@ npm install --save-dev typescript-to-lua tstl-optimize
 
 Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
 
-The package also exports three utility subpaths for library consumers:
+The package also exports additional subpaths for library consumers:
 
+- `tstl-optimize/compose`: mount the optimizer's rules inside another TSTL plugin's transpile, scoped to a set of files, without registering tstl-optimize as a `luaPlugin` (`createScopedOptimizeVisitors`, `mergeVisitorMaps`). See [Composing into another plugin](#composing-into-another-plugin).
 - `tstl-optimize/ts-ast`: TypeScript expression analysis (`hasSideEffects`, `unwrapTransparent`, `isNilExpression`, …)
 - `tstl-optimize/lua-ast`: Lua AST transforms (`unspillStatements`, `isLuaRhsPure`) — operate on the TSTL Lua AST before emit
 - `tstl-optimize/transforms`: Lua source transforms (`hoistCrossModuleAccesses`, `getRequireBindings`, `getModuleExports`) — post-emit string-to-string
@@ -379,7 +382,7 @@ efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless no
 | `x ** 2`             | `x * x`                                                              | Lossless                                                       |
 | `x ** 3`             | `(x * x) * x`                                                        | Lossless                                                       |
 | `x ** 4`             | `(x * x) * (x * x)`                                                  | LuaJIT only; PUC-Rio keeps `^` (C `pow` is faster than 3 MULs) |
-| `x / n` (power of 2) | `x * (1/n)`                                                          | e.g. `x / 4` → `x * 0.25`; positive power-of-2 divisor only    |
+| `x / n` (power of 2) | `x * (1/n)`                                                          | E.g. `x / 4` → `x * 0.25`; positive power-of-2 divisor only    |
 
 _Lossless: the rewrite produces bit-identical results to the original call for all finite inputs._
 
@@ -527,7 +530,8 @@ A function must meet these conditions to be inlined:
 - `@inline` JSDoc tag on the function
 - Single-expression body (or arrow `=> expr`) or supported multi-statement body
 - Module-scope function (not nested)
-- No rest, default, optional, or destructuring parameters
+- No rest parameters, default parameter initializers, or destructuring parameters; optional
+  parameters without default initializers are supported
 - Non-recursive
 - No parameter writes inside the body
 - Multi-use parameters require side-effect-free arguments in expression bodies
@@ -974,7 +978,7 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 | 90002 | `conditional-compilation` | Condition mixes compile-time constants with runtime variables; branch cannot be folded    |
 | 90003 | `inline`                  | Cross-module inline rejected — body references captured module-scope variables            |
 | 90004 | `inline`                  | Direct or mutual recursion detected                                                       |
-| 90005 | `inline`                  | Unsupported parameter shape (rest / default / optional / destructuring / parameter write) |
+| 90005 | `inline`                  | Unsupported parameter shape (rest / default initializer / destructuring / parameter write) |
 | 90006 | `inline`                  | Argument has side effects but the parameter is used more than once in an expression body  |
 | 90007 | `inline`                  | Body contains an early `return`, unscoped `break`, `continue`, or labeled statement       |
 | 90008 | `inline`                  | Target is not module-scope                                                                |
@@ -1009,6 +1013,53 @@ earlier ones — for example, `localizer` can introduce consecutive `local` decl
 evaluate. The refold phase catches these cross-rule wins automatically. Each rule in the refold
 phase is still gated by its own `rules.*` toggle, so disabling `merge-locals` globally also
 disables it during refold.
+
+## Composing into another plugin
+
+If you maintain your own TSTL plugin, you can run tstl-optimize's rules over **your** files inside
+the consumer's single transpile — without asking consumers to register tstl-optimize as a
+`luaPlugin`. The rules run on the consumer's real `program` and type checker, so cross-module
+`@inline` and symbol resolution work with no isolated re-transpile.
+
+Import from `tstl-optimize/compose` and build the visitor map in your plugin's `beforeTransform`
+(TSTL reads `plugin.visitors` after `beforeTransform`):
+
+```typescript
+import { createScopedOptimizeVisitors, mergeVisitorMaps } from "tstl-optimize/compose";
+import type ts from "typescript";
+// import * as tstl from "typescript-to-lua";
+
+class MyPlugin implements tstl.Plugin {
+  visitors: tstl.Visitors = {
+    /* your own visitors */
+  };
+
+  beforeTransform(program: ts.Program, options: tstl.CompilerOptions): void {
+    const optimizeVisitors = createScopedOptimizeVisitors(
+      program,
+      options,
+      (fileName) => fileName.includes("/my-vendored-src/"), // only optimize files you own
+      { rules: { inline: true, localizer: true } }, // optional; omit for defaults
+    );
+    // Your visitors win; the optimizer runs as the fallback for shared SyntaxKinds.
+    this.visitors = mergeVisitorMaps(this.visitors, optimizeVisitors);
+  }
+}
+```
+
+- **`createScopedOptimizeVisitors(program, options, isOwnedFile, config?)`** returns a
+  `tstl.Visitors` map. Only files for which `isOwnedFile(context.sourceFile.fileName)` returns `true`
+  are optimized; every other file passes through unchanged. `config` (`OptimizeComposeOptions`)
+  accepts the same `rules` / `strict` / `target` as the plugin; `target` is auto-derived from
+  `options.luaTarget` when omitted.
+- **`mergeVisitorMaps(primary, fallback)`** chains two visitor maps per `SyntaxKind` with the correct
+  per-kind fallback. `primary` runs first and wins; `fallback` runs only when `primary` returns
+  `undefined`. Order the arguments by desired precedence.
+
+> **Diagnostics:** running the rules during the consumer's transpile means tstl-optimize diagnostics
+> (codes 90000+) can surface in the consumer's build. Cross-module `inline` rejections are silent by
+> default; see [Strict mode](#strict-mode) and the [diagnostic codes](#diagnostic-codes) table for
+> the rest.
 
 ## Examples
 

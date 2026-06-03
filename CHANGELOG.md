@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tstl-optimize/compose` subpath for composing the optimizer into another TSTL plugin's transpile,
+  scoped to a caller-supplied set of files, without registering tstl-optimize as a `luaPlugin`:
+  - `createScopedOptimizeVisitors(program, options, isOwnedFile, config?)` builds a file-scoped
+    visitor map that runs the rules on the consumer's real program and type checker — so cross-module
+    `@inline` and symbol resolution work with no isolated re-transpile. Files rejected by
+    `isOwnedFile` pass through unchanged.
+  - `mergeVisitorMaps(primary, fallback)` chains two visitor maps per `SyntaxKind` with the correct
+    per-kind fallback, so a mounting plugin's own visitors compose with the optimizer's without
+    clobbering. `primary` runs first and wins; `fallback` runs only when `primary` returns
+    `undefined`.
+  - `OptimizeComposeOptions` type for the `rules` / `target` / `strict` config.
+
 ## [0.10.0] - 2026-06-03
 
 ### Added
@@ -119,7 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - AST cloning and traversal now preserve call metadata, honor Lua key-before-value table
-  evaluation, and treat indexed reads as side-effectful.
+  evaluation, and treat indexed reads as side-effecting.
 - Plugin target inference now refreshes correctly when a plugin instance is reused across different
   Lua targets.
 - **conditional-compilation** now handles loose equality and `switch` edge cases, respects shadowed

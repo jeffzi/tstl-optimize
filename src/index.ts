@@ -110,14 +110,16 @@ const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
 
 type VisitorTransform = (node: ts.Node, context: tstl.TransformationContext) => unknown;
 type NormalizedVisitor = { priority?: number; transform: VisitorTransform };
-type RegisteredVisitor = VisitorTransform | NormalizedVisitor;
+export type RegisteredVisitor = VisitorTransform | NormalizedVisitor;
 type MergedVisitors = Record<number, RegisteredVisitor>;
 type SourceFileFallbackContext = tstl.TransformationContext & {
   superTransformNode(node: ts.Node): unknown;
   superTransformStatements(node: ts.Statement): tstl.Statement[];
 };
 
-function normalizeVisitor(visitor: RegisteredVisitor | undefined): NormalizedVisitor | undefined {
+export function normalizeVisitor(
+  visitor: RegisteredVisitor | undefined,
+): NormalizedVisitor | undefined {
   if (visitor === undefined) {
     return undefined;
   }
@@ -181,7 +183,7 @@ function createFallbackComposedTransform(
   };
 }
 
-function mergeVisitor(
+export function mergeVisitor(
   kind: number,
   existing: RegisteredVisitor | undefined,
   visitor: NormalizedVisitor,
@@ -203,6 +205,80 @@ function mergeVisitor(
   };
 }
 
+// Wrap a rule's transform so it only fires on files the caller owns. For an
+// out-of-scope file the rule must do nothing — but the "do nothing" return value
+// is kind-dependent:
+//
+// - A `SourceFile` visitor returning `undefined` would ERASE the entire file, so
+//   it delegates to `context.superTransformNode` to pass the file through
+//   unchanged. Seven rules register `SourceFile` visitors, so this is the common
+//   path.
+// - Every other kind returns `undefined`, which the merge wrappers convert into
+//   the correct per-kind fallback (`superTransformExpression` /
+//   `superTransformStatements` / pass-through) via EXPRESSION_KINDS /
+//   STATEMENT_KINDS_WITH_FALLBACK.
+//
+// `context.sourceFile.fileName` (not `node.getSourceFile()`) identifies the file
+// being emitted: one TransformationContext exists per transformed file, so the
+// guard keys correctly even when `inline` copies an `@inline` body from module A
+// into caller module B (it keys on B, the file being optimized).
+function applyScopeGuard(
+  kind: number,
+  visitor: NormalizedVisitor,
+  isInScope: (fileName: string) => boolean,
+): NormalizedVisitor {
+  const isSourceFile = kind === ts.SyntaxKind.SourceFile;
+  const guarded: VisitorTransform = (node, context) => {
+    if (isInScope(context.sourceFile.fileName)) {
+      return visitor.transform(node, context);
+    }
+    return isSourceFile ? context.superTransformNode(node) : undefined;
+  };
+  return visitor.priority === undefined
+    ? { transform: guarded }
+    : { priority: visitor.priority, transform: guarded };
+}
+
+// Build the merged visitor map for the enabled rules, chaining rules that share
+// a SyntaxKind through the merge wrappers above. Shared by OptimizePlugin (the
+// luaPlugin path) and the `compose` subpath (mounting rules inside another
+// plugin's transpile).
+//
+// When `isInScope` is provided, each rule is wrapped so it only optimizes files
+// the predicate accepts (see applyScopeGuard); omitting it leaves behavior
+// identical to the program-wide plugin path.
+export function buildOptimizeVisitors(
+  checker: ts.TypeChecker,
+  config: PluginConfig,
+  isInScope?: (fileName: string) => boolean,
+): tstl.Visitors {
+  const mergedVisitors: MergedVisitors = {};
+
+  // Flatten phases in order
+  for (const [, phaseRules] of PHASE_ENTRIES) {
+    for (const [ruleName, factory] of phaseRules) {
+      if (!isRuleEnabled(config.rules, ruleName)) {
+        continue;
+      }
+
+      const ruleVisitors = factory(checker, config);
+      for (const [kindStr, rawVisitor] of Object.entries(ruleVisitors)) {
+        const kind = Number(kindStr);
+        const normalized = normalizeVisitor(rawVisitor as RegisteredVisitor | undefined);
+        if (normalized === undefined) {
+          continue;
+        }
+
+        const visitor =
+          isInScope === undefined ? normalized : applyScopeGuard(kind, normalized, isInScope);
+        mergedVisitors[kind] = mergeVisitor(kind, mergedVisitors[kind], visitor);
+      }
+    }
+  }
+
+  return mergedVisitors;
+}
+
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;
   private config: PluginConfig;
@@ -219,33 +295,7 @@ class OptimizePlugin implements tstl.Plugin {
     if (!this.explicitTarget) {
       this.config.target = options.luaTarget === tstl.LuaTarget.LuaJIT ? "luajit" : "puc";
     }
-    this.buildVisitors();
-  }
-
-  private buildVisitors(): void {
-    const mergedVisitors: MergedVisitors = {};
-
-    // Flatten phases in order
-    for (const [, phaseRules] of PHASE_ENTRIES) {
-      for (const [ruleName, factory] of phaseRules) {
-        if (!isRuleEnabled(this.config.rules, ruleName)) {
-          continue;
-        }
-
-        const ruleVisitors = factory(this.checker, this.config);
-        for (const [kindStr, rawVisitor] of Object.entries(ruleVisitors)) {
-          const kind = Number(kindStr);
-          const visitor = normalizeVisitor(rawVisitor as RegisteredVisitor | undefined);
-          if (visitor === undefined) {
-            continue;
-          }
-
-          mergedVisitors[kind] = mergeVisitor(kind, mergedVisitors[kind], visitor);
-        }
-      }
-    }
-
-    this.visitors = mergedVisitors;
+    this.visitors = buildOptimizeVisitors(this.checker, this.config);
   }
 }
 
