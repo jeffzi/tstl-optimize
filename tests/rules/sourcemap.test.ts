@@ -51,6 +51,7 @@ const x = DEBUG;`;
     const { lua, externalMap } = compileWithSourceMap(source, {
       pluginOptions: {
         rules: {
+          "constant-propagation": false,
           "conditional-compilation": {
             constants: { DEBUG: { env: "TEST_CC_DEBUG", default: false } },
           },
@@ -97,7 +98,7 @@ for (const i of $range(0, n - 1)) {
 
   it("rebased init `1` maps to TS col of `0` in $range", async () => {
     const { lua, externalMap, traceback } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "loop-rebase": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "loop-rebase": true } },
     });
 
     const forLine = findLuaLine(lua, "for i = 1, n do");
@@ -132,7 +133,7 @@ for (const i of $range(0, 5)) {
 
   it("rebased limit `6` maps to TS col of `5` in $range (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "loop-rebase": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "loop-rebase": true } },
     });
 
     const forLine = findLuaLine(lua, "for i = 1, 6");
@@ -163,7 +164,7 @@ for (const i of $range(0, n - 1)) {
 
   it("replaced i identifier in arr[i] maps to TS arr[i] access position (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "loop-rebase": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "loop-rebase": true } },
     });
 
     const bodyLine = findLuaLine(lua, "arr[i]");
@@ -204,7 +205,7 @@ const a = Math.floor(x);`;
 
   it("passthrough math.floor column maps to Math.floor call (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "math-intrinsics": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "math-intrinsics": true } },
     });
 
     const luaLine = findLuaLine(lua, "math.floor");
@@ -230,7 +231,7 @@ const a = Math.abs(x);`;
 
   it("rewritten expression root column maps to Math.abs call (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "math-intrinsics": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "math-intrinsics": true } },
     });
 
     const luaLine = findLuaLine(lua, "a =");
@@ -254,7 +255,7 @@ const a = Math.sqrt(x);`;
 
   it("rewritten expression line maps to Math.sqrt call (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "math-intrinsics": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "math-intrinsics": true } },
     });
 
     const luaLine = findLuaLine(lua, "^ 0.5");
@@ -275,7 +276,7 @@ const a = (x + 1) ** 2;`;
 
   it("rewritten x * x expression line maps to x ** 2 TS line (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "math-intrinsics": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "math-intrinsics": true } },
     });
 
     const luaLine = findLuaLine(lua, "*");
@@ -297,7 +298,7 @@ const a = M.floor(x);`;
 
   it("builtin-alias rewrite maps to call site TS line (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "math-intrinsics": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "math-intrinsics": true } },
     });
 
     // M.floor(x) triggers the builtin-alias branch — emits a CallExpression
@@ -346,7 +347,7 @@ if (x) {
 
   it("negated condition root maps to original condition column (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "remove-empty-branch": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "remove-empty-branch": true } },
     });
 
     // Lua emits: "if not x then"
@@ -385,7 +386,7 @@ if (x > 0) {
 
   it("parenthesized negation maps to original BinaryExpression column (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "remove-empty-branch": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "remove-empty-branch": true } },
     });
 
     // Lua emits: "if not (x > 0) then"
@@ -422,7 +423,7 @@ describe("constant-folding sourcemap: folded literal maps to original expression
 
   it("folded literal maps to BinaryExpression column (external map)", async () => {
     const { lua, externalMap } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "constant-folding": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "constant-folding": true } },
     });
 
     // Lua: "a = 3"
@@ -467,10 +468,57 @@ function f(): void {
 
   it("merged local maps to first declaration TS line", async () => {
     const { lua, externalMap, traceback } = compileWithSourceMap(source, {
-      pluginOptions: { rules: { "merge-locals": true } },
+      pluginOptions: { rules: { "constant-propagation": false, "merge-locals": true } },
     });
     const mergedLine = findLuaLine(lua, "local a, b");
     await assertLineMapsTo(externalMap, mergedLine, FIRST_DECL_TS_LINE);
     assertTracebackMapsTo(traceback, mergedLine, FIRST_DECL_TS_LINE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// constant-propagation: propagated literal maps to original identifier position
+//
+// The rule substitutes an identifier with a fresh literal via
+// `createLiteral(value)`. The literal is stamped with the identifier's
+// position via `withPositionFrom(literal, expr)` so the debugger maps back
+// to the identifier's column, not the assignment column or a default.
+//
+// Column-level assertion: the assignment statement already maps the line
+// correctly, so a line-only check cannot detect whether the literal itself
+// is stamped. The column check distinguishes the assignment start (col 0)
+// from the identifier location.
+// ---------------------------------------------------------------------------
+
+describe("constant-propagation sourcemap: propagated literal maps to original identifier position", () => {
+  // line 1: function f() {
+  // line 2:   const x = 42;
+  // line 3:   return x;     ← `x` at some column, propagated to `42`
+  // line 4: }
+  const source = `\
+function f() {
+  const x = 42;
+  return x;
+}`;
+
+  it("propagated literal maps to identifier column (external map)", async () => {
+    const { lua, externalMap } = compileWithSourceMap(source, {
+      pluginOptions: {
+        rules: { "constant-propagation": true },
+      },
+    });
+
+    // After propagation, Lua emits: "return 42"
+    // The `42` should map back to the TS position of `x` in `return x;`
+    const luaLine = findLuaLine(lua, "return 42");
+    const luaLineText = lua.split("\n")[luaLine - 1];
+    // Find column of `42` in the Lua line
+    const luaCol = luaColOf(luaLineText, "42");
+
+    const pos = await assertMapped(externalMap, luaLine, luaCol);
+    expect(pos.line).toBe(3); // TS line 3: `return x;`
+    // TS line 3: "  return x;" → `x` is before the semicolon
+    const tsXCol = tsColOf(source, 2, "x");
+    expect(pos.column).toBe(tsXCol);
   });
 });

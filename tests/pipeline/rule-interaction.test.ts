@@ -17,7 +17,9 @@ describe("optimize rule interactions", () => {
         }
       `,
         {
-          pluginOptions: { rules: { localizer: { scope: "module" } } },
+          pluginOptions: {
+            rules: { "constant-propagation": false, localizer: { scope: "module" } },
+          },
           luaTarget: tstl.LuaTarget.LuaJIT,
         },
       );
@@ -31,7 +33,9 @@ describe("optimize rule interactions", () => {
         { { const a = Math.ceil(x); const b = Math.ceil(x + 1); } }
       `,
         {
-          pluginOptions: { rules: { localizer: { scope: "module" } } },
+          pluginOptions: {
+            rules: { "constant-propagation": false, localizer: { scope: "module" } },
+          },
           luaTarget: tstl.LuaTarget.LuaJIT,
         },
       );
@@ -53,7 +57,10 @@ describe("optimize rule interactions", () => {
       `,
         {
           pluginOptions: {
-            rules: { localizer: { scope: "module", include: ["obj"] } },
+            rules: {
+              "constant-propagation": false,
+              localizer: { scope: "module", include: ["obj"] },
+            },
           },
         },
       );
@@ -64,19 +71,23 @@ describe("optimize rule interactions", () => {
 
   describe("when math-intrinsics and inline rules interact", () => {
     it("replaces Math functions inside inlined expression body", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function fastSqrt(x: number) { return Math.sqrt(x); }
         declare const v: number;
         const r = fastSqrt(v);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       const normalizedLua = normalizeLua(lua);
       expect(normalizedLua).not.toContain("fastSqrt(v)");
       expect(normalizedLua).toContain("v ^ 0.5");
     });
 
     it("replaces Math functions inside inlined do...end block", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function doSqrt(x: number): void {
           const y = Math.sqrt(x);
@@ -84,7 +95,9 @@ describe("optimize rule interactions", () => {
         }
         declare const v: number;
         doSqrt(v);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       const normalizedLua = normalizeLua(lua);
       expect(normalizedLua).toContain("local y = v ^ 0.5");
       expect(normalizedLua).not.toContain("doSqrt(v)");
@@ -100,7 +113,12 @@ describe("optimize rule interactions", () => {
         const a = getX(); const b = getX(); const c = getX();
       `;
       const lua = compile(src, {
-        pluginOptions: { rules: { localizer: { scope: "module", include: ["obj"] } } },
+        pluginOptions: {
+          rules: {
+            "constant-propagation": false,
+            localizer: { scope: "module", include: ["obj"] },
+          },
+        },
       });
       expect(lua).toContain("____obj_pos_x");
       expect(lua).not.toContain("getX(");
@@ -118,7 +136,7 @@ describe("optimize rule interactions", () => {
         doWork(v);
       `;
       const lua = compile(src, {
-        pluginOptions: { rules: { localizer: { scope: "module" } } },
+        pluginOptions: { rules: { "constant-propagation": false, localizer: { scope: "module" } } },
         luaTarget: tstl.LuaTarget.LuaJIT,
       });
       const normalizedLua = normalizeLua(lua);
@@ -138,7 +156,11 @@ describe("optimize rule interactions", () => {
     function ccOpts(
       constants: Record<string, { env: string; default: boolean | number | string }>,
     ) {
-      return { pluginOptions: { rules: { "conditional-compilation": { constants } } } };
+      return {
+        pluginOptions: {
+          rules: { "constant-propagation": false, "conditional-compilation": { constants } },
+        },
+      };
     }
 
     it("removes dead branch inside inlined void function body while preserving live statements", () => {
@@ -243,7 +265,8 @@ describe("optimize rule interactions", () => {
     it("preserves arg temp that is read inside the substituted do...end block", () => {
       // x is used twice (x*x and sq+x). When the arg is a pure identifier,
       // direct substitution embeds it at every use site — no temp variable.
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function sumSquare(x: number): number {
           const sq = x * x;
@@ -251,7 +274,9 @@ describe("optimize rule interactions", () => {
         }
         declare const n: number;
         const r = sumSquare(n);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).not.toContain("____inline_arg_");
       expect(lua).toContain("n * n");
       expect(lua).not.toContain("sumSquare(n)");
@@ -267,7 +292,8 @@ describe("optimize rule interactions", () => {
       // identity(10) → expression target with pure literal arg → inlines to: local a = 10.
       // b=2 and c=3 are also pure literals. merge-locals sees three consecutive pure
       // single-var locals inside f() and merges them into local a, b, c = 10, 2, 3.
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function identity(x: number): number { return x; }
         function f(): number {
@@ -276,7 +302,9 @@ describe("optimize rule interactions", () => {
           const c = 3;
           return a + b + c;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       const normalized = normalizeLua(lua);
       expect(normalized).toContain("a, b, c = 10, 2, 3");
       expect(normalized).not.toContain("identity(10)");
@@ -289,14 +317,17 @@ describe("optimize rule interactions", () => {
 
   describe("when @inline is annotated on a class method", () => {
     it("does not inline class method calls because they are not module-scope declarations", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         class Calc {
           /** @inline */
           add(a: number, b: number): number { return a + b; }
         }
         declare const calc: Calc;
         const r = calc.add(3, 4);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // TSTL emits method calls with colon syntax; call site must survive un-inlined.
       expect(lua).toContain("calc:add(3, 4)");
       expect(lua).not.toContain("____inline_arg_");
@@ -317,11 +348,14 @@ describe("optimize rule interactions", () => {
           const params = Array.from({ length: n }, (_, i) => `p${i}: number`).join(", ");
           const zeros = Array.from({ length: n }, () => "0").join(", ");
           const args = Array.from({ length: n }, (_, i) => `p${i}`).join(", ");
-          const { diagnostics } = compileWithDiagnostics(`
+          const { diagnostics } = compileWithDiagnostics(
+            `
               /** @inline */
               function recurse(${params}): number { return recurse(${args}); }
               const r = recurse(${zeros});
-            `);
+            `,
+            { pluginOptions: { rules: { "constant-propagation": false } } },
+          );
           return diagnostics.some((d) => {
             const msg =
               typeof d.messageText === "string" ? d.messageText : d.messageText.messageText;
@@ -342,12 +376,15 @@ describe("optimize rule interactions", () => {
             (_, i) => `declare function sideEffect${i}(): number;`,
           ).join("\n");
           const callArgs = Array.from({ length: n }, (_, i) => `sideEffect${i}()`).join(", ");
-          const lua = compile(`
+          const lua = compile(
+            `
               ${declares}
               /** @inline */
               function add(${params}): number { return ${body}; }
               const r = add(${callArgs});
-            `);
+            `,
+            { pluginOptions: { rules: { "constant-propagation": false } } },
+          );
           for (let i = 0; i < n - 1; i++) {
             const posI = lua.search(new RegExp(`____inline_arg_\\d+ = sideEffect${i}\\(\\)`));
             const posNext = lua.search(
@@ -366,17 +403,82 @@ describe("optimize rule interactions", () => {
       // still reference SCALE — proving the upvalue is accessible in the inlined copy.
       fc.assert(
         fc.property(fc.integer({ min: 10, max: 100 }), (scale) => {
-          const lua = compile(`
+          const lua = compile(
+            `
               const SCALE = ${scale};
               /** @inline */
               function times(x: number): number { return x * SCALE; }
               declare const n: number;
               const r = times(n);
-            `);
+            `,
+            { pluginOptions: { rules: { "constant-propagation": false } } },
+          );
           return !lua.includes("times(n)") && lua.includes("SCALE");
         }),
         FC_OPTS,
       );
     }, 20_000);
+  });
+
+  describe("when constant-propagation interacts with other rules", () => {
+    it("propagates constant then folds the resulting expression", () => {
+      const lua = compile(`
+        function f() {
+          const BITS = 24;
+          const MASK = 2 ** BITS;
+          return MASK;
+        }
+        export function g() { return f(); }
+      `);
+      // BITS propagated → 2 ^ 24 → folded to 16777216 → MASK propagated in refold
+      expect(lua).toContain("return 16777216");
+      expect(lua).not.toContain("2 ^ BITS");
+      expect(lua).not.toContain("2 ^ 24");
+    });
+
+    it("removes function-scoped dead local after propagation eliminates all reads", () => {
+      const lua = compile(`
+        function f() {
+          const x = 42;
+          return x;
+        }
+        export function g() { return f(); }
+      `);
+      // x propagated to 42, then dead-local removes the declaration
+      expect(lua).toContain("return 42");
+      expect(lua).not.toContain("local x");
+    });
+
+    it("does not substitute when constant-propagation is disabled", () => {
+      const lua = compile(
+        `
+        function f() {
+          const x = 42;
+          return x;
+        }
+        export function g() { return f(); }
+      `,
+        {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        },
+      );
+      expect(lua).toContain("return x");
+      expect(lua).not.toContain("return 42");
+    });
+
+    it("cascades propagation through refold for chained arithmetic", () => {
+      const lua = compile(`
+        function f() {
+          const A = 10;
+          const B = A + 5;
+          return B;
+        }
+        export function g() { return f(); }
+      `);
+      // fold: A propagated → B = 10 + 5 → folded to 15
+      // refold: B propagated → return 15
+      expect(lua).toContain("return 15");
+      expect(lua).not.toContain("A + 5");
+    });
   });
 });

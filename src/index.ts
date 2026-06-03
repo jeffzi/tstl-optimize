@@ -4,6 +4,7 @@ import * as tstl from "typescript-to-lua";
 import { isRuleEnabled, type PluginConfig, parseConfig, type RuleFactory } from "./config";
 import { createVisitors as conditionalCompilationVisitors } from "./rules/conditional-compilation";
 import { createVisitors as constantFoldingVisitors } from "./rules/constant-folding";
+import { createVisitors as constantPropagationVisitors } from "./rules/constant-propagation";
 import { createVisitors as deadLocalVisitors } from "./rules/dead-local";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
 import { createVisitors as inlineVisitors } from "./rules/inline";
@@ -21,21 +22,23 @@ import { createVisitors as unspillVisitors } from "./rules/unspill";
 //   so empty blocks are properly cleaned after local elimination
 // - remaining phases follow: rebase, hoist, emit-prep
 //
-// refold re-runs cleanup-class rules at the end. The hoist phase (localizer) and
-// emit-prep phase (inline, debug-strip) can produce code patterns that earlier
-// cleanup phases would have caught had they seen them:
+// refold re-runs constant-propagation and cleanup-class rules at the end. The hoist phase
+// (localizer) and emit-prep phase (inline, debug-strip) can produce code patterns that
+// earlier phases would have caught had they seen them:
 // - localizer creates consecutive `local` declarations that merge-locals can combine
-// - inline introduces new constant expressions, dead locals, and empty blocks
+// - inline introduces new constant expressions and substitution sites for constant-propagation,
+//   as well as dead locals and empty blocks
 // - debug-strip leaves empty branches and unused locals behind argument removal
 //
 // Refold runs once (not to fixpoint). This is sufficient because the cleanup
 // rules are shaped so their outputs don't create new opportunities for other
-// cleanup rules within the same pass — constant-folding produces literals
-// (no new merge sites), merge-locals combines declarations (no new constants
-// or empty blocks), etc. The within-refold order (fold → dead-local → merge
-// → remove-empty-branch) handles intra-pass dependencies. If you add a rule
-// to refold whose output could trigger another refold rule, this assumption
-// breaks and you'll need a second refold pass or a different structure.
+// cleanup rules within the same pass — constant-propagation propagates values,
+// constant-folding produces literals (no new merge sites), merge-locals combines
+// declarations (no new constants or empty blocks), etc. The within-refold order
+// (constant-propagation → constant-folding → dead-local → merge → remove-empty-branch)
+// handles intra-pass dependencies. If you add a rule to refold whose output could
+// trigger another refold rule, this assumption breaks and you'll need a second refold
+// pass or a different structure.
 //
 // math-intrinsics is intentionally NOT in refold: inline's TS-level output
 // is re-visited by TSTL, so chained math-intrinsics visitors already catch
@@ -44,6 +47,7 @@ const PHASE_ENTRIES: [string, [keyof PluginConfig["rules"], RuleFactory][]][] = 
   [
     "fold",
     [
+      ["constant-propagation", constantPropagationVisitors],
       ["conditional-compilation", conditionalCompilationVisitors],
       ["constant-folding", constantFoldingVisitors],
       ["math-intrinsics", mathIntrinsicsVisitors],
@@ -70,6 +74,7 @@ const PHASE_ENTRIES: [string, [keyof PluginConfig["rules"], RuleFactory][]][] = 
   [
     "refold",
     [
+      ["constant-propagation", constantPropagationVisitors],
       ["constant-folding", constantFoldingVisitors],
       ["dead-local", deadLocalVisitors],
       ["merge-locals", mergeLocalsVisitors],
@@ -87,6 +92,7 @@ const EXPRESSION_KINDS: ReadonlySet<number> = new Set([
   ts.SyntaxKind.PrefixUnaryExpression,
   ts.SyntaxKind.ConditionalExpression,
   ts.SyntaxKind.CallExpression,
+  ts.SyntaxKind.PropertyAccessExpression,
 ]);
 
 // Statement SyntaxKinds where returning undefined should fall through to

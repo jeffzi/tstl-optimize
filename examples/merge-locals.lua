@@ -1,16 +1,13 @@
 function basicMerge()
-    local a, b, c = 1, 2, 3
-    return a + b + c
+    return 6
 end
 function withNil()
-    local x, y = 10, nil
-    y = x + 1
+    local y
+    y = 11
     return y
 end
 function forwardRef()
-    local a = 1
-    local b = a + 1
-    return b
+    return 2
 end
 function closureCapture()
     local a = 1
@@ -20,9 +17,8 @@ function closureCapture()
     return f
 end
 function impure()
-    local a = 1
     local b = compute()
-    return a + b
+    return 1 + b
 end
 x = 1
 y = 2

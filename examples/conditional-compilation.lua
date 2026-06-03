@@ -25,7 +25,7 @@ repeat
         break
     end
 until true
-isDebug = false
+isDebug = DEBUG
 isWeb = false
 print(playerHp)
 print(speed)

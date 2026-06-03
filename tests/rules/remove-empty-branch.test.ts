@@ -8,6 +8,7 @@ import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../helpers";
 const opts = {
   pluginOptions: {
     rules: {
+      "constant-propagation": false,
       "constant-folding": false,
       "dead-local": false,
       "remove-empty-branch": true,
@@ -473,6 +474,7 @@ describe("remove-empty-branch rule", () => {
           compile(source, {
             pluginOptions: {
               rules: {
+                "constant-propagation": false,
                 "conditional-compilation": {
                   constants: { PROD: { env: "__TSTL_TEST_UNUSED_VAR__", default: false } },
                 },

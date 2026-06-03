@@ -26,7 +26,7 @@ ____math_abs(a) + ____math_abs(b)
 local y = 5 * 2
 ```
 
-Primary targets are **Lua 5.1 (PUC-Rio)** and **LuaJIT**. Other TSTL targets (5.2–5.4) compile
+The plugin targets **Lua 5.1 (PUC-Rio)** and **LuaJIT** primarily. Other TSTL targets (5.2–5.4) compile
 without errors but are not specifically tuned — treat optimizations as best-effort on those targets.
 Every rule is independently toggleable. All rules are on by default **except**
 `conditional-compilation` and `debug-strip`, which remove code.
@@ -47,6 +47,7 @@ Every rule is independently toggleable. All rules are on by default **except**
 Rule reference:
 
 - [`conditional-compilation`](#conditional-compilation)
+- [`constant-propagation`](#constant-propagation)
 - [`constant-folding`](#constant-folding)
 - [`math-intrinsics`](#math-intrinsics)
 - [`dead-local`](#dead-local)
@@ -290,6 +291,51 @@ replaces bare identifiers (`DEBUG`), binary comparisons (`PLATFORM === "web"`), 
 - **Supported operators** — `===`, `!==`, `&&`, `||`, `!` in conditions. The rule does not evaluate
   other operators (e.g., `<`, `+`).
 
+### `constant-propagation`
+
+Substitutes literal values for single-assignment locals whose initializer is a `boolean`, `number`,
+or `string` literal. Each read of the local is replaced with the literal itself, which lets
+`constant-folding` collapse the surrounding arithmetic and `dead-local` remove the now-unused
+declaration. The rule runs first in both the `fold` and `refold` phases, so downstream rules see the
+substituted values.
+
+```typescript
+function area(): number {
+  const x = 42;
+  return x;
+}
+
+// Propagation feeds constant-folding: `2 ** BITS` becomes `2 ** 24`, then folds.
+function mask(): number {
+  const BITS = 24;
+  const MASK = 2 ** BITS;
+  return MASK;
+}
+```
+
+```lua
+local function area()
+    return 42
+end
+
+local function mask()
+    return 16777216
+end
+```
+
+Imported `const` literals are resolved at the TypeScript level, so constants cross module
+boundaries — both named imports (`import { X }`) and namespace imports (`import * as mod`) feed the
+same folding.
+
+**Limitations:**
+
+- Reassigned locals are left alone — only single-assignment bindings qualify.
+- Reads inside a nested function body (closure capture) are conservatively skipped, even when the
+  local is provably constant.
+- Destructured and multi-binding declarations (`const [a, b] = ...`) are not propagated.
+- Only `boolean`, `number`, and `string` literals propagate; non-literal initializers (function
+  calls, object/array literals) and `nil` are left in place.
+
 ### `constant-folding`
 
 Evaluates side-effect-free constant expressions after TypeScriptToLua lowers the file to Lua. The
@@ -443,7 +489,7 @@ The rule skips the loop when the body assigns the control variable, reads it wit
 
 ### `inline`
 
-Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)).
+Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)). Pass `{ warnCrossModule: true }` to emit diagnostic code 90003 when a cross-module inline is rejected (silent by default).
 
 ```typescript
 /** @inline */
@@ -461,8 +507,8 @@ const y = double(5); // becomes: const y = 5 * 2
 > sites or disable `rules.inline` in your debug config.
 
 Cross-module inlining works for self-contained functions that only reference parameters and
-literals. The rule skips functions that capture module-scope variables and emits a diagnostic
-warning (code 90003).
+literals. The rule silently skips functions that capture module-scope variables by default; set
+`warnCrossModule: true` to emit a diagnostic (code 90003) for each rejection.
 
 ```typescript
 // utils.ts
@@ -699,7 +745,7 @@ Options:
 
 #### Root filtering
 
-##### Default behavior
+#### Default behavior
 
 The localizer hoists only chains rooted at Lua stdlib globals by default:
 `math`, `string`, `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`.
@@ -716,7 +762,7 @@ An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pendi
 `teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
 excluded unless the user explicitly names them in `include`.
 
-##### Restoring previous behavior
+#### Restoring previous behavior
 
 To hoist all chains regardless of root, set `include: ["*"]`. This enables opt-out mode — all roots
 are allowed except those in `exclude` and the internal blocklist (unless also named in `include`).
@@ -852,7 +898,7 @@ Options:
 
 ## Strict mode
 
-By default, unresolvable diagnostics from optimization rules are emitted as warnings.
+By default, rules emit unresolvable diagnostics as warnings.
 `conditional-compilation` uses code 90002. `inline` emits rule-specific diagnostics: 90001 for a
 generic inline failure, plus 90003-90010 for specific rejection reasons. Set `strict: true` at the
 plugin level to promote all optimization warnings to compilation errors; the build fails whenever
@@ -920,7 +966,7 @@ Precedence:
 
 ### Diagnostic codes
 
-All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of the codes below.
+The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the codes below.
 
 | Code  | Rule                      | Meaning                                                                                   |
 | ----- | ------------------------- | ----------------------------------------------------------------------------------------- |
@@ -941,13 +987,14 @@ All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of
 | ------------------------------- | ---------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `strict`                        | `boolean`                                            | `false`       | Promote optimization warnings to compilation errors globally. `conditional-compilation` uses code 90002; `inline` emits 90001 and more specific 90003-90010 diagnostics. See [Strict mode](#strict-mode). |
 | `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig`            | `false`       | Strip dead branches based on compile-time constants. Accepts `{ constants: ...; strict?: boolean }` for per-rule error promotion.                                                                         |
+| `rules.constant-propagation`    | `boolean`                                            | `true`        | Substitute literal values for single-assignment locals whose initializer is a `boolean`, `number`, or `string` literal, including imported constants.                                                     |
 | `rules.constant-folding`        | `boolean`                                            | `true`        | Evaluate side-effect-free constant arithmetic, comparison, logical, unary, and string expressions.                                                                                                        |
 | `rules.math-intrinsics`         | `boolean`                                            | `true`        | Inline math calls as Lua expressions.                                                                                                                                                                     |
 | `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function bodies when the initializer is pure.                                                                                                                     |
 | `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
 | `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
-| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)).                          |
+| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)); `warnCrossModule: true` emits code 90003 for silent cross-module rejections. |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
 | `rules.unspill`                 | `boolean`                                            | `true`        | Fold the base/key temporaries TSTL emits for compound assignment on element/index access (`arr[i] += rhs`) when the cached parts are pure.                                                                |
 | `rules.debug-strip`             | `boolean \| DebugStripConfig`                        | `false`       | Strip debug and profiling calls.                                                                                                                                                                          |
@@ -955,8 +1002,8 @@ All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of
 
 ### Refold phase
 
-After all rules have run, the plugin re-runs `constant-folding`, `dead-local`, `merge-locals`, and
-`remove-empty-branch` in a final "refold" phase. Later rules sometimes create new opportunities for
+After all rules have run, the plugin re-runs `constant-propagation`, `constant-folding`,
+`dead-local`, `merge-locals`, and `remove-empty-branch` in a final "refold" phase. Later rules sometimes create new opportunities for
 earlier ones — for example, `localizer` can introduce consecutive `local` declarations that
 `merge-locals` can combine, or `inline` can expand a body whose constants `constant-folding` can
 evaluate. The refold phase catches these cross-rule wins automatically. Each rule in the refold

@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../src/rules/debug-strip";
 import { compile, normalizeLua } from "../helpers";
 
-const enabled = { pluginOptions: { rules: { "debug-strip": true } } };
+const enabled = {
+  pluginOptions: { rules: { "constant-propagation": false, "debug-strip": true } },
+};
 
 const ENV =
   "declare function print(...args: unknown[]): void;\ndeclare function assert(cond: unknown, msg?: string): asserts cond;\n";
@@ -109,7 +111,11 @@ describe("debug-strip", () => {
     it("custom functions list replaces defaults", () => {
       const lua = compile(
         `${ENV}declare function myDebug(msg: string): void; print("a"); myDebug("b");`,
-        { pluginOptions: { rules: { "debug-strip": { functions: ["myDebug"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { functions: ["myDebug"] } },
+          },
+        },
       );
       expect(normalizeLua(lua)).toBe('print("a")');
     });
@@ -122,7 +128,11 @@ describe("debug-strip", () => {
           "debug.traceback();",
           "profiler.start();",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["profiler"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["profiler"] } },
+          },
+        },
       );
       expect(normalizeLua(lua)).toBe("debug.traceback()");
     });
@@ -248,7 +258,7 @@ describe("debug-strip", () => {
         ["declare function print(msg: string): void;", 'print("debug");', "const x = 1;"].join(
           "\n",
         ),
-        { pluginOptions: {} },
+        { pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(normalizeLua(lua)).toBe('print("debug")\nx = 1');
     });
@@ -260,7 +270,7 @@ describe("debug-strip", () => {
           'Debug.log("test");',
           "const x = 1;",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": false } } },
+        { pluginOptions: { rules: { "constant-propagation": false, "debug-strip": false } } },
       );
       expect(normalizeLua(lua)).toBe('Debug.log("test")\nx = 1');
     });
@@ -274,7 +284,11 @@ describe("debug-strip", () => {
           'Logger.log("test");',
           "const x = 1;",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["Debug"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["Debug"] } },
+          },
+        },
       );
       expect(normalizeLua(lua)).toBe('Logger.log("test")\nx = 1');
     });
@@ -291,6 +305,7 @@ describe("debug-strip", () => {
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               "debug-strip": {
                 functions: ["debug"],
                 namespaces: ["Logger"],
@@ -304,7 +319,9 @@ describe("debug-strip", () => {
 
     it("preserves a top-level local function alias even when the configured global function is stripped", () => {
       const lua = compile(["const debug = () => 1;", "debug();", "const x = 1;"].join("\n"), {
-        pluginOptions: { rules: { "debug-strip": { functions: ["debug"] } } },
+        pluginOptions: {
+          rules: { "constant-propagation": false, "debug-strip": { functions: ["debug"] } },
+        },
       });
 
       const normalized = normalizeLua(lua);
@@ -323,7 +340,11 @@ describe("debug-strip", () => {
           'Logger.log("local");',
           "const x = 1;",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["Logger"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["Logger"] } },
+          },
+        },
       );
 
       const normalized = normalizeLua(lua);
@@ -360,7 +381,11 @@ describe("debug-strip", () => {
           'Logger.log("global");',
           "const x = 1;",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["Logger"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["Logger"] } },
+          },
+        },
       );
 
       expect(normalizeLua(lua)).toBe('function run(Logger)\nLogger:log("local")\nend\nx = 1');
@@ -369,7 +394,11 @@ describe("debug-strip", () => {
     it("strips method-call syntax when the configured namespace matches the receiver root", () => {
       const lua = compile(
         ["declare const logger: { debug(): void };", "logger.debug();", "const x = 1;"].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["logger"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["logger"] } },
+          },
+        },
       );
 
       expect(normalizeLua(lua)).toBe("x = 1");
@@ -388,7 +417,11 @@ describe("debug-strip", () => {
           "debug.traceback();",
           "const x = 1;",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["debug"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["debug"] } },
+          },
+        },
       );
 
       const normalized = normalizeLua(lua);
@@ -407,7 +440,11 @@ describe("debug-strip", () => {
           'getLogger().log("msg");',
           "const x = 1;",
         ].join("\n"),
-        { pluginOptions: { rules: { "debug-strip": { namespaces: ["getLogger"] } } } },
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "debug-strip": { namespaces: ["getLogger"] } },
+          },
+        },
       );
 
       expect(normalizeLua(lua)).toBe('getLogger():log("msg")\nx = 1');

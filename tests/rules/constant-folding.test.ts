@@ -11,35 +11,47 @@ describe("constant-folding", () => {
   }
 
   it("folds binary arithmetic expressions", () => {
-    const lua = compile("const a = 1 + 2 * 3;");
+    const lua = compile("const a = 1 + 2 * 3;", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain("a = 7");
   });
 
   it("folds string concatenation", () => {
-    const lua = compile("const a = 'foo' + 'bar';");
+    const lua = compile("const a = 'foo' + 'bar';", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain('a = "foobar"');
   });
 
   it("folds boolean logic", () => {
-    const lua = compile("const a = true && false; const b = !true;");
+    const lua = compile("const a = true && false; const b = !true;", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain("a = false");
     expect(lua).toContain("b = false");
   });
 
   it("leaves side-effects untouched", () => {
-    const lua = compile("let x = 1; const a = (x = 2) + 3;");
+    const lua = compile("let x = 1; const a = (x = 2) + 3;", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain("x = 2");
     expect(lua).toContain("+ 3");
   });
 
   it("removes empty if blocks", () => {
-    const lua = compile("if (true) {} else if (false) {} else {} const a = 1;");
+    const lua = compile("if (true) {} else if (false) {} else {} const a = 1;", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).not.toContain("if");
     expect(lua).toContain("a = 1");
   });
 
   it("removes statements after return", () => {
-    const lua = compile("function foo() { return 1; const a = 2; }");
+    const lua = compile("function foo() { return 1; const a = 2; }", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain("return 1");
     expect(lua).not.toContain("local a = 2");
   });
@@ -52,20 +64,24 @@ describe("constant-folding", () => {
     // JS:  7 % (-3) == 1
     { source: "const x = 7 % (-3);", expected: "x = (-2)", label: "negative divisor" },
   ])("folds modulo using Lua floored semantics ($label)", ({ source, expected }) => {
-    const lua = compile(source);
+    const lua = compile(source, { pluginOptions: { rules: { "constant-propagation": false } } });
 
     expect(lua).toContain(expected);
   });
 
   describe("unary negation folding (multi-pass)", () => {
     it("folds double negation to the positive value", () => {
-      const lua = compile("const x = -(-5);");
+      const lua = compile("const x = -(-5);", {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(lua).toContain("x = 5");
     });
 
     it("folds triple negation to a single negation", () => {
-      const lua = compile("const x = -(-(-5));");
+      const lua = compile("const x = -(-(-5));", {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(lua).toContain("x = -5");
     });
@@ -81,14 +97,16 @@ describe("constant-folding", () => {
         expected: "(-4.2) ^ (-4.2)",
       },
     ])("preserves $label", ({ source, expected }) => {
-      const lua = compile(source);
+      const lua = compile(source, { pluginOptions: { rules: { "constant-propagation": false } } });
       expect(lua).toContain(expected);
     });
   });
 
   it("parenthesizes folded negative literals when they stay inside exponentiation", () => {
     const lua = normalizeLua(
-      compile("declare function exp(): number; export const value = (1 - 3) ** exp();"),
+      compile("declare function exp(): number; export const value = (1 - 3) ** exp();", {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      }),
     );
 
     expect(lua).toContain("value = (-2) ^ exp()");
@@ -96,7 +114,9 @@ describe("constant-folding", () => {
 
   it("keeps folded unary negatives grouped before exponentiation", () => {
     const lua = normalizeLua(
-      compile("declare function exp(): number; export const value = (-(-(1 - 3))) ** exp();"),
+      compile("declare function exp(): number; export const value = (-(-(1 - 3))) ** exp();", {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      }),
     );
 
     expect(lua).toContain("value = (-2) ^ exp()");
@@ -104,20 +124,26 @@ describe("constant-folding", () => {
 
   describe("optimizeControlFlow preserves side-effectful conditions in empty if-blocks", () => {
     it("preserves call expression when if-body and else-body are both empty", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         declare function sideEffect(): boolean;
         if (sideEffect()) {}
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("sideEffect()");
     });
 
     it("preserves elseif call expression when elseif-body is empty", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         declare function sideEffect(): boolean;
         declare let x: boolean;
         if (x) { x = false; } else if (sideEffect()) {}
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("sideEffect()");
     });
@@ -125,13 +151,16 @@ describe("constant-folding", () => {
 
   describe("dead code elimination after return statements", () => {
     it("folds logical-not on boolean literals", () => {
-      const lua = compile("const x = !!!true;");
+      const lua = compile("const x = !!!true;", {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(lua).toContain("x = false");
     });
 
     it("removes unreachable statements after unconditional return in nested block", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           const x = 1;
           return x;
@@ -139,7 +168,9 @@ describe("constant-folding", () => {
           const unreachable2 = 3;
           return unreachable1;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("return x");
       expect(lua).not.toContain("unreachable1");
@@ -147,7 +178,8 @@ describe("constant-folding", () => {
     });
 
     it("removes unreachable statements in if-block after return", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f(cond: boolean) {
           if (cond) {
             const x = 1;
@@ -157,14 +189,17 @@ describe("constant-folding", () => {
           const afterIf = 3;
           return afterIf;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).not.toContain("unreachable");
       expect(lua).toContain("afterIf");
     });
 
     it("removes unreachable statements after return in do-block", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           do {
             const x = 1;
@@ -172,20 +207,25 @@ describe("constant-folding", () => {
             const unreachable = 2;
           } while (false);
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).not.toContain("unreachable");
     });
 
     it("preserves all statements when no return is present", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           const x = 1;
           const y = 2;
           const z = 3;
           return x + y + z;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("x");
       expect(lua).toContain("y");
@@ -193,7 +233,8 @@ describe("constant-folding", () => {
     });
 
     it("handles complex control flow with multiple returns", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f(a: boolean, b: boolean) {
           if (a) {
             return 1;
@@ -206,7 +247,9 @@ describe("constant-folding", () => {
           return 5;
           const dead3 = 6;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).not.toContain("dead1");
       expect(lua).not.toContain("dead2");
@@ -226,7 +269,9 @@ describe("constant-folding", () => {
         export const ge = (2 as number) >= (1 as number);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("eq = true");
       expect(lua).toContain("neq = true");
@@ -244,7 +289,9 @@ describe("constant-folding", () => {
         export const ge = ("b" as string) >= ("a" as string);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("eq = true");
       expect(lua).toContain("neq = true");
@@ -260,7 +307,9 @@ describe("constant-folding", () => {
         export const gt = ("😀" as string) > ("\\uFFFD" as string);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("lt = false");
       expect(lua).toContain("gt = true");
@@ -272,7 +321,9 @@ describe("constant-folding", () => {
         export const gt = ("aa" as string) > ("a" as string);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("lt = true");
       expect(lua).toContain("gt = true");
@@ -285,7 +336,9 @@ describe("constant-folding", () => {
         export const or_val = (true as boolean) || (false as boolean);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("eq = true");
       expect(lua).toContain("neq = true");
@@ -298,7 +351,9 @@ describe("constant-folding", () => {
         export const neq = (1 as unknown) !== ("1" as unknown);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("eq = false");
       expect(lua).toContain("neq = true");
@@ -310,7 +365,9 @@ describe("constant-folding", () => {
         export const neg = -(1);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("len = 3");
       expect(lua).toContain("neg = -1");
@@ -323,7 +380,9 @@ describe("constant-folding", () => {
         export const negateString = -("hi" as any);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("neq = true");
       expect(lua).toContain("notNumber = not 1");
@@ -331,7 +390,11 @@ describe("constant-folding", () => {
     });
 
     it("folds string length using Lua byte length", () => {
-      const lua = normalizeLua(compile('export const len = "😀".length;'));
+      const lua = normalizeLua(
+        compile('export const len = "😀".length;', {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        }),
+      );
 
       expect(lua).toContain("len = 4");
     });
@@ -343,14 +406,20 @@ describe("constant-folding", () => {
       // so TSTL emits ~1 in Lua and the SourceFile visitor must fold it.
       // Lua 5.3+ is required for bitwise operator support.
       const lua = normalizeLua(
-        compile("const x = ~(1 as number);", { luaTarget: tstl.LuaTarget.Lua53 }),
+        compile("const x = ~(1 as number);", {
+          luaTarget: tstl.LuaTarget.Lua53,
+          pluginOptions: { rules: { "constant-propagation": false } },
+        }),
       );
       expect(lua).toContain("x = -2");
     });
 
     it("folds large integers with Lua53 integer semantics", () => {
       const lua = normalizeLua(
-        compile("const x = ~(1099511627776 as number);", { luaTarget: tstl.LuaTarget.Lua53 }),
+        compile("const x = ~(1099511627776 as number);", {
+          luaTarget: tstl.LuaTarget.Lua53,
+          pluginOptions: { rules: { "constant-propagation": false } },
+        }),
       );
 
       expect(lua).toContain("x = -1099511627777");
@@ -366,7 +435,7 @@ describe("constant-folding", () => {
         declare const b: boolean;
         if (x) { const z = 1; } else if (a) {} else if (b) {}
       `,
-        { pluginOptions: { rules: { "dead-local": false } } },
+        { pluginOptions: { rules: { "constant-propagation": false, "dead-local": false } } },
       ),
     );
 
@@ -388,7 +457,9 @@ describe("constant-folding", () => {
       }
     `;
 
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
 
     expect(lua).toContain("elseif get() then");
     expect(lua).toContain("print(2)");
@@ -409,20 +480,26 @@ describe("constant-folding", () => {
           expected: "1000000000000000",
         },
       ])("folds with $label to a literal", ({ source, expected }) => {
-        const lua = compile(source);
+        const lua = compile(source, {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
 
         expect(lua).toContain(`= ${expected}`);
         expect(lua).not.toContain("math.ceil");
       });
 
       it("does not fold when argument is non-literal", () => {
-        const lua = compile("declare const x: number; const a = Math.ceil(x);");
+        const lua = compile("declare const x: number; const a = Math.ceil(x);", {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
 
         expect(lua).toContain("math.ceil");
       });
 
       it("does not fold oversized numeric literal that overflows to Infinity", () => {
-        const lua = compile("const a = Math.ceil(1e309);");
+        const lua = compile("const a = Math.ceil(1e309);", {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
 
         expect(lua).toContain("math.ceil");
       });
@@ -435,14 +512,18 @@ describe("constant-folding", () => {
         { label: "already integer", source: "const x = Math.round(4.0);", expected: "4" },
         { label: "zero", source: "const x = Math.round(0);", expected: "0" },
       ])("folds with $label to a literal", ({ source, expected }) => {
-        const lua = compile(source);
+        const lua = compile(source, {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
 
         expect(lua).toContain(`= ${expected}`);
         expect(lua).not.toContain("math.round");
       });
 
       it("does not fold oversized numeric literal that overflows to Infinity", () => {
-        const lua = compile("const a = Math.round(1e309);");
+        const lua = compile("const a = Math.round(1e309);", {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
 
         // TSTL rewrites Math.round to math.floor(...), so verify no constant is folded in.
         expect(lua).not.toMatch(/a = \d+/);
@@ -451,7 +532,9 @@ describe("constant-folding", () => {
       it("does not fold when argument is non-literal", () => {
         // math-intrinsics rewrites Math.round(x) to math.floor(x + 0.5) — the result
         // must still reference the variable, not collapse to a numeric literal.
-        const lua = compile("declare const x: number; const a = Math.round(x);");
+        const lua = compile("declare const x: number; const a = Math.round(x);", {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
 
         expect(lua).toContain("x");
         expect(lua).not.toMatch(/a = \d+/);
@@ -461,7 +544,9 @@ describe("constant-folding", () => {
     it("passes through unsupported Math methods unchanged", () => {
       // Math.log is not handled by the optimizer — exercises the default branch in
       // the math-intrinsics switch to ensure unrecognised methods are left alone.
-      const lua = compile("declare const x: number; const a = Math.log(x);");
+      const lua = compile("declare const x: number; const a = Math.log(x);", {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(lua).toContain("math.log");
     });

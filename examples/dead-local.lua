@@ -1,10 +1,8 @@
 function pureUnused()
-    local live = 10
-    return live
+    return 10
 end
 function usedLocal()
-    local x = 5
-    return x * 2
+    return 10
 end
 function captureExample()
     local base = 100
