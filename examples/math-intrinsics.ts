@@ -10,10 +10,6 @@ const dx = targetX - x;
 const dy = targetY - y;
 const dist = Math.sqrt(dx ** 2 + dy ** 2);
 
-// Snap to 32px tile grid
-const tileX = Math.floor(x / 32);
-const tileY = Math.floor(y / 32);
-
 // Absolute offset for bounds check
 const absX = Math.abs(dx);
 const absY = Math.abs(dy);
@@ -40,7 +36,6 @@ const minLit = Math.min(1, 2);
 const biggest = Math.max(x, y, speed);
 
 print(dist); // 201.24611797498
-print(tileX, tileY); // 0  0
 print(absX, absY); // 90  180
 print(clamped, bounded); // 5  5
 print(maxLit, minLit); // 3  1

@@ -53,24 +53,10 @@ function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
 
 describe("math-intrinsics", () => {
   describe("Math.floor", () => {
-    it("lowers Math.floor to modulo math while keeping the infinity guard", () => {
+    it("falls through to math.floor for non-literal arguments", () => {
       const lua = compile("declare const x: number; const a = Math.floor(x);");
-      expect(lua).toContain("% 1");
       expect(lua).toContain("math.floor(x)");
-    });
-
-    it("keeps math.floor when argument has side effects", () => {
-      const lua = compile("declare function foo(): number; const a = Math.floor(foo());");
-      expect(lua).toContain("math.floor");
-    });
-
-    it("keeps math.floor when argument is a property access that could invoke a getter", () => {
-      const lua = compile(`
-        declare const box: { readonly value: number };
-        const a = Math.floor(box.value);
-      `);
-
-      expect(lua).toContain("math.floor");
+      expect(lua).not.toContain("% 1");
     });
 
     it("keeps math.floor for Infinity to preserve Lua math.floor semantics", () => {
@@ -185,7 +171,6 @@ describe("math-intrinsics", () => {
 
     it.each([
       { method: "abs", source: "Math.abs(value);" },
-      { method: "floor", source: "Math.floor(value);" },
     ])("does not alias repeated Lua subtrees for Math.$method", ({ source }) => {
       const visitors = Reflect.apply(createVisitors, undefined, [checker, config]);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
@@ -444,11 +429,6 @@ describe("math-intrinsics", () => {
     const jit = { pluginOptions: { target: "luajit" as const } };
 
     it.each([
-      {
-        name: "skips floor transform",
-        source: "declare const x: number; const a = Math.floor(x);",
-        contains: ["math.floor"],
-      },
       {
         name: "skips sqrt transform",
         source: "declare const x: number; const a = Math.sqrt(x);",

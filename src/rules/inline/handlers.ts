@@ -42,6 +42,7 @@ function validateAndClassifyReturnValueInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): Map<ts.Symbol, LiteralKind> | undefined {
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== undefined) {
@@ -58,6 +59,7 @@ function validateAndClassifyReturnValueInline(
     checker,
     context,
     strict,
+    warnCrossModule,
   );
   if (classification.reject) {
     return undefined;
@@ -70,6 +72,7 @@ export function handleCallExpression(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): tstl.Expression | undefined {
   const target = getCallInlineTarget(node, checker);
   if (target === undefined) return undefined;
@@ -99,7 +102,7 @@ export function handleCallExpression(
     return undefined;
   }
 
-  return inlineExpressionBody(target, node, checker, context, strict);
+  return inlineExpressionBody(target, node, checker, context, strict, warnCrossModule);
 }
 
 export function handleVariableStatement(
@@ -107,6 +110,7 @@ export function handleVariableStatement(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): tstl.Statement[] | undefined {
   const decls = node.declarationList.declarations;
   if (decls.length !== 1) return undefined;
@@ -124,6 +128,7 @@ export function handleVariableStatement(
     checker,
     context,
     strict,
+    warnCrossModule,
   );
   if (substitutions === undefined) return undefined;
 
@@ -161,6 +166,7 @@ export function handleReturnStatement(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): tstl.Statement[] | undefined {
   if (!node.expression || !ts.isCallExpression(node.expression)) return undefined;
 
@@ -174,6 +180,7 @@ export function handleReturnStatement(
     checker,
     context,
     strict,
+    warnCrossModule,
   );
   if (substitutions === undefined) return undefined;
 
@@ -185,6 +192,7 @@ export function handleExpressionStatement(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): tstl.Statement[] | undefined {
   if (!ts.isCallExpression(node.expression)) return undefined;
   const callNode = node.expression;
@@ -193,7 +201,14 @@ export function handleExpressionStatement(
   if (target === undefined) return undefined;
 
   if (target.kind === "expression") {
-    const inlined = inlineExpressionBody(target, callNode, checker, context, strict);
+    const inlined = inlineExpressionBody(
+      target,
+      callNode,
+      checker,
+      context,
+      strict,
+      warnCrossModule,
+    );
     if (inlined === undefined) return undefined;
     // If the body and all arguments are pure, the result is unused at void site —
     // drop the statement entirely rather than emitting an invalid bare expression.
@@ -232,6 +247,7 @@ export function handleExpressionStatement(
     checker,
     context,
     strict,
+    warnCrossModule,
   );
   if (classification.reject) {
     return undefined;

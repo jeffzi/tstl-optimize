@@ -48,79 +48,100 @@ describe("dead-local", () => {
   }
 
   it("removes unused inline arg temp", () => {
-    const lua = compile(`
+    const lua = compile(
+      `
       /** @inline */
       function double(x: number): number { return x * 2; }
       const result = double(21);
-    `);
+    `,
+      { pluginOptions: { rules: { "constant-propagation": false } } },
+    );
     // ____inline_arg_0 should be eliminated as an unused temp
     expect(lua).not.toContain("____inline_arg_");
   });
 
   it("preserves variable that is read in same scope", () => {
-    const lua = compile("function f() { const x = 1; return x; }");
+    const lua = compile("function f() { const x = 1; return x; }", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain("x = 1");
   });
 
   it("removes unused variable with pure RHS (literal)", () => {
-    const lua = compile("function f() { const x = 42; }");
+    const lua = compile("function f() { const x = 42; }", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).not.toContain("x = 42");
   });
 
   it("preserves variable whose RHS has a side effect (call expression)", () => {
-    const lua = compile(`
+    const lua = compile(
+      `
       declare function someFunc(): number;
       function f() { const x = someFunc(); }
-    `);
+    `,
+      { pluginOptions: { rules: { "constant-propagation": false } } },
+    );
     // The call must still execute; the whole declaration stays
     expect(lua).toContain("someFunc()");
   });
 
   it("does NOT remove module-level unused locals", () => {
     // Top-level const — module scope, out of scope for dead-local
-    const lua = compile("const x = 1;");
+    const lua = compile("const x = 1;", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
     expect(lua).toContain("x = 1");
   });
 
   it("does NOT touch multi-LHS declarations", () => {
     // local a, b = f() — must not be removed
-    const lua = compile(`
+    const lua = compile(
+      `
       declare function pair(): [number, number];
       function f() {
         const [a, b] = pair();
         return a + b;
       }
-    `);
+    `,
+      { pluginOptions: { rules: { "constant-propagation": false } } },
+    );
     expect(lua).toMatch(/local a, b\b/);
     expect(lua).toContain("a + b");
   });
 
   it("preserves variable used inside a nested closure", () => {
-    const lua = compile(`
+    const lua = compile(
+      `
       function outer() {
         const x = 1;
         const fn = () => x;
         return fn();
       }
-    `);
+    `,
+      { pluginOptions: { rules: { "constant-propagation": false } } },
+    );
     // x is captured by the closure — must not be removed
     // (merge-locals may merge x and fn into one statement, but x must still be declared)
     expect(lua).toMatch(/local x[,\s]/);
   });
 
   it("removes unused local function declaration (post-inline residue)", () => {
-    const lua = compile(`
+    const lua = compile(
+      `
       /** @inline */
       function add(a: number, b: number): number { return a + b; }
       const r1 = add(1, 2);
       const r2 = add(3, 4);
-    `);
+    `,
+      { pluginOptions: { rules: { "constant-propagation": false } } },
+    );
     expect(lua).not.toContain("local function add");
   });
 
   it("rule can be disabled via config", () => {
     const lua = compile("function f() { const x = 42; }", {
-      pluginOptions: { rules: { "dead-local": false } },
+      pluginOptions: { rules: { "constant-propagation": false, "dead-local": false } },
     });
     expect(lua).toContain("x = 42");
   });
@@ -166,7 +187,7 @@ describe("dead-local", () => {
         `,
       },
     ])("removes unused local inside $name", ({ source }) => {
-      const lua = compile(source);
+      const lua = compile(source, { pluginOptions: { rules: { "constant-propagation": false } } });
 
       expect(lua).not.toContain("unused");
       expect(lua).toContain("result");
@@ -175,13 +196,16 @@ describe("dead-local", () => {
 
   describe("when handling write-only locals (assignment without read)", () => {
     it("preserves initializer when the first later assignment reads the local", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           let i = 0;
           i += 1;
           return i;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("local i = 0");
       expect(lua).toContain("i = i + 1");
@@ -189,7 +213,8 @@ describe("dead-local", () => {
 
     it("preserves initializer when a closure reads the local before a later write", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
           function f() {
             let x = 1;
             const g = () => x;
@@ -197,7 +222,9 @@ describe("dead-local", () => {
             x = 2;
             return y;
           }
-        `),
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local x = 1");
@@ -207,7 +234,8 @@ describe("dead-local", () => {
     });
 
     it("ignores deferred nested-function writes when deciding whether to drop an initializer", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           let s = "A";
           const touch = (x: string) => {
@@ -217,19 +245,24 @@ describe("dead-local", () => {
           touch("C");
           return s;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain('local s = "A"');
       expect(lua).toContain('s = s .. "B"');
     });
 
     it("preserves declaration when local is assigned after initialization", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           let x = 1;
           x = 5;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // The local must survive, but the dead pure initializer should be removed.
       expect(lua).toContain("local x");
       expect(lua).not.toMatch(/local x\s*=\s*1/);
@@ -237,40 +270,49 @@ describe("dead-local", () => {
     });
 
     it("preserves declaration when local with impure RHS is assigned", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         declare function foo(): number;
         declare function bar(): number;
         function f() {
           let x = foo();
           x = bar();
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // x is assigned to, so declaration must be kept (even though RHS is impure)
       expect(lua).toContain("local x");
       expect(lua).toContain("foo()");
     });
 
     it("still removes unused local when NOT followed by assignment", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           const x = 1;
           const y = 2;
           return y;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // x is never read and never assigned — should be eliminated
       expect(lua).not.toContain("x");
       expect(lua).toContain("y");
     });
 
     it("preserves declaration when local is assigned and then read", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f() {
           let x = 1;
           x = 2;
           return x;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // x is assigned and read — declaration must be kept, but the dead pure initializer should go.
       expect(lua).toContain("local x");
       expect(lua).not.toMatch(/local x\s*=\s*1/);
@@ -279,7 +321,8 @@ describe("dead-local", () => {
 
     it("preserves initializer when the first read is parenthesized before a later write", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f(flag: boolean) {
           let x = 1;
           const y = (x);
@@ -288,7 +331,9 @@ describe("dead-local", () => {
           }
           return y;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local x = 1");
@@ -299,14 +344,17 @@ describe("dead-local", () => {
 
     it("preserves initializer when the first read appears in a conditional expression", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f(flag: boolean) {
           let x = 1;
           const y = flag ? x : 0;
           x = 2;
           return y;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local x = 1");
@@ -317,7 +365,8 @@ describe("dead-local", () => {
 
     it("preserves initializer when the first write is inside an if branch", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f(flag: boolean) {
           let called = false;
           if (flag) {
@@ -325,7 +374,9 @@ describe("dead-local", () => {
           }
           return called;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local called = false");
@@ -334,7 +385,8 @@ describe("dead-local", () => {
 
     it("preserves initializer when the first write is inside a for-loop body", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         declare const n: number;
         function f() {
           let called = false;
@@ -343,7 +395,9 @@ describe("dead-local", () => {
           }
           return called;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local called = false");
@@ -352,7 +406,8 @@ describe("dead-local", () => {
 
     it("drops initializer when the first write is unconditional (do-block)", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f() {
           let x = 1;
           {
@@ -360,7 +415,9 @@ describe("dead-local", () => {
           }
           return x;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local x");
@@ -480,20 +537,23 @@ describe("dead-local", () => {
         expectedMissing: ["unused"],
       },
     ])("removes unused locals inside $name", ({ expectedMissing, expectedPresent, source }) => {
-      const lua = compile(source);
+      const lua = compile(source, { pluginOptions: { rules: { "constant-propagation": false } } });
       expectLuaSnippets(lua, { present: expectedPresent, missing: expectedMissing });
     });
   });
 
   describe("when locals are read through complex expressions", () => {
     it("preserves locals read through conditional and parenthesized expressions", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         function f(flag: boolean) {
           const x = 1;
           const y = (flag ? x : 2);
           return (y);
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("x = 1");
       expect(lua).toContain("return y");
@@ -501,13 +561,16 @@ describe("dead-local", () => {
 
     it("preserves locals read from table keys and values", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f() {
           const key = "value";
           const data = { [key]: key };
           return data[key];
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain('local key = "value"');
@@ -516,13 +579,16 @@ describe("dead-local", () => {
 
     it("preserves locals read through computed assignment targets", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f(arr: number[]) {
           let index = 0;
           arr[index] = arr[index] + 1;
           return index;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local index = 0");
@@ -532,7 +598,8 @@ describe("dead-local", () => {
 
     it("preserves unused function-expression declarations inside nested scopes", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function outer() {
           if (true) {
             const keep = function() {
@@ -540,7 +607,9 @@ describe("dead-local", () => {
             };
           }
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("local function keep()");
@@ -719,13 +788,16 @@ describe("dead-local", () => {
             { length: n },
             (_, i) => `        const unused${i} = sideEffect();`,
           ).join("\n");
-          const lua = compile(`
+          const lua = compile(
+            `
             declare function sideEffect(): number;
             function f(): void {
 ${unusedDecls}
             }
             f();
-          `);
+          `,
+            { pluginOptions: { rules: { "constant-propagation": false } } },
+          );
           // Each sideEffect() call must survive (either as a bare call statement or in a stripped-decl form).
           const callCount = (lua.match(/sideEffect\(\)/g) ?? []).length;
           return callCount === n;
@@ -742,14 +814,17 @@ ${unusedDecls}
             { length: n },
             (_, i) => `        const pure${i} = ${i + 1};`,
           ).join("\n");
-          const lua = compile(`
+          const lua = compile(
+            `
             declare function obs(): void;
             function f(): void {
 ${pureDecls}
               obs();
             }
             f();
-          `);
+          `,
+            { pluginOptions: { rules: { "constant-propagation": false } } },
+          );
           for (let i = 0; i < n; i++) {
             if (lua.includes(`pure${i}`)) return false;
           }
@@ -763,13 +838,16 @@ ${pureDecls}
   describe("dead-local — interaction with other rules", () => {
     it("inline arg temp is eliminated after inlining runs (dead-local + inline)", () => {
       // inline introduces ____inline_arg_N temps; dead-local must remove them.
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function add(a: number, b: number): number { return a + b; }
         const r = add(10, 20);
         declare function use(n: number): void;
         use(r);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).not.toContain("____inline_arg_");
       // The inlined result must survive (constant-folding may evaluate 10+20 to 30)
       expect(lua.includes("10 + 20") || lua.includes("30")).toBe(true);
@@ -777,27 +855,33 @@ ${pureDecls}
 
     it("closure capturing an unused local still retains the captured ref (adversarial indirection)", () => {
       // A local that is read only inside an immediately-returned closure must not be dropped.
-      const lua = compile(`
+      const lua = compile(
+        `
         function makeGetter(n: number): () => number {
           const captured = n + 1;
           return () => captured;
         }
         declare function use(f: () => number): void;
         use(makeGetter(5));
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("captured");
     });
 
     it("impure RHS is preserved even when local is never read", () => {
       // dead-local keeps impure declarations intact (local neverRead = sideEffect() survives);
       // the call must not be silently discarded.
-      const lua = compile(`
+      const lua = compile(
+        `
         declare function sideEffect(): number;
         function f(): void {
           const neverRead = sideEffect();
         }
         f();
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("sideEffect()");
     });
   });

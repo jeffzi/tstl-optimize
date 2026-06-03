@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **unspill** rule — folds the redundant base/key temporaries TSTL emits when lowering a compound
+  assignment on element/index access (`arr[i] += rhs`). When the cached base and key are
+  side-effect-free, the rule replaces the three-local pattern with a direct `arr[i] = arr[i] + rhs`
+  assignment. The value-temp form (`return (arr[i] += 5)`) is also handled. Enabled by default;
+  disable with `"rules": { "unspill": false }`.
+- `tstl-optimize/lua-ast` subpath — exports `unspillStatements` and `isLuaRhsPure` for downstream
+  plugins that need to perform the same fold before their own hoisting pass.
+
 ## [0.9.0] - 2026-05-20
 
 ### Added

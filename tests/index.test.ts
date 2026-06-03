@@ -279,17 +279,16 @@ describe("resolveLocalizerConfig", () => {
 });
 
 describe("target auto-detection", () => {
-  const SRC = "declare const x: number; const a = Math.floor(x);";
+  const SRC = "declare const x: number; const a = Math.sqrt(x);";
 
   it("auto-detects puc for Lua51 target and applies math-intrinsics", () => {
     const lua = compile(SRC, { luaTarget: LuaTarget.Lua51 });
-    expect(lua).toContain("% 1");
-    expect(lua).toContain("math.floor");
+    expect(lua).toContain("^ 0.5");
   });
 
-  it("auto-detects luajit and skips floor transform", () => {
+  it("auto-detects luajit and skips sqrt transform", () => {
     const lua = compile(SRC, { luaTarget: LuaTarget.LuaJIT });
-    expect(lua).toContain("math.floor");
+    expect(lua).toContain("math.sqrt");
   });
 
   it("explicit target overrides auto-detection", () => {
@@ -298,8 +297,7 @@ describe("target auto-detection", () => {
       pluginOptions: { target: "puc" },
       luaTarget: LuaTarget.LuaJIT,
     });
-    expect(lua).toContain("% 1");
-    expect(lua).toContain("math.floor");
+    expect(lua).toContain("^ 0.5");
   });
 
   it("recomputes the inferred target when the same plugin instance is reused", () => {
@@ -325,8 +323,8 @@ describe("target auto-detection", () => {
       return file.lua;
     };
 
-    expect(transpileWith(LuaTarget.LuaJIT)).toContain("math.floor");
-    expect(transpileWith(LuaTarget.Lua51)).toContain("% 1");
+    expect(transpileWith(LuaTarget.LuaJIT)).toContain("math.sqrt");
+    expect(transpileWith(LuaTarget.Lua51)).toContain("^ 0.5");
   });
 });
 

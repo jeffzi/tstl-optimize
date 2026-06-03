@@ -9,7 +9,7 @@ Lua for better runtime performance — fewer table lookups, smaller closures, an
 ```typescript
 // TypeScript input
 Math.sqrt(x)
-math.floor(a) + math.floor(b)
+math.abs(a) + math.abs(b)
 /** @inline */
 function double(x: number) {
   return x * 2;
@@ -20,13 +20,13 @@ const y = double(5);
 ```lua
 -- Lua output (with plugin)
 x ^ 0.5
-local ____math_floor = math.floor
-____math_floor(a) + ____math_floor(b)
+local ____math_abs = math.abs
+____math_abs(a) + ____math_abs(b)
 -- (inlined at call sites)
 local y = 5 * 2
 ```
 
-Primary targets are **Lua 5.1 (PUC-Rio)** and **LuaJIT**. Other TSTL targets (5.2–5.4) compile
+The plugin targets **Lua 5.1 (PUC-Rio)** and **LuaJIT** primarily. Other TSTL targets (5.2–5.4) compile
 without errors but are not specifically tuned — treat optimizations as best-effort on those targets.
 Every rule is independently toggleable. All rules are on by default **except**
 `conditional-compilation` and `debug-strip`, which remove code.
@@ -47,6 +47,7 @@ Every rule is independently toggleable. All rules are on by default **except**
 Rule reference:
 
 - [`conditional-compilation`](#conditional-compilation)
+- [`constant-propagation`](#constant-propagation)
 - [`constant-folding`](#constant-folding)
 - [`math-intrinsics`](#math-intrinsics)
 - [`dead-local`](#dead-local)
@@ -55,6 +56,7 @@ Rule reference:
 - [`loop-rebase`](#loop-rebase)
 - [`inline`](#inline)
 - [`localizer`](#localizer)
+- [`unspill`](#unspill)
 - [`debug-strip`](#debug-strip)
 
 ## Installation
@@ -65,10 +67,11 @@ npm install --save-dev typescript-to-lua tstl-optimize
 
 Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
 
-The package also exports two utility subpaths for library consumers:
+The package also exports three utility subpaths for library consumers:
 
 - `tstl-optimize/ts-ast`: TypeScript expression analysis (`hasSideEffects`, `unwrapTransparent`, `isNilExpression`, …)
-- `tstl-optimize/transforms`: Lua source transforms (`hoistCrossModuleAccesses`, `getRequireBindings`, `getModuleExports`)
+- `tstl-optimize/lua-ast`: Lua AST transforms (`unspillStatements`, `isLuaRhsPure`) — operate on the TSTL Lua AST before emit
+- `tstl-optimize/transforms`: Lua source transforms (`hoistCrossModuleAccesses`, `getRequireBindings`, `getModuleExports`) — post-emit string-to-string
 
 ## Usage
 
@@ -127,7 +130,7 @@ Use the rules in two groups:
 
 - **Build specialization:** `conditional-compilation`, `debug-strip`
 - **Performance optimization:** `constant-folding`, `dead-local`, `merge-locals`, `localizer`,
-  `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`
+  `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`, `unspill`
 
 `conditional-compilation` and `debug-strip` are useful even when raw speed is not the main goal.
 Lua has no native preprocessor, so these rules let you remove platform-specific branches, debug
@@ -155,6 +158,7 @@ avoids relying on aggressive call-site rewrites everywhere:
           "remove-empty-branch": true,
           "localizer": { "scope": "function", "threshold": 2 },
           "loop-rebase": true,
+          "unspill": true,
           "inline": false,
           "math-intrinsics": true,
           "conditional-compilation": false,
@@ -187,6 +191,7 @@ This profile is better for projects that need platform-specific code and log str
           "remove-empty-branch": true,
           "localizer": { "scope": "function", "threshold": 2 },
           "loop-rebase": true,
+          "unspill": true,
           "inline": true,
           "math-intrinsics": true,
           "conditional-compilation": {
@@ -286,6 +291,51 @@ replaces bare identifiers (`DEBUG`), binary comparisons (`PLATFORM === "web"`), 
 - **Supported operators** — `===`, `!==`, `&&`, `||`, `!` in conditions. The rule does not evaluate
   other operators (e.g., `<`, `+`).
 
+### `constant-propagation`
+
+Substitutes literal values for single-assignment locals whose initializer is a `boolean`, `number`,
+or `string` literal. Each read of the local is replaced with the literal itself, which lets
+`constant-folding` collapse the surrounding arithmetic and `dead-local` remove the now-unused
+declaration. The rule runs first in both the `fold` and `refold` phases, so downstream rules see the
+substituted values.
+
+```typescript
+function area(): number {
+  const x = 42;
+  return x;
+}
+
+// Propagation feeds constant-folding: `2 ** BITS` becomes `2 ** 24`, then folds.
+function mask(): number {
+  const BITS = 24;
+  const MASK = 2 ** BITS;
+  return MASK;
+}
+```
+
+```lua
+local function area()
+    return 42
+end
+
+local function mask()
+    return 16777216
+end
+```
+
+Imported `const` literals are resolved at the TypeScript level, so constants cross module
+boundaries — both named imports (`import { X }`) and namespace imports (`import * as mod`) feed the
+same folding.
+
+**Limitations:**
+
+- Reassigned locals are left alone — only single-assignment bindings qualify.
+- Reads inside a nested function body (closure capture) are conservatively skipped, even when the
+  local is provably constant.
+- Destructured and multi-binding declarations (`const [a, b] = ...`) are not propagated.
+- Only `boolean`, `number`, and `string` literals propagate; non-literal initializers (function
+  calls, object/array literals) and `nil` are left in place.
+
 ### `constant-folding`
 
 Evaluates side-effect-free constant expressions after TypeScriptToLua lowers the file to Lua. The
@@ -314,13 +364,13 @@ local greeting = "hello world"
 ### `math-intrinsics`
 
 Replaces `Math.*` calls and arithmetic patterns with inline Lua expressions. Call-expression
-rewrites (`Math.sqrt`, `Math.floor`, etc.) skip LuaJIT targets, which already handle C calls
+rewrites (`Math.sqrt`, `Math.abs`, etc.) skip LuaJIT targets, which already handle C calls
 efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless noted otherwise.
 
 | Source               | Lua output                                                           | Notes                                                          |
 | -------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `Math.sqrt(x)`       | `x ^ 0.5`                                                            | Lossless                                                       |
-| `Math.floor(x)`      | `(x == math.huge or x == -math.huge) and math.floor(x) or x - x % 1` | Lossless; guard preserves `math.huge` for ±∞ inputs            |
+| `Math.floor(n)`      | Literal folded (e.g. `Math.floor(1.7)` → `1`)                        | Numeric-literal argument only; non-literal falls through       |
 | `Math.ceil(n)`       | Literal folded (e.g. `Math.ceil(1.5)` → `2`)                         | Numeric-literal argument only; non-literal falls through       |
 | `Math.round(n)`      | Literal folded (e.g. `Math.round(1.5)` → `2`)                        | Numeric-literal argument only; non-literal falls through       |
 | `Math.abs(x)`        | `(x == 0) and 0 or ((x < 0) and -x or x)`                            | Lossless; zero-check preserves `+0` for `-0` input             |
@@ -333,10 +383,10 @@ efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless no
 
 _Lossless: the rewrite produces bit-identical results to the original call for all finite inputs._
 
-`abs` and `floor` rewrite only side-effect-free arguments, so duplicating them is safe. `ceil` and
+`abs` rewrites only side-effect-free arguments, so duplicating them is safe. `floor`, `ceil`, and
 `round` fold only when the argument is a numeric literal — non-literal arguments pass through to
-`math.ceil` / `math.round`. `max` and `min` rewrite only when **both** arguments are numeric
-literals, which — combined with `constant-folding` — collapses the pattern at compile time;
+`math.floor` / `math.ceil` / `math.round`. `max` and `min` rewrite only when **both** arguments are
+numeric literals, which — combined with `constant-folding` — collapses the pattern at compile time;
 non-literal arguments fall through to `math.max` / `math.min`.
 
 > **Edge cases:** `x ** n` and `x / n` rewrites assume `x` is numeric; they skip non-numeric
@@ -439,7 +489,7 @@ The rule skips the loop when the body assigns the control variable, reads it wit
 
 ### `inline`
 
-Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)).
+Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)). Pass `{ warnCrossModule: true }` to emit diagnostic code 90003 when a cross-module inline is rejected (silent by default).
 
 ```typescript
 /** @inline */
@@ -457,8 +507,8 @@ const y = double(5); // becomes: const y = 5 * 2
 > sites or disable `rules.inline` in your debug config.
 
 Cross-module inlining works for self-contained functions that only reference parameters and
-literals. The rule skips functions that capture module-scope variables and emits a diagnostic
-warning (code 90003).
+literals. The rule silently skips functions that capture module-scope variables by default; set
+`warnCrossModule: true` to emit a diagnostic (code 90003) for each rejection.
 
 ```typescript
 // utils.ts
@@ -637,23 +687,23 @@ bail(n); // warns: @inline ignored — early return in body
 #### Rule interaction
 
 Subsequent rules in the pipeline process inlined `do...end` blocks. For example, if an inlined
-body calls `Math.floor(x)` multiple times, the `localizer` rule hoists a `____math_floor` local as
+body calls `math.sqrt(x)` multiple times, the `localizer` rule hoists a `____math_sqrt` local as
 it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside inlined bodies the
 same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations
 as the rest of the file.
 
 ### `localizer`
 
-Hoists repeated table-index chains (e.g., `math.floor`, `game.players.count`) into local variables
+Hoists repeated table-index chains (e.g., `math.sqrt`, `game.players.count`) into local variables
 at the top of the scope. Inside loop bodies, the rule also localizes repeated `arr[i]` accesses
 (where `i` is the loop control variable) and appends a write-back when the element is assigned.
 
 ```lua
 -- Static chain hoisting
 -- Before                          -- After
-math.floor(x)                      local ____math_floor = math.floor
-math.floor(y)                      ____math_floor(x)
-                                   ____math_floor(y)
+math.sqrt(x)                       local ____math_sqrt = math.sqrt
+math.sqrt(y)                       ____math_sqrt(x)
+                                   ____math_sqrt(y)
 
 -- Array element localization (loop bodies)
 -- Before                          -- After
@@ -695,7 +745,7 @@ Options:
 
 #### Root filtering
 
-##### Default behavior
+#### Default behavior
 
 The localizer hoists only chains rooted at Lua stdlib globals by default:
 `math`, `string`, `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`.
@@ -712,7 +762,7 @@ An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pendi
 `teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
 excluded unless the user explicitly names them in `include`.
 
-##### Restoring previous behavior
+#### Restoring previous behavior
 
 To hoist all chains regardless of root, set `include: ["*"]`. This enables opt-out mode — all roots
 are allowed except those in `exclude` and the internal blocklist (unless also named in `include`).
@@ -745,6 +795,73 @@ in `include`:
 ```jsonc
 "localizer": { "include": ["assert"] }
 ```
+
+### `unspill`
+
+Removes the redundant base/key temporaries TSTL emits when lowering a compound assignment on an
+element/index access. When `arr[i] += rhs` is rewritten by TSTL into
+`local ____v1, ____v2 = arr, i; ____v1[____v2] = ____v1[____v2] + rhs`, the rule folds it back to
+`arr[i] = arr[i] + rhs` once the cached base (`arr`) and key (`i`) are provably side-effect-free.
+
+```typescript
+// Input
+const arr: number[] = [];
+const brr: number[] = [];
+for (const i of $range(0, 999)) {
+  arr[i] += brr[i] * 0.016;
+}
+```
+
+```lua
+-- Before (TSTL default)              -- After (with unspill)
+for i = 1, 1000 do                    for i = 1, 1000 do
+    local ____arr_0, ____temp_1 =         arr[i] = arr[i] + brr[i] * 0.016
+        arr, i                        end
+    ____arr_0[____temp_1] =
+        ____arr_0[____temp_1] +
+        brr[i] * 0.016
+end
+```
+
+The rule also handles the expression / value-temp form (`return (arr[i] += 5)`), where TSTL caches
+base and key unconditionally and emits a third "value" temp for downstream use. When the value temp
+is consumed (`return ____v3`), the base/key temps are still removed and the value temp is kept;
+when the value temp has no other reads, the full pattern collapses to a single assignment.
+
+The rule runs **after** `loop-rebase` because a `$range` loop emits `arr[i + 1]` (whose key `i + 1`
+is a `BinaryExpression`, not pure); rebasing rewrites it to bare `i`, which is what makes the
+cached key foldable.
+
+**Limitations:**
+
+- Property/static-key compound assignment (`obj.field += y`, `arr[5] += y`) is already temp-free in
+  statement position — the rule does nothing on those forms.
+- Non-`$range` C-style `for` loops keep an `i + 1` index — declined under strict purity.
+- Impure base/key (function calls in the chain, non-rebased `i + 1`) is declined unconditionally.
+- Property/column-chain bases (`obj.a.b += y`) are declined by the strict default — a property read
+  could fire `__index`. Callers of the `tstl-optimize/lua-ast` export whose tables are
+  metatable-free can pass a permissive purity predicate to fold these too.
+
+#### Public `lua-ast` export
+
+The rule's AST-level core is also published as `tstl-optimize/lua-ast`:
+
+```typescript
+import { unspillStatements, isLuaRhsPure } from "tstl-optimize/lua-ast";
+// import * as tstl from "typescript-to-lua";
+
+// Strict default — matches the in-plugin rule.
+const out = unspillStatements(stmts);
+
+// Permissive override — additionally fold pure-part property/column chains
+// (safe only when the involved tables are guaranteed metatable-free).
+const folded = unspillStatements(stmts, {
+  isPure: (e) => isLuaRhsPure(e) || (tstl.isTableIndexExpression(e) && ...),
+});
+```
+
+This is intended for downstream plugins that need to perform the same fold before their own
+hoisting pass; the in-plugin rule (`rules.unspill`) is unaffected by callers of the export.
 
 ### `debug-strip`
 
@@ -781,7 +898,7 @@ Options:
 
 ## Strict mode
 
-By default, unresolvable diagnostics from optimization rules are emitted as warnings.
+By default, rules emit unresolvable diagnostics as warnings.
 `conditional-compilation` uses code 90002. `inline` emits rule-specific diagnostics: 90001 for a
 generic inline failure, plus 90003-90010 for specific rejection reasons. Set `strict: true` at the
 plugin level to promote all optimization warnings to compilation errors; the build fails whenever
@@ -849,7 +966,7 @@ Precedence:
 
 ### Diagnostic codes
 
-All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of the codes below.
+The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the codes below.
 
 | Code  | Rule                      | Meaning                                                                                   |
 | ----- | ------------------------- | ----------------------------------------------------------------------------------------- |
@@ -870,21 +987,23 @@ All diagnostics emitted by the plugin carry `source: "tstl-optimize"` and one of
 | ------------------------------- | ---------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `strict`                        | `boolean`                                            | `false`       | Promote optimization warnings to compilation errors globally. `conditional-compilation` uses code 90002; `inline` emits 90001 and more specific 90003-90010 diagnostics. See [Strict mode](#strict-mode). |
 | `rules.conditional-compilation` | `boolean \| ConditionalCompilationConfig`            | `false`       | Strip dead branches based on compile-time constants. Accepts `{ constants: ...; strict?: boolean }` for per-rule error promotion.                                                                         |
+| `rules.constant-propagation`    | `boolean`                                            | `true`        | Substitute literal values for single-assignment locals whose initializer is a `boolean`, `number`, or `string` literal, including imported constants.                                                     |
 | `rules.constant-folding`        | `boolean`                                            | `true`        | Evaluate side-effect-free constant arithmetic, comparison, logical, unary, and string expressions.                                                                                                        |
 | `rules.math-intrinsics`         | `boolean`                                            | `true`        | Inline math calls as Lua expressions.                                                                                                                                                                     |
 | `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function bodies when the initializer is pure.                                                                                                                     |
 | `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
 | `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
-| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)).                          |
+| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)); `warnCrossModule: true` emits code 90003 for silent cross-module rejections. |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
+| `rules.unspill`                 | `boolean`                                            | `true`        | Fold the base/key temporaries TSTL emits for compound assignment on element/index access (`arr[i] += rhs`) when the cached parts are pure.                                                                |
 | `rules.debug-strip`             | `boolean \| DebugStripConfig`                        | `false`       | Strip debug and profiling calls.                                                                                                                                                                          |
 | `target`                        | `"puc" \| "luajit"`                                  | auto-detected | Lua interpreter target. When omitted, the plugin derives it from TSTL's `luaTarget`.                                                                                                                      |
 
 ### Refold phase
 
-After all rules have run, the plugin re-runs `constant-folding`, `dead-local`, `merge-locals`, and
-`remove-empty-branch` in a final "refold" phase. Later rules sometimes create new opportunities for
+After all rules have run, the plugin re-runs `constant-propagation`, `constant-folding`,
+`dead-local`, `merge-locals`, and `remove-empty-branch` in a final "refold" phase. Later rules sometimes create new opportunities for
 earlier ones — for example, `localizer` can introduce consecutive `local` declarations that
 `merge-locals` can combine, or `inline` can expand a body whose constants `constant-folding` can
 evaluate. The refold phase catches these cross-rule wins automatically. Each rule in the refold

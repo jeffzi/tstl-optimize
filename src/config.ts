@@ -33,6 +33,7 @@ export interface ConditionalCompilationConfig {
 export interface InlineConfig {
   enabled?: boolean;
   strict?: boolean;
+  warnCrossModule?: boolean;
 }
 
 export type ConditionalCompilationRuleConfig = boolean | Partial<ConditionalCompilationConfig>;
@@ -41,10 +42,12 @@ export type DebugStripRuleConfig = boolean | Partial<DebugStripConfig>;
 
 export interface RulesConfig {
   "conditional-compilation": ConditionalCompilationRuleConfig;
+  "constant-propagation": boolean;
   "constant-folding": boolean;
   "remove-empty-branch": boolean;
   "math-intrinsics": boolean;
   "loop-rebase": boolean;
+  unspill: boolean;
   inline: boolean | InlineConfig;
   "dead-local": boolean;
   "merge-locals": boolean;
@@ -76,10 +79,12 @@ const DEFAULT_LOCALIZER: LocalizerConfig = {
 
 const DEFAULT_RULES: RulesConfig = {
   "conditional-compilation": false,
+  "constant-propagation": true,
   "constant-folding": true,
   "remove-empty-branch": true,
   "math-intrinsics": true,
   "loop-rebase": true,
+  unspill: true,
   inline: true,
   "dead-local": true,
   "merge-locals": true,
@@ -173,12 +178,15 @@ export function resolveConditionalCompilationConfig(
 export function resolveInlineConfig(value: boolean | InlineConfig | undefined): {
   enabled: boolean;
   strict: boolean;
+  warnCrossModule: boolean;
 } {
-  if (value === false) return { enabled: false, strict: false };
-  if (value === undefined || value === true) return { enabled: true, strict: false };
+  if (value === false) return { enabled: false, strict: false, warnCrossModule: false };
+  if (value === undefined || value === true)
+    return { enabled: true, strict: false, warnCrossModule: false };
   return {
     enabled: value.enabled !== false,
     strict: value.strict === true,
+    warnCrossModule: value.warnCrossModule === true,
   };
 }
 
@@ -282,6 +290,9 @@ function parseInlineRuleConfig(value: unknown): boolean | InlineConfig | undefin
     }
     if (typeof ruleConfig.strict === "boolean") {
       parsed.strict = ruleConfig.strict;
+    }
+    if (typeof ruleConfig.warnCrossModule === "boolean") {
+      parsed.warnCrossModule = ruleConfig.warnCrossModule;
     }
     return parsed;
   });

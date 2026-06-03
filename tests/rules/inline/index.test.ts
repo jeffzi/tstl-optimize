@@ -29,32 +29,41 @@ describe("inline", () => {
 
   describe("positive: inlined", () => {
     it("inlines function declaration", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function double(x: number) { return x * 2; }
         declare const a: number;
         const r = double(a);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("a * 2");
     });
 
     it("inlines arrow function", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         const double = (x: number) => x * 2;
         declare const a: number;
         const r = double(a);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("a * 2");
     });
 
     it("inlines multi-param call with literal args", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function add(a: number, b: number) { return a + b; }
         const x = add(1, 2);
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
       // Constant folding reduces 1 + 2 to 3
       expect(lua).toContain("(3)");
@@ -62,22 +71,28 @@ describe("inline", () => {
 
     it("inlines zero-param function", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function pi() { return 3.14; }
         const r = pi();
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
       expect(lua).toContain("r = 3.14");
     });
 
     it("handles complex body expressions and precedence", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function inc(x: number) { return x + 1; }
         declare const a: number;
         const r = inc(a) * 2;
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("(a + 1) * 2");
     });
 
@@ -282,7 +297,7 @@ describe("inline", () => {
         `,
       },
     ])("skips IIFE wrapper when body has no SE before param first use: $desc", ({ fixture }) => {
-      const lua = compile(fixture);
+      const lua = compile(fixture, { pluginOptions: { rules: { "constant-propagation": false } } });
       // Should NOT contain IIFE/eager-temp marker
       expect(lua).not.toContain("____inline_arg_");
       // The arg should appear directly in output
@@ -290,24 +305,30 @@ describe("inline", () => {
     });
 
     it("inlines side-effecting args used once", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function double(x: number) { return x * 2; }
         declare function foo(): number;
         const r = double(foo());
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).not.toContain("____inline_arg_");
       expect(lua).toContain("foo()");
       expect(lua).toContain("* 2");
     });
 
     it("compiles real const init to Lua code (property access example)", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function mul(x: number): number { return x * x; }
         const stats = { atk: { base: 100 } };
         const atkSquared = mul(stats.atk.base);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // stats table must be defined in Lua output (main fix: const initializer generates code)
       expect(lua).toContain("stats = {");
       expect(lua).toContain("base = 100");
@@ -341,7 +362,7 @@ describe("inline", () => {
           },
         },
       ])("inlines expression-body with $name", ({ code, assertions }) => {
-        const lua = compile(code);
+        const lua = compile(code, { pluginOptions: { rules: { "constant-propagation": false } } });
         assertions(lua);
       });
 
@@ -366,13 +387,14 @@ describe("inline", () => {
           `,
         },
       ])("inlines with mixed required and optional params when $name", ({ code }) => {
-        const lua = compile(code);
+        const lua = compile(code, { pluginOptions: { rules: { "constant-propagation": false } } });
         expect(lua).not.toContain("add(");
         expect(lua).toContain("x");
       });
 
       it("inlines statement-body with optional param at variable-declaration site", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function process(val: number, flag?: boolean): number {
             const adjusted = flag ? val * 2 : val;
@@ -381,17 +403,22 @@ describe("inline", () => {
           declare const n: number;
           declare const f: boolean;
           const result = process(n, f);
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("process(");
       });
 
       it("enforces side-effects for supplied optional args", () => {
-        const { diagnostics } = compileWithDiagnostics(`
+        const { diagnostics } = compileWithDiagnostics(
+          `
           /** @inline */
           function use(x?: number): number { return (x ?? 0) + (x ?? 0); }
           declare function sideEffect(): number;
           const r = use(sideEffect());
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         const hasDiagnostic = diagnostics.some(
           (d) =>
             String(d.messageText).includes("side effect") ||
@@ -402,7 +429,8 @@ describe("inline", () => {
 
       it("eagerly evaluates supplied args before omitted optional params can short-circuit them", () => {
         const lua = normalizeLua(
-          compile(`
+          compile(
+            `
             declare function sideEffect(): number;
 
             /** @inline */
@@ -411,7 +439,9 @@ describe("inline", () => {
             }
 
             const r = f(sideEffect());
-          `),
+          `,
+            { pluginOptions: { rules: { "constant-propagation": false } } },
+          ),
         );
 
         expect(lua).not.toContain("f(");
@@ -420,40 +450,49 @@ describe("inline", () => {
       });
 
       it("inlines with multiple optionals when only some are supplied", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function f(a: number, b?: number, c?: number): number {
             return a + (b ?? 0) + (c ?? 0);
           }
           declare const x: number;
           const r = f(x, 10);
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("f(");
         expect(lua).toContain("x");
         expect(lua).toContain("10");
       });
 
       it("inlines statement-body with optional omitted at expression-statement position", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           declare function print(x: unknown): void;
           /** @inline */
           function greet(name?: string): void {
             if (name) { print(name); }
           }
           greet();
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("greet(");
       });
 
       it("inlines statement-body with optional omitted at return position", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function maybe(x?: number): number {
             const v = x ?? 42;
             return v;
           }
           function test(): number { return maybe(); }
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("maybe(");
       });
 
@@ -477,7 +516,9 @@ describe("inline", () => {
           `,
         },
       ])("rejects call with $name", ({ code }) => {
-        const { diagnostics } = compileWithDiagnostics(code);
+        const { diagnostics } = compileWithDiagnostics(code, {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        });
         const hasArgumentCountError = diagnostics.some((d) =>
           String(d.messageText).includes("argument count"),
         );
@@ -485,13 +526,16 @@ describe("inline", () => {
       });
 
       it("inlines nested calls when inner function has optional param omitted", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function g(x?: number) { return 42; }
           /** @inline */
           function f(x: number) { return x + 1; }
           const r = f(g());
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("f(");
         expect(lua).not.toContain("g(");
       });
@@ -500,19 +544,23 @@ describe("inline", () => {
 
   describe("expression-body deep clone", () => {
     it("preserves nested property access used multiple times to avoid duplicating getters", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function mul(x: number): number { return x * x; }
         declare const obj: { a: { b: { c: number } } };
         const r = mul(obj.a.b.c);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("mul(obj.a.b.c)");
     });
 
     it("preserves closure capture through the call-site temp", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function capture(x: number) {
           return () => x;
@@ -521,7 +569,9 @@ describe("inline", () => {
         let x = 1;
         const g = capture(x);
         x = 2;
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toMatch(/____inline_arg_\d+ = x/);
@@ -532,25 +582,31 @@ describe("inline", () => {
 
   describe("void multi-statement inline", () => {
     it("expands body into do...end block", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         declare function print(...args: unknown[]): void;
         /** @inline */
         function setup(x: number) { let a = x + 1; print(a); }
         setup(10);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("do");
       expect(lua).toMatch(/11|10 \+ 1|____inline_arg_\d+ \+ 1/);
       expect(lua).not.toContain("setup(10)");
     });
 
     it("hoists arguments to temporaries to preserve order", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         declare function print(...args: unknown[]): void;
         /** @inline */
         function foo(a: number, b: number) { print(a + b); }
         declare function s1(): number; declare function s2(): number;
         foo(s1(), s2());
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toMatch(/____inline_arg_\d+ = s1\(\)/);
       expect(lua).toMatch(/____inline_arg_\d+ = s2\(\)/);
     });
@@ -558,29 +614,36 @@ describe("inline", () => {
 
   describe("return-value multi-statement inline", () => {
     it("expands const r = foo(x) to local r / do...end block", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function compute(x: number): number { const y = x + 1; return y * 2; }
         const r = compute(10);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).toContain("local r");
       expect(lua).toContain("do");
       expect(lua).toContain("r = y * 2");
     });
 
     it("expands return foo(x) to flat sequence", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function compute(x: number): number { const y = x + 1; return y * 2; }
         function caller() { return compute(10); }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(lua).not.toMatch(/\bdo\b/);
       expect(lua).toMatch(/11|10 \+ 1|____inline_arg_\d+ \+ 1/);
       expect(lua).toContain("return y * 2");
     });
 
     it("uses temp variable when body local collides with outer binding name", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function fn(x: number): number {
           let result = x + 1;
@@ -588,7 +651,9 @@ describe("inline", () => {
         }
         declare const n: number;
         const result = fn(n);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // When the inlined body declares a local named "result" — the same name as the
       // call-site binding — the expander must use a collision-safe temp inside the
       // do...end block. Otherwise the inner local shadows the result variable,
@@ -598,7 +663,8 @@ describe("inline", () => {
     });
 
     it("uses temp variable when body function declaration collides with outer binding name", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function fn(x: number): number {
           function result() {}
@@ -606,7 +672,9 @@ describe("inline", () => {
         }
         declare const n: number;
         const result = fn(n);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // A function declaration inside the inlined body named "result" must be detected
       // as a collision — same as a variable declaration — so the expander uses a temp.
       expect(lua).toContain("do");
@@ -614,7 +682,8 @@ describe("inline", () => {
     });
 
     it("uses temp variable when a nested block declares the outer binding name", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function fn(x: number): number {
           if (x > 0) {
@@ -625,7 +694,9 @@ describe("inline", () => {
         }
         declare const n: number;
         const result = fn(n);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("do");
       expect(lua).toMatch(/local result = ____inline_result_\d+/);
@@ -692,7 +763,8 @@ describe("inline", () => {
         `,
       },
     ])("uses a temp when $name declares the outer binding name", ({ body }) => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function fn(x: number): number {
           ${body}
@@ -700,14 +772,17 @@ describe("inline", () => {
         }
         declare const n: number;
         const result = fn(n);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(lua).toContain("do");
       expect(lua).toMatch(/local result = ____inline_result_\d+/);
     });
 
     it("preserves binding declaration with correct symbol ID when body local collides", () => {
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function add(a: { n: number; dense: number[] }, index: number): number {
           const di = a.n;
@@ -719,7 +794,9 @@ describe("inline", () => {
           const di = add(a, index);
           a.entities[di] = id;
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       // Regression: binding must reuse call-site variable's symbol ID, otherwise
       // dead-local removes it and outer code reads nil instead of the collision-safe value.
@@ -739,7 +816,8 @@ describe("inline", () => {
   describe("direct argument substitution", () => {
     describe("simple args bypass temp variables", () => {
       it("Case A: single identifier arg substitutes directly — no ____inline_arg_ temp", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function f(x: number): number {
             const a = x * 2;
@@ -747,13 +825,16 @@ describe("inline", () => {
           }
           declare const v: number;
           const r = f(v);
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("____inline_arg_");
         expect(lua).toContain("v * 2");
       });
 
       it("Case B: all identifier args substitute directly — no ____inline_arg_ temps", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function f(x: number, y: number): number {
             const a = y * 2;
@@ -763,27 +844,33 @@ describe("inline", () => {
           declare const u: number;
           declare const v: number;
           const r = f(u, v);
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("____inline_arg_");
         expect(lua).toContain("v * 2");
         expect(lua).toContain("u");
       });
 
       it("Case C: literal arg substitutes directly — no ____inline_arg_ temp", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function f(x: number): number {
             const a = x + 1;
             return a;
           }
           const r = f(10);
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("____inline_arg_");
         expect(lua).toMatch(/11|10 \+ 1/);
       });
 
       it("Case D: caller function params passed as identifier args — no ____inline_arg_ temps", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function resolve(storage: { world: any }, id: number): number {
             const w = storage.world;
@@ -793,7 +880,9 @@ describe("inline", () => {
             const di = resolve(storage, id);
             return storage.entity_dense[di];
           }
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).not.toContain("____inline_arg_");
         expect(lua).toContain("storage.world");
         expect(lua).toContain("id");
@@ -802,7 +891,8 @@ describe("inline", () => {
 
     describe("side-effectful args still create temps (no regression)", () => {
       it("Case E: both args have side effects — temps MUST be created for both", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function f(x: number, y: number): number {
             const a = x + y;
@@ -811,13 +901,16 @@ describe("inline", () => {
           declare function s1(): number;
           declare function s2(): number;
           const r = f(s1(), s2());
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         expect(lua).toMatch(/____inline_arg_\d+.*= s1\(\)/);
         expect(lua).toMatch(/____inline_arg_\d+.*= s2\(\)/);
       });
 
       it("Case F: earlier identifier arg gets a temp when a later arg has side effects", () => {
-        const lua = compile(`
+        const lua = compile(
+          `
           /** @inline */
           function f(x: number, y: number): number {
             const a = x + y;
@@ -826,7 +919,9 @@ describe("inline", () => {
           declare const v: number;
           declare function se(): number;
           const r = f(v, se());
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
         // v (arg 0) must be temped because se() (arg 1) has side effects
         // and se() runs after v in left-to-right evaluation, potentially
         // mutating the variable that v refers to.
@@ -838,7 +933,9 @@ describe("inline", () => {
 
   describe("switch with break in body", () => {
     function expectInlinedWithoutWarnings(source: string): void {
-      const { lua, diagnostics } = compileWithDiagnostics(source);
+      const { lua, diagnostics } = compileWithDiagnostics(source, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       expect(diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Warning)).toHaveLength(
         0,
       );
@@ -894,7 +991,7 @@ describe("inline", () => {
           function f(x: number) { ${body} }
           for (let i = 0; i < 10; i++) f(i);
         `,
-        { skipLuaCheck },
+        { skipLuaCheck, pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("@inline ignored");
@@ -904,21 +1001,27 @@ describe("inline", () => {
       { decl: "function f(...args: unknown[]) {}", name: "rest parameters" },
       { decl: "function f(x: number = 0) {}", name: "default parameters" },
     ])("rejects unsupported $name", ({ decl }) => {
-      const { diagnostics } = compileWithDiagnostics(`
+      const { diagnostics } = compileWithDiagnostics(
+        `
           /** @inline */
           ${decl}
           f();
-        `);
+        `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("not supported");
     });
 
     it("warns on multi-statement body at expression position", () => {
-      const { diagnostics } = compileWithDiagnostics(`
+      const { diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function f(x: number) { const y = x + 1; return y; }
         const r = f(1) + 1;
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("cannot be inlined at expression position");
     });
@@ -964,7 +1067,9 @@ describe("inline", () => {
         expected: "parameter is written inside body",
       },
     ])("rejects $name", ({ expected, source }) => {
-      const { diagnostics } = compileWithDiagnostics(source);
+      const { diagnostics } = compileWithDiagnostics(source, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(
         diagnostics.some((diagnostic) => String(diagnostic.messageText).includes(expected)),
@@ -972,24 +1077,30 @@ describe("inline", () => {
     });
 
     it("warns on side-effect duplication", () => {
-      const { diagnostics } = compileWithDiagnostics(`
+      const { diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function f(x: number) { return x * x; }
         declare function foo(): number;
         f(foo());
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("side effects");
     });
 
     describe("zero-usage param with side-effecting arg", () => {
       it("rejects inlining and emits a side-effect diagnostic", () => {
-        const { diagnostics } = compileWithDiagnostics(`
+        const { diagnostics } = compileWithDiagnostics(
+          `
           /** @inline */
           function f(_x: number) { return 42; }
           declare function sideEffect(): number;
           f(sideEffect());
-        `);
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        );
 
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0].messageText).toContain("side effects");
@@ -1010,11 +1121,14 @@ describe("inline", () => {
         call: "f([1, 2]);",
       },
     ])("rejects $name parameter", ({ decl, call }) => {
-      const { diagnostics } = compileWithDiagnostics(`
+      const { diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         ${decl}
         ${call}
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].messageText).toContain("destructuring parameters are not supported");
@@ -1023,7 +1137,8 @@ describe("inline", () => {
 
   describe("LuaMultiReturn destructuring", () => {
     it("preserves all values when destructuring multi-return inline function", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
           const tmp = a;
@@ -1032,7 +1147,9 @@ describe("inline", () => {
         declare const x: number;
         declare const y: number;
         const [p, q] = swap(x, y);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       const warnings = diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Warning);
       expect(warnings).toHaveLength(0);
       // The multi-statement body should be inlined: the call should be expanded,
@@ -1048,13 +1165,16 @@ describe("inline", () => {
     });
 
     it("inlines expression-bodied arrow multi-return functions at array destructuring sites", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => $multi(b, a);
         declare const x: number;
         declare const y: number;
         const [p, q] = swap(x, y);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).not.toContain("swap(");
@@ -1062,7 +1182,8 @@ describe("inline", () => {
     });
 
     it("preserves return-site context when directly returning an inlined multi-return call", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function swap(a: number, b: number): LuaMultiReturn<[number, number]> {
           return $multi(b, a);
@@ -1071,7 +1192,9 @@ describe("inline", () => {
         function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
           return swap(x, y);
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).not.toContain("swap(");
@@ -1079,14 +1202,17 @@ describe("inline", () => {
     });
 
     it("inlines expression-bodied arrow multi-return functions at return sites", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => $multi(b, a);
 
         function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
           return swap(x, y);
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).not.toContain("swap(");
@@ -1094,7 +1220,8 @@ describe("inline", () => {
     });
 
     it("inlines block-bodied arrow multi-return functions at return sites", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         const swap = (a: number, b: number): LuaMultiReturn<[number, number]> => {
           const tmp = a;
@@ -1104,7 +1231,9 @@ describe("inline", () => {
         function pair(x: number, y: number): LuaMultiReturn<[number, number]> {
           return swap(x, y);
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).not.toContain("swap(");
@@ -1112,7 +1241,8 @@ describe("inline", () => {
     });
 
     it("preserves argument evaluation order for block-bodied arrow destructuring sites", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         declare function s1(): number;
         declare function s2(): number;
 
@@ -1123,7 +1253,9 @@ describe("inline", () => {
         };
 
         const [p, q] = swap(s1(), s2());
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).not.toContain("swap(");
@@ -1142,7 +1274,7 @@ describe("inline", () => {
         declare function foo(): number;
         f(foo());
       `,
-        { pluginOptions: { strict: true } },
+        { pluginOptions: { strict: true, rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
@@ -1167,13 +1299,16 @@ describe("inline", () => {
         exportStmt: "export { double as myDouble };",
       },
     ])("preserves and inlines $name", ({ decl, exportStmt }) => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         ${decl}
         declare const a: number;
         const r = double(a);
         ${exportStmt}
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).not.toContainEqual(
         expect.objectContaining({ category: ts.DiagnosticCategory.Warning }),
@@ -1183,11 +1318,14 @@ describe("inline", () => {
     });
 
     it("preserves definition when there is no local call site", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function double(x: number) { return x * 2; }
         export { double };
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).not.toContainEqual(
         expect.objectContaining({ category: ts.DiagnosticCategory.Warning }),
@@ -1388,7 +1526,9 @@ describe("inline rejection guard rails", () => {
       }
       export const x = fact(5);
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("fact(5)");
   });
 
@@ -1400,7 +1540,9 @@ describe("inline rejection guard rails", () => {
       }
       export const a = foo(5);
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("foo(5)");
   });
 
@@ -1412,7 +1554,9 @@ describe("inline rejection guard rails", () => {
       // multi-stmt at expr position fails prereq
       export const x = { val: foo() };
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("foo()");
   });
 
@@ -1426,7 +1570,9 @@ describe("inline rejection guard rails", () => {
       }
       export const x = 1 + foo();
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("foo()");
   });
 
@@ -1442,7 +1588,9 @@ describe("inline rejection guard rails", () => {
         foo(); // Void site
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("foo()");
   });
 
@@ -1459,7 +1607,9 @@ describe("inline rejection guard rails", () => {
         return myA + b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("side effect");
     expect(lua).toContain("myA");
     expect(lua).toContain("b");
@@ -1478,7 +1628,9 @@ describe("inline rejection guard rails", () => {
         return b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("getObj()");
   });
 
@@ -1495,7 +1647,9 @@ describe("inline rejection guard rails", () => {
         return x + y;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("unpack");
   });
 
@@ -1510,7 +1664,9 @@ describe("inline rejection guard rails", () => {
       }
       export const a = withTry();
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("withTry()");
   });
 });
@@ -1531,7 +1687,9 @@ describe("inline: statement-position and argument handling", () => {
         add(x, y);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // The call add(x, y) should be inlined
       expect(lua).not.toContain("add(");
@@ -1593,7 +1751,9 @@ describe("inline: statement-position and argument handling", () => {
       patterns,
       wrapperName,
     }) => {
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain(`${wrapperName}(`);
       for (const pattern of patterns) {
@@ -1605,7 +1765,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("uses a collision-safe discard temp instead of shadowing an existing underscore local", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
           let _ = 0;
           declare function effect(): number;
 
@@ -1616,7 +1777,9 @@ describe("inline: statement-position and argument handling", () => {
 
           run();
           const result = _;
-        `),
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).not.toContain("run()");
@@ -1650,6 +1813,7 @@ describe("inline: statement-position and argument handling", () => {
           {
             pluginOptions: {
               rules: {
+                "constant-propagation": false,
                 "conditional-compilation": {
                   constants: { STRIP: { env: "TSTL_OPT_TEST_STRIP", default: true } },
                 },
@@ -1682,7 +1846,9 @@ describe("inline: statement-position and argument handling", () => {
         }
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(
         diagnostics.some((d) =>
@@ -1708,7 +1874,9 @@ describe("inline: statement-position and argument handling", () => {
         }
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(
         diagnostics.some((d) =>
@@ -1734,7 +1902,9 @@ describe("inline: statement-position and argument handling", () => {
         const result = sum(a, a + 1);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Rest parameters should not be inlined, call should remain
       expect(lua).toContain("sum(a, a + 1)");
@@ -1743,7 +1913,8 @@ describe("inline: statement-position and argument handling", () => {
 
   describe("expression-body inlining restrictions", () => {
     it("still inlines unused pure arguments and erases the declaration", () => {
-      const { lua, diagnostics } = compileWithDiagnostics(`
+      const { lua, diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function ignore(x: number): number {
           return 42;
@@ -1751,7 +1922,9 @@ describe("inline: statement-position and argument handling", () => {
 
         declare const value: number;
         const result = ignore(value);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(diagnostics).toHaveLength(0);
       expect(lua).toContain("result = 42");
@@ -1774,7 +1947,9 @@ describe("inline: statement-position and argument handling", () => {
         increment(counter);
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       // Parameter write in multi-statement should be detected
       expect(diagnostics.some((d) => String(d.messageText).includes("parameter is written"))).toBe(
@@ -1796,7 +1971,9 @@ describe("inline: statement-position and argument handling", () => {
         countDown(n);
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(diagnostics.some((d) => String(d.messageText).includes("recursive"))).toBe(true);
     });
@@ -1831,7 +2008,9 @@ describe("inline: statement-position and argument handling", () => {
         `,
       },
     ])("rejects $name", ({ code }) => {
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(
         diagnostics.some((d) =>
@@ -1858,7 +2037,9 @@ describe("inline: statement-position and argument handling", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // statementsWithReturn should be inlined even at expression position
       // The call should be replaced with the inlined statements
@@ -1883,7 +2064,9 @@ describe("inline: statement-position and argument handling", () => {
         }
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(diagnostics.some((d) => String(d.messageText).includes("early return in body"))).toBe(
         true,
@@ -1903,7 +2086,9 @@ describe("inline: statement-position and argument handling", () => {
         }
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(
         diagnostics.some((d) =>
@@ -1925,7 +2110,9 @@ describe("inline: statement-position and argument handling", () => {
         }
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(
         diagnostics.some((d) =>
@@ -1951,7 +2138,9 @@ describe("inline: statement-position and argument handling", () => {
         const result = maybeIncrement(x);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // If without else but with return in both paths should inline
       expect(lua).toContain("x");
@@ -1973,7 +2162,9 @@ describe("inline: statement-position and argument handling", () => {
         countUp(n);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // While loop with linear control flow should inline at void site
       expect(lua).not.toContain("countUp(n)");
@@ -1995,7 +2186,9 @@ describe("inline: statement-position and argument handling", () => {
         countdown(n);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Do-while with linear control flow should inline
       expect(lua).not.toContain("countdown(n)");
@@ -2015,7 +2208,9 @@ describe("inline: statement-position and argument handling", () => {
         process(items);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // For loop with linear control flow should inline
       expect(lua).not.toContain("process(items)");
@@ -2037,7 +2232,9 @@ describe("inline: statement-position and argument handling", () => {
         safeCall(fn);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Try-catch with linear control flow should inline
       expect(lua).not.toContain("safeCall(fn)");
@@ -2060,7 +2257,9 @@ describe("inline: statement-position and argument handling", () => {
         process(x);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Switch with all branches having break should inline
       expect(lua).not.toContain("process(x)");
@@ -2077,7 +2276,9 @@ describe("inline: statement-position and argument handling", () => {
         noop(x);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Empty function should inline to nothing
       expect(lua).not.toContain("noop(x)");
@@ -2095,7 +2296,9 @@ describe("inline: statement-position and argument handling", () => {
         run(sideEffect());
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("run(");
       expect(lua).toContain("sideEffect()");
@@ -2116,7 +2319,9 @@ describe("inline: statement-position and argument handling", () => {
         run(first(), second());
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("run(");
       expect(lua).toContain("first()");
@@ -2138,7 +2343,9 @@ describe("inline: statement-position and argument handling", () => {
         const result = triple(x);
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Pure argument with multiple uses should inline
       expect(lua).toContain("x + x + x");
@@ -2146,7 +2353,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("preserves left-to-right evaluation when expression-body parameters are used out of order", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
           declare function s1(): number;
           declare function s2(): number;
 
@@ -2156,7 +2364,9 @@ describe("inline: statement-position and argument handling", () => {
           }
 
           const x = sub(s1(), s2());
-        `),
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toMatch(/____inline_arg_\d+ = s1\(\)/);
@@ -2166,7 +2376,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("preserves eager evaluation for arguments that would otherwise sit behind a conditional", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
           declare function choose(): boolean;
           declare function s1(): number;
           declare function s2(): number;
@@ -2177,7 +2388,9 @@ describe("inline: statement-position and argument handling", () => {
           }
 
           const x = pick(choose(), s1(), s2());
-        `),
+        `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toMatch(/____inline_arg_\d+ = choose\(\)/);
@@ -2328,7 +2541,7 @@ describe("inline: statement-position and argument handling", () => {
         `,
       },
     ])("retains IIFE wrapper when body has SE before param first use: $desc", ({ fixture }) => {
-      const lua = compile(fixture);
+      const lua = compile(fixture, { pluginOptions: { rules: { "constant-propagation": false } } });
       expect(lua).toContain("____inline_arg_");
     });
   });
@@ -2344,7 +2557,9 @@ describe("inline: statement-position and argument handling", () => {
         helper(5);
       `;
 
-      const { lua } = compileWithDiagnostics(code);
+      const { lua } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       const normalized = normalizeLua(lua);
 
       // Call must be preserved because function is not tagged @inline
@@ -2363,7 +2578,9 @@ describe("inline: statement-position and argument handling", () => {
         multiply(5);
       `;
 
-      const { lua, diagnostics } = compileWithDiagnostics(code);
+      const { lua, diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       const normalized = normalizeLua(lua);
 
       // Call must be preserved because default parameters are not supported
@@ -2387,7 +2604,9 @@ describe("inline: statement-position and argument handling", () => {
         const b = helper(1) + 1;
       `;
 
-      const { lua, diagnostics } = compileWithDiagnostics(code);
+      const { lua, diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       const normalized = normalizeLua(lua);
 
       expect(normalized).toContain("local a");
@@ -2553,7 +2772,9 @@ describe("inline: statement-position and argument handling", () => {
         `,
       },
     ])("does not inline when $name", ({ source }) => {
-      const { diagnostics } = compileWithDiagnostics(source);
+      const { diagnostics } = compileWithDiagnostics(source, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
 
       expect(diagnostics.some((d) => String(d.messageText).includes("early return in body"))).toBe(
         true,
@@ -2563,7 +2784,8 @@ describe("inline: statement-position and argument handling", () => {
 
   describe("variable and return site edge cases", () => {
     it("reports unsupported default parameters from a return-site call", () => {
-      const { diagnostics } = compileWithDiagnostics(`
+      const { diagnostics } = compileWithDiagnostics(
+        `
         /** @inline */
         function scale(value: number = 2): number {
           return value * 2;
@@ -2572,7 +2794,9 @@ describe("inline: statement-position and argument handling", () => {
         function test() {
           return scale();
         }
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
 
       expect(
         diagnostics.some((d) =>
@@ -2583,7 +2807,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("uses a temporary result name when an else branch declares the call-site binding name", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function choose(flag: boolean): number {
           if (flag) {
@@ -2595,7 +2820,9 @@ describe("inline: statement-position and argument handling", () => {
         }
 
         const result = choose(true);
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("____inline_result_");
@@ -2606,7 +2833,8 @@ describe("inline: statement-position and argument handling", () => {
   describe("destructuring fall-back cases", () => {
     it("falls back to the call for object destructuring with a rest element", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getObj(): { a: number; b: number } {
           const obj = { a: 1, b: 2 };
@@ -2617,7 +2845,9 @@ describe("inline: statement-position and argument handling", () => {
           const { a, ...rest } = getObj();
           return a + rest.b;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getObj()");
@@ -2625,7 +2855,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("falls back to the call for object destructuring with a default initializer", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getObj(): { a?: number } {
           const obj = {};
@@ -2636,7 +2867,9 @@ describe("inline: statement-position and argument handling", () => {
           const { a = 1 } = getObj();
           return a;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getObj()");
@@ -2644,7 +2877,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("falls back to the call for object destructuring with a string-literal property name", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getObj(): { value: number } {
           const obj = { value: 1 };
@@ -2655,7 +2889,9 @@ describe("inline: statement-position and argument handling", () => {
           const { "value": localValue } = getObj();
           return localValue;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getObj()");
@@ -2663,7 +2899,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("falls back to the call for array destructuring with an omitted element", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getArr(): [number, number] {
           const values: [number, number] = [1, 2];
@@ -2674,7 +2911,9 @@ describe("inline: statement-position and argument handling", () => {
           const [, second] = getArr();
           return second;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getArr()");
@@ -2682,7 +2921,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("falls back to the call for array destructuring with a rest element", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getArr(): number[] {
           const values = [1, 2, 3];
@@ -2693,7 +2933,9 @@ describe("inline: statement-position and argument handling", () => {
           const [...rest] = getArr();
           return rest.length;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getArr()");
@@ -2701,7 +2943,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("falls back to the call for array destructuring with a nested binding pattern", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getArr(): Array<[number]> {
           const values: Array<[number]> = [[1]];
@@ -2712,7 +2955,9 @@ describe("inline: statement-position and argument handling", () => {
           const [[first]] = getArr();
           return first;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getArr()");
@@ -2720,7 +2965,8 @@ describe("inline: statement-position and argument handling", () => {
 
     it("falls back to the call for array destructuring with a default initializer", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         /** @inline */
         function getArr(): [number?] {
           const values: [number?] = [];
@@ -2731,7 +2977,9 @@ describe("inline: statement-position and argument handling", () => {
           const [first = 1] = getArr();
           return first;
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).toContain("getArr()");
@@ -3639,22 +3887,25 @@ describe("inline: statement-position and argument handling", () => {
     });
 
     it("returns undefined from direct variable visitors when cross-module free variables block inlining", () => {
-      const { visitors, program } = createInlineVisitors({
-        "/utils.ts": `
-          export let factor = 2;
+      const { visitors, program } = createInlineVisitors(
+        {
+          "/utils.ts": `
+            export let factor = 2;
 
-          /** @inline */
-          export function multiply(value: number): number {
-            const result = value * factor;
-            return result;
-          }
-        `,
-        "/main.ts": `
-          import { multiply } from "./utils";
+            /** @inline */
+            export function multiply(value: number): number {
+              const result = value * factor;
+              return result;
+            }
+          `,
+          "/main.ts": `
+            import { multiply } from "./utils";
 
-          const result = multiply(3);
-        `,
-      });
+            const result = multiply(3);
+          `,
+        },
+        { rules: { inline: { warnCrossModule: true } } },
+      );
       const sourceFile = program.getSourceFile("/main.ts");
       const visitor = Reflect.get(visitors, ts.SyntaxKind.VariableStatement) as (
         node: ts.Node,
@@ -3792,7 +4043,9 @@ describe("inline: statement-position and argument handling", () => {
         export const x = fact(5);
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       const diag = findDiagnostic(diagnostics, (text) => text.includes("recursive"));
       expect(diag.code).toBe(90004);
     });
@@ -3809,7 +4062,9 @@ describe("inline: statement-position and argument handling", () => {
         export const result = useArg(sideEffect());
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       const diag = findDiagnostic(
         diagnostics,
         (text) => text.includes("side effect") || text.includes("argument"),
@@ -3830,7 +4085,9 @@ describe("inline: statement-position and argument handling", () => {
         export const x = 1 + foo();
       `;
 
-      const { diagnostics } = compileWithDiagnostics(code);
+      const { diagnostics } = compileWithDiagnostics(code, {
+        pluginOptions: { rules: { "constant-propagation": false } },
+      });
       const diag = findDiagnostic(diagnostics, (text) => text.includes("expression position"));
       expect(diag.code).toBe(90010);
     });

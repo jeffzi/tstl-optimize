@@ -5,8 +5,8 @@ const N = 1000;
 // Module-level references ensure the localizer sees each chain 2+ times in the AST,
 // triggering hoisting. Without these, each chain appears only once (in the loop body)
 // and wouldn't meet the default threshold of 2.
-const _warmupClock = os.clock();
-const _warmupByte = string.byte("A");
+os.clock();
+string.byte("A");
 
 // Nested table simulates a multi-level namespace (common in game engines).
 // Non-stdlib roots are only hoisted at function scope (lenient filter), so the
@@ -26,7 +26,7 @@ print("=== os.clock: global chain vs localizer-hoisted local ===");
 print(
   render(
     compare_time({
-      "os[key]() (baseline)": {
+      "[baseline]  os[key]()": {
         fn: () => {
           for (let i = 0; i < N; i++) {
             (os as unknown as Record<string, () => number>)[clockKey]();
@@ -34,7 +34,7 @@ print(
         },
         baseline: true,
       },
-      "os.clock() [localizer hoists]": () => {
+      "[optimized] os.clock()": () => {
         for (let i = 0; i < N; i++) {
           os.clock();
         }
@@ -48,7 +48,7 @@ print("\n=== string.byte: global chain vs localizer-hoisted local ===");
 print(
   render(
     compare_time({
-      'string[key]("A") (baseline)': {
+      '[baseline]  string[key]("A")': {
         fn: () => {
           for (let i = 0; i < N; i++) {
             (string as unknown as Record<string, (s: string) => number>)[byteKey]("A");
@@ -56,7 +56,7 @@ print(
         },
         baseline: true,
       },
-      'string.byte("A") [localizer hoists]': () => {
+      '[optimized] string.byte("A")': () => {
         for (let i = 0; i < N; i++) {
           string.byte("A");
         }
@@ -68,28 +68,27 @@ print(
 // Deeper chain (3 levels): each extra level is an extra table lookup saved.
 // Demonstrates proportionally larger wins with deeper nesting.
 print("\n=== app.physics.gravity: 3-level chain vs localizer-hoisted local ===");
-let deepAcc = 0;
+let _deepAcc = 0;
 print(
   render(
     compare_time({
-      "app[key].gravity (baseline)": {
+      "[baseline]  app[key].gravity": {
         fn: () => {
           let sum = (app as unknown as Record<string, { gravity: number }>)[physicsKey].gravity;
           for (let i = 0; i < N; i++) {
             sum += (app as unknown as Record<string, { gravity: number }>)[physicsKey].gravity;
           }
-          deepAcc += sum;
+          _deepAcc += sum;
         },
         baseline: true,
       },
-      "app.physics.gravity [localizer hoists]": () => {
+      "[optimized] app.physics.gravity": () => {
         let sum = app.physics.gravity;
         for (let i = 0; i < N; i++) {
           sum += app.physics.gravity;
         }
-        deepAcc += sum;
+        _deepAcc += sum;
       },
     }),
   ),
 );
-print(deepAcc);

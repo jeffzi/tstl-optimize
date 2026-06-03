@@ -127,7 +127,9 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { diagnostics } = compileMultiFileWithDiagnostics(files);
+      const { diagnostics } = compileMultiFileWithDiagnostics(files, {
+        pluginOptions: { rules: { inline: { warnCrossModule: true } } },
+      });
 
       expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
       expect(
@@ -415,7 +417,9 @@ describe("cross-module const literal inlining", () => {
         },
       },
     ])("emits diagnostic 90003 when const is $name", ({ files }) => {
-      const { diagnostics } = compileMultiFileWithDiagnostics(files);
+      const { diagnostics } = compileMultiFileWithDiagnostics(files, {
+        pluginOptions: { rules: { inline: { warnCrossModule: true } } },
+      });
 
       expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
     });
@@ -824,7 +828,9 @@ describe("cross-module const literal inlining", () => {
         `,
       };
 
-      const { diagnostics } = compileMultiFileWithDiagnostics(files);
+      const { diagnostics } = compileMultiFileWithDiagnostics(files, {
+        pluginOptions: { rules: { inline: { warnCrossModule: true } } },
+      });
 
       expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
     });

@@ -13,7 +13,9 @@ const PRINT_DECL = "declare function print(...args: unknown[]): void;";
 
 function ccOpts(constants: Record<string, { env: string; default: boolean | number | string }>) {
   return {
-    pluginOptions: { rules: { "conditional-compilation": { constants } } },
+    pluginOptions: {
+      rules: { "constant-propagation": false, "conditional-compilation": { constants } },
+    },
   };
 }
 

@@ -235,10 +235,42 @@ describe("cross-module inlining", () => {
         },
       },
     ])("preserves $expectedCall for $name", ({ expectedCall, files }) => {
-      const { diagnostics, lua } = compileMultiFileWithDiagnostics(files);
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics(files, {
+        pluginOptions: { rules: { inline: { warnCrossModule: true } } },
+      });
 
       expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
       expect(normalizeLua(lua)).toContain(expectedCall);
+    });
+  });
+
+  describe("warnCrossModule", () => {
+    const CROSS_MODULE_FILES = {
+      "utils.ts": `
+        let factor = 2;
+        /** @inline */
+        export function scale(value: number): number {
+          return value * factor;
+        }
+      `,
+      "main.ts": `
+        import { scale } from "./utils";
+        export const result = scale(7);
+      `,
+    };
+
+    it("suppresses TS90003 by default when cross-module inline is rejected", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics(CROSS_MODULE_FILES);
+      expect(diagnostics).toHaveLength(0);
+      expect(normalizeLua(lua)).toContain("scale(7)");
+    });
+
+    it("emits TS90003 when warnCrossModule is true", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics(CROSS_MODULE_FILES, {
+        pluginOptions: { rules: { inline: { warnCrossModule: true } } },
+      });
+      expect(hasDiagnosticCode(diagnostics, 90003)).toBe(true);
+      expect(normalizeLua(lua)).toContain("scale(7)");
     });
   });
 });

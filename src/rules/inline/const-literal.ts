@@ -147,6 +147,40 @@ function getConstValueSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Sym
   return checker.getAliasedSymbol(symbol);
 }
 
+/**
+ * Resolve a const initializer from a symbol referenced in an expression.
+ * Handles symbol resolution, cycle detection, and forward-reference checks.
+ */
+function evaluateSymbolConstInitializer(
+  symbol: ts.Symbol,
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  visited: Set<ts.Symbol>,
+): LiteralKind | undefined {
+  const valueSymbol = getConstValueSymbol(symbol, checker);
+  if (visited.has(valueSymbol)) return undefined;
+
+  const constInitializer = findConstInitializer(valueSymbol);
+  if (constInitializer === undefined) {
+    return undefined;
+  }
+
+  // Guard against forward references (declaration appears after use)
+  if (
+    ts.isIdentifier(expression) &&
+    isDeclaredAfterReference(constInitializer.declaration, expression)
+  ) {
+    return undefined;
+  }
+
+  visited.add(valueSymbol);
+  try {
+    return evaluateConstInitializer(constInitializer.initializer, checker, visited);
+  } finally {
+    visited.delete(valueSymbol);
+  }
+}
+
 function evaluateConstInitializer(
   node: ts.Expression,
   checker: ts.TypeChecker,
@@ -157,20 +191,15 @@ function evaluateConstInitializer(
   if (ts.isIdentifier(expression)) {
     const symbol = checker.getSymbolAtLocation(expression);
     if (!symbol) return undefined;
+    return evaluateSymbolConstInitializer(symbol, expression, checker, visited);
+  }
 
-    const valueSymbol = getConstValueSymbol(symbol, checker);
-    if (visited.has(valueSymbol)) return undefined;
-
-    const constInitializer = findConstInitializer(valueSymbol);
-    if (!constInitializer) return undefined;
-    if (isDeclaredAfterReference(constInitializer.declaration, expression)) return undefined;
-
-    visited.add(valueSymbol);
-    try {
-      return evaluateConstInitializer(constInitializer.initializer, checker, visited);
-    } finally {
-      visited.delete(valueSymbol);
-    }
+  // Resolve namespace-import member accesses like `mod.X` inside const initializers.
+  // This allows re-export chains (export const VALUE = ns.VALUE) to be evaluated.
+  if (ts.isPropertyAccessExpression(expression)) {
+    const symbol = checker.getSymbolAtLocation(expression);
+    if (!symbol) return undefined;
+    return evaluateSymbolConstInitializer(symbol, expression, checker, visited);
   }
 
   if (ts.isTemplateExpression(expression)) {

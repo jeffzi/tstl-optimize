@@ -24,6 +24,7 @@ describe("localizer: parameter shadowing", () => {
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "function",
                 include: ["config"],
@@ -56,6 +57,7 @@ describe("localizer: parameter shadowing", () => {
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],
@@ -88,6 +90,7 @@ describe("localizer: parameter shadowing", () => {
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "function",
                 include: ["obj"],
@@ -124,6 +127,7 @@ describe("localizer: parameter shadowing", () => {
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "function",
                 include: ["arr"],
@@ -158,6 +162,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "all",
                 include: ["config"],
@@ -193,6 +198,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],
@@ -226,6 +232,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],
@@ -258,6 +265,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],
@@ -291,6 +299,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],
@@ -332,6 +341,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],
@@ -362,6 +372,7 @@ describe("localizer: module-scope hoisting respects nested function scoping", ()
         {
           pluginOptions: {
             rules: {
+              "constant-propagation": false,
               localizer: {
                 scope: "module",
                 include: ["config"],

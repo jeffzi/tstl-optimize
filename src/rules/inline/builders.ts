@@ -307,6 +307,7 @@ export function inlineExpressionBody(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   strict: boolean,
+  warnCrossModule: boolean,
 ): tstl.Expression | undefined {
   const canInlineResult = canInline(target, callNode, checker);
   if (canInlineResult !== undefined) {
@@ -323,6 +324,7 @@ export function inlineExpressionBody(
     checker,
     context,
     strict,
+    warnCrossModule,
   );
   if (classification.reject) {
     return undefined;

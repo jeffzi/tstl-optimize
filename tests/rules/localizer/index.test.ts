@@ -1661,24 +1661,22 @@ describe("localizer", () => {
   });
 
   describe("when interacting with other rules", () => {
-    it("math-intrinsics transforms Math.floor to inline on PUC — nothing for localizer to hoist", () => {
+    it("localizer hoists repeated Math.floor calls to a local", () => {
       const lua = compile(
         "declare const x: number; const a = Math.floor(x); const b = Math.floor(x);",
         MODULE_SCOPE,
       );
-      // PUC target: math-intrinsics emits the guarded floor fast path, so localizer
-      // still has no standalone math.floor chain to hoist.
-      expect(lua).toContain("math.floor");
-      expect(lua).not.toContain("local ____math_floor = math.floor");
-      expect(lua).toContain("x % 1");
+      // Math.floor is not rewritten by math-intrinsics (no inline fast path),
+      // so localizer hoists the repeated math.floor chain.
+      expect(lua).toContain("local ____math_floor = math.floor");
+      expect(lua).toContain("____math_floor(x)");
     });
 
-    it("LuaJIT target: math-intrinsics skips, localizer hoists math.floor", () => {
+    it("LuaJIT target: localizer hoists math.floor", () => {
       const lua = compile(
         "declare const x: number; const a = Math.floor(x); const b = Math.floor(x);",
         { ...MODULE_SCOPE, luaTarget: tstl.LuaTarget.LuaJIT },
       );
-      // LuaJIT: math-intrinsics doesn't transform, localizer hoists
       expect(lua).toContain("local ____math_floor = math.floor");
       expect(lua).toContain("____math_floor(x)");
     });

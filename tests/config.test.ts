@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { ConditionalCompilationConfig, LocalizerConfig, RulesConfig } from "../src/config";
+import type { ConditionalCompilationConfig, RulesConfig } from "../src/config";
 import {
   isRecord,
   isRuleEnabled,
@@ -20,28 +20,34 @@ describe("resolveConditionalCompilationConfig", () => {
   });
 
   it("ignores malformed constant definitions", () => {
-    const result = Reflect.apply(resolveConditionalCompilationConfig, undefined, [
-      {
-        enabled: true,
-        constants: {
-          GOOD: { env: "TEST_CC_VALID", default: false },
-          BAD_ENV: { env: 42, default: true },
-          BAD_DEFAULT: { env: "TEST_CC_INVALID_DEFAULT", default: { nested: true } },
-          MISSING_ENV: { default: true },
+    const parsed = parseConfig({
+      rules: {
+        "conditional-compilation": {
+          enabled: true,
+          constants: {
+            GOOD: { env: "TEST_CC_VALID", default: false },
+            BAD_ENV: { env: 42, default: true },
+            BAD_DEFAULT: { env: "TEST_CC_INVALID_DEFAULT", default: { nested: true } },
+            MISSING_ENV: { default: true },
+          },
         },
       },
-    ]);
+    });
+    const result = resolveConditionalCompilationConfig(parsed.rules["conditional-compilation"]);
 
     expect(result).toStrictEqual(new Map([["GOOD", false]]));
   });
 
-  it("ignores non-record constants at resolution time", () => {
-    const result = Reflect.apply(resolveConditionalCompilationConfig, undefined, [
-      {
-        enabled: true,
-        constants: "DEBUG",
+  it("ignores non-record constants config", () => {
+    const parsed = parseConfig({
+      rules: {
+        "conditional-compilation": {
+          enabled: true,
+          constants: "DEBUG",
+        },
       },
-    ]);
+    });
+    const result = resolveConditionalCompilationConfig(parsed.rules["conditional-compilation"]);
 
     expect(result).toStrictEqual(new Map());
   });
@@ -49,12 +55,23 @@ describe("resolveConditionalCompilationConfig", () => {
 
 describe("resolveInlineConfig", () => {
   it.each([
-    { input: false, expected: { enabled: false, strict: false } },
-    { input: undefined, expected: { enabled: true, strict: false } },
-    { input: true, expected: { enabled: true, strict: false } },
-    { input: { enabled: false }, expected: { enabled: false, strict: false } },
-    { input: { strict: true }, expected: { enabled: true, strict: true } },
-    { input: { enabled: false, strict: true }, expected: { enabled: false, strict: true } },
+    { input: false, expected: { enabled: false, strict: false, warnCrossModule: false } },
+    { input: undefined, expected: { enabled: true, strict: false, warnCrossModule: false } },
+    { input: true, expected: { enabled: true, strict: false, warnCrossModule: false } },
+    {
+      input: { enabled: false },
+      expected: { enabled: false, strict: false, warnCrossModule: false },
+    },
+    { input: { strict: true }, expected: { enabled: true, strict: true, warnCrossModule: false } },
+    {
+      input: { enabled: false, strict: true },
+      expected: { enabled: false, strict: true, warnCrossModule: false },
+    },
+    { input: {}, expected: { enabled: true, strict: false, warnCrossModule: false } },
+    {
+      input: { warnCrossModule: true },
+      expected: { enabled: true, strict: false, warnCrossModule: true },
+    },
   ])("resolves $input to $expected", ({ input, expected }) => {
     expect(resolveInlineConfig(input)).toStrictEqual(expected);
   });
@@ -70,6 +87,16 @@ describe("parseConfig", () => {
     ])("parses inline: $input as $expected", ({ input, expected }) => {
       const config = parseConfig({ rules: { inline: input } });
       expect(config.rules.inline).toStrictEqual(expected);
+    });
+
+    it("preserves warnCrossModule: true", () => {
+      const config = parseConfig({ rules: { inline: { warnCrossModule: true } } });
+      expect(config.rules.inline).toStrictEqual({ warnCrossModule: true });
+    });
+
+    it("drops invalid warnCrossModule value", () => {
+      const config = parseConfig({ rules: { inline: { warnCrossModule: "invalid" } } });
+      expect(config.rules.inline).toStrictEqual({});
     });
   });
 
@@ -118,6 +145,7 @@ describe("isRuleEnabled", () => {
 const EXPECTED_RULE_KEYS: ReadonlyArray<keyof RulesConfig> = [
   "conditional-compilation",
   "constant-folding",
+  "constant-propagation",
   "dead-local",
   "debug-strip",
   "inline",
@@ -126,6 +154,7 @@ const EXPECTED_RULE_KEYS: ReadonlyArray<keyof RulesConfig> = [
   "math-intrinsics",
   "merge-locals",
   "remove-empty-branch",
+  "unspill",
 ];
 
 function collectRuleEnabledStates(
@@ -192,14 +221,17 @@ describe("resolveDebugStripConfig", () => {
     expect(resolveDebugStripConfig(false)).toBe(false);
   });
 
-  it("falls back to default arrays when direct input contains non-array fields", () => {
-    const result = Reflect.apply(resolveDebugStripConfig, undefined, [
-      {
-        enabled: true,
-        functions: "print",
-        namespaces: 0,
+  it("falls back to default arrays when config contains non-array fields", () => {
+    const parsed = parseConfig({
+      rules: {
+        "debug-strip": {
+          enabled: true,
+          functions: "print",
+          namespaces: 0,
+        },
       },
-    ]);
+    });
+    const result = resolveDebugStripConfig(parsed.rules["debug-strip"]);
 
     expect(result).toStrictEqual({
       enabled: true,
@@ -232,14 +264,17 @@ describe("resolveLocalizerConfig", () => {
     expect(resolveLocalizerConfig(false)).toBe(false);
   });
 
-  it("falls back to default arrays when direct input contains non-array fields", () => {
-    const result = Reflect.apply(resolveLocalizerConfig, undefined, [
-      {
-        enabled: true,
-        include: "math",
-        exclude: null,
+  it("falls back to default arrays when config contains non-array fields", () => {
+    const parsed = parseConfig({
+      rules: {
+        localizer: {
+          enabled: true,
+          include: "math",
+          exclude: null,
+        },
       },
-    ]);
+    });
+    const result = resolveLocalizerConfig(parsed.rules.localizer);
 
     expect(result).toStrictEqual({
       enabled: true,
@@ -250,17 +285,15 @@ describe("resolveLocalizerConfig", () => {
     });
   });
 
-  it("falls back to defaults when partial config contains undefined fields", () => {
-    const input: Partial<LocalizerConfig> = {};
-    Object.assign(input, {
-      enabled: undefined,
-      threshold: undefined,
-      scope: undefined,
-      include: undefined,
-      exclude: undefined,
+  it("falls back to defaults when partial config contains only undefined fields", () => {
+    // parseConfig silently drops undefined-valued fields, so an object with all
+    // localizer fields set to undefined is equivalent to passing no localizer config.
+    const parsed = parseConfig({
+      rules: { localizer: {} },
     });
+    const result = resolveLocalizerConfig(parsed.rules.localizer);
 
-    expect(resolveLocalizerConfig(input)).toStrictEqual({
+    expect(result).toStrictEqual({
       enabled: true,
       threshold: 2,
       scope: "all",

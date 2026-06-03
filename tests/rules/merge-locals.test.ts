@@ -27,7 +27,9 @@ function expectFunctionExpression(node: tstl.Expression | undefined): tstl.Funct
 }
 
 function expectTrackedPairMerge(source: string, merged: boolean): string {
-  const lua = normalizeLua(compile(source));
+  const lua = normalizeLua(
+    compile(source, { pluginOptions: { rules: { "constant-propagation": false } } }),
+  );
 
   if (merged) {
     expect(lua).toContain("local a, fn");
@@ -50,7 +52,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, b, c = 1, 2, 3");
     });
@@ -68,7 +72,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, b = 1, 2");
       expect(lua).toContain("local c = get()");
@@ -86,7 +92,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // 'a' alone — no merge
       expect(lua).toContain("local a = 1");
@@ -106,7 +114,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local x = get()");
       expect(lua).toContain("local y = 1");
@@ -123,7 +133,9 @@ describe("merge-locals", () => {
         export const b = 2;
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("a = 1");
       expect(lua).toContain("b = 2");
@@ -139,7 +151,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, b = 1, 2");
     });
@@ -156,7 +170,9 @@ describe("merge-locals", () => {
       `;
 
       const lua = normalizeLua(
-        compile(code, { pluginOptions: { rules: { "merge-locals": false } } }),
+        compile(code, {
+          pluginOptions: { rules: { "constant-propagation": false, "merge-locals": false } },
+        }),
       );
 
       expect(lua).toContain("local a = 1");
@@ -178,7 +194,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a = 1");
       expect(lua).toContain("local b = a");
@@ -196,7 +214,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a = 1");
       expect(lua).not.toContain("local a, t");
@@ -211,7 +231,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a = 1");
       expect(lua).toContain("local b");
@@ -231,7 +253,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // 'a' has no RHS — treated as pure, included in run with 'b'
       expect(lua).toContain("local a, b");
@@ -246,7 +270,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, b = x, 2");
     });
@@ -261,7 +287,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local t, b");
     });
@@ -296,7 +324,9 @@ describe("merge-locals", () => {
         `,
       },
     ])("merges consecutive pure locals inside $name", ({ source }) => {
-      const lua = normalizeLua(compile(source));
+      const lua = normalizeLua(
+        compile(source, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, b = 1, 2");
     });
@@ -377,13 +407,16 @@ describe("merge-locals", () => {
 
     it("does NOT merge function with nested capture of upvalue from run", () => {
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         function f(): number {
           const a = 1;
           const t = { fn: function() { return a; } };
           return t.fn();
         }
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
 
       expect(lua).not.toContain("local a, t");
@@ -408,7 +441,9 @@ describe("merge-locals", () => {
           const fn5 = function() { for (const k in e as any) {} };
         }
       `;
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
       expect(lua).not.toContain("local a, fn1");
       expect(lua).not.toContain("local b, fn2");
       expect(lua).not.toContain("local c, fn3");
@@ -437,7 +472,9 @@ describe("merge-locals", () => {
           const fn8 = function() { return h + 1; };
         }
       `;
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
       expect(lua).not.toContain("local a, fn1");
       expect(lua).not.toContain("local b, fn2");
       expect(lua).not.toContain("local c, fn3");
@@ -463,7 +500,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
       expect(lua).toContain("receiver:run(a)");
@@ -484,7 +523,9 @@ describe("merge-locals", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, fn");
     });
@@ -505,7 +546,9 @@ describe("merge-locals coverage", () => {
         return a + b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     // Should merge because 'a' is shadowed in 'fn'
     expect(lua).toContain("local a, fn, b = 1, function()");
   });
@@ -528,7 +571,9 @@ describe("merge-locals coverage", () => {
         return a + b + c + d + e;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local b, fn2");
     expect(lua).not.toContain("local c, fn3");
@@ -549,7 +594,9 @@ describe("merge-locals coverage", () => {
         return a + b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     // Verify all four variables merge together (behavior: no captures detected)
     expect(lua).toContain("fn1, b, fn2");
   });
@@ -571,7 +618,9 @@ describe("merge-locals coverage", () => {
         return a + b + c + d + e;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local b, fn2");
     expect(lua).not.toContain("local c, fn3");
@@ -590,7 +639,9 @@ describe("merge-locals coverage", () => {
         return a + b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn1");
     expect(lua).toContain("local fn1, b, fn2 =");
   });
@@ -605,7 +656,9 @@ describe("merge-locals coverage", () => {
         return a;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn");
   });
 
@@ -624,7 +677,9 @@ describe("merge-locals coverage", () => {
         return a + b + c + d;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local b, fn2");
     expect(lua).not.toContain("local c, fn3");
@@ -642,7 +697,9 @@ describe("merge-locals coverage", () => {
         return a + b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local b, fn2");
   });
@@ -660,7 +717,9 @@ describe("merge-locals coverage", () => {
         return b + d;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn1");
     expect(lua).not.toContain("local d, fn2");
   });
@@ -674,7 +733,9 @@ describe("merge-locals coverage", () => {
         return a;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).not.toContain("local a, fn");
   });
 
@@ -689,7 +750,9 @@ describe("merge-locals coverage", () => {
         return a + b;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     // Verify all four variables merge together (behavior: params shadow outer names)
     expect(lua).toContain("fn1, b, fn2");
   });
@@ -703,14 +766,18 @@ describe("merge-locals coverage", () => {
         return a + b + c + d;
       }
     `;
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toContain("local a, b = 1, 2");
     expect(lua).toContain("local c, d = 3, 4");
   });
 
   it("emits empty Lua for an empty source file", () => {
     const code = "";
-    const lua = normalizeLua(compile(code));
+    const lua = normalizeLua(
+      compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+    );
     expect(lua).toBe("");
   });
 });
@@ -727,7 +794,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -745,7 +814,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, fn");
     });
@@ -763,7 +834,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // `b` and `fn` must remain separate because `fn` captures `b` as an upvalue.
       expect(lua).not.toContain("local b, fn");
@@ -779,7 +852,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, fn");
     });
@@ -795,7 +870,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, b");
     });
@@ -809,7 +886,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local x, y");
     });
@@ -824,7 +903,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // `a` and `c` should merge (both pure, don't reference each other)
       expect(lua).toContain("local a, c");
@@ -845,7 +926,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -862,7 +945,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Verify a, b, obj merge without fn (behavior: fn captures unrelated var)
       expect(lua).toContain("a, b, obj");
@@ -883,7 +968,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // `c` and `fn` must remain separate.
       expect(lua).not.toContain("local c, fn");
@@ -900,7 +987,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Verify a, b, fn merge together (behavior: all params shadow tracked names)
       expect(lua).toContain("a, b, fn");
@@ -918,7 +1007,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local tbl, result");
     });
@@ -933,7 +1024,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local x, computed");
     });
@@ -948,7 +1041,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local n, negated");
     });
@@ -965,7 +1060,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local x, obj");
     });
@@ -980,7 +1077,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local key, obj");
     });
@@ -995,7 +1094,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local fn, result");
     });
@@ -1010,7 +1111,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local arg, result");
     });
@@ -1026,7 +1129,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // All three variables merge together (behavior: no captures or forward refs)
       expect(lua).toContain("y, obj");
@@ -1050,7 +1155,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local tbl, result");
     });
@@ -1070,7 +1177,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, fn");
     });
@@ -1090,7 +1199,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, b, fn");
     });
@@ -1109,7 +1220,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local b, fn");
     });
@@ -1129,7 +1242,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1147,7 +1262,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local i, fn");
     });
@@ -1169,7 +1286,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1191,7 +1310,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, fn");
     });
@@ -1209,7 +1330,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local obj, fn");
     });
@@ -1228,7 +1351,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1247,7 +1372,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).toContain("local a, fn");
     });
@@ -1268,7 +1395,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1287,7 +1416,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1303,7 +1434,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1319,7 +1452,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1335,7 +1470,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       expect(lua).not.toContain("local a, fn");
     });
@@ -1352,7 +1489,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
       `;
 
-      const lua = normalizeLua(compile(code));
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
 
       // Verify the optimization was applied (behavior: pure locals are merged)
       expect(lua).toContain("local a, b = 1, 2");
@@ -1593,7 +1732,8 @@ describe("merge-locals — upvalue capture detection", () => {
     it("closure capturing a merged local retains the correct value (merge-locals + closure capture)", () => {
       // Both `base` and `offset` are pure literals that qualify for merging into one declaration.
       // The closure must still capture their values correctly after the merge.
-      const lua = compile(`
+      const lua = compile(
+        `
         function makeAdder(n: number): () => number {
           const base = n * 2;
           const offset = 3;
@@ -1601,7 +1741,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
         declare function use(f: () => number): void;
         use(makeAdder(5));
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // Both identifiers must still appear (not dropped)
       expect(lua).toContain("base");
       expect(lua).toContain("offset");
@@ -1609,14 +1751,17 @@ describe("merge-locals — upvalue capture detection", () => {
 
     it("inline arg temps are merged when consecutive pure inlined results follow each other", () => {
       // After inline runs, two pure const decls may be consecutive → merge-locals can merge them.
-      const lua = compile(`
+      const lua = compile(
+        `
         /** @inline */
         function id(x: number): number { return x; }
         const a = id(1);
         const b = id(2);
         declare function use(a: number, b: number): void;
         use(a, b);
-      `);
+      `,
+        { pluginOptions: { rules: { "constant-propagation": false } } },
+      );
       // Both results must remain usable
       expect(lua).toContain("a");
       expect(lua).toContain("b");
@@ -1626,7 +1771,8 @@ describe("merge-locals — upvalue capture detection", () => {
       // An impure call splits pure local runs. Runs on both sides must survive intact.
       // Variables are used in a return so dead-local cannot drop them.
       const lua = normalizeLua(
-        compile(`
+        compile(
+          `
         declare function barrier(): number;
         function f(): number {
           const x = 1;
@@ -1638,7 +1784,9 @@ describe("merge-locals — upvalue capture detection", () => {
         }
         declare function use(n: number): void;
         use(f());
-      `),
+      `,
+          { pluginOptions: { rules: { "constant-propagation": false } } },
+        ),
       );
       expect(lua).toContain("x");
       expect(lua).toContain("y");
@@ -1663,6 +1811,7 @@ describe("merge-locals — upvalue capture detection", () => {
           const lua = normalizeLua(
             compile(
               `function f(): number { ${decls} return ${sum}; } declare const g: (n: number) => void; g(f());`,
+              { pluginOptions: { rules: { "constant-propagation": false } } },
             ),
           );
           // After merge, all n declarations share one local statement → only one `local ` line in the function.
@@ -1686,7 +1835,8 @@ describe("merge-locals — upvalue capture detection", () => {
           const leftSum = Array.from({ length: k }, (_, i) => `v${i}`).join(" + ");
           const rightSum = Array.from({ length: k }, (_, i) => `w${i}`).join(" + ");
           const lua = normalizeLua(
-            compile(`
+            compile(
+              `
               declare function imp(): number;
               function f(): number {
                 ${left}
@@ -1696,7 +1846,9 @@ describe("merge-locals — upvalue capture detection", () => {
               }
               declare const g: (n: number) => void;
               g(f());
-            `),
+            `,
+              { pluginOptions: { rules: { "constant-propagation": false } } },
+            ),
           );
           // The impure call must survive and split the run.
           if (!lua.includes("imp()")) return false;
