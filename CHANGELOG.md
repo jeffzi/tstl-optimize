@@ -7,15 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-03
+
 ### Added
 
+- **constant-propagation** rule — substitutes literal values (`boolean`, `number`, `string`) for
+  single-assignment locals whose initializer is a literal. Runs first in both the `fold` and `refold`
+  phases so that downstream rules (constant-folding, dead-local) benefit from the substitutions.
+  Conservatively skips locals read inside nested function bodies and destructured bindings. Enabled
+  by default; disable with `"rules": { "constant-propagation": false }`.
 - **unspill** rule — folds the redundant base/key temporaries TSTL emits when lowering a compound
   assignment on element/index access (`arr[i] += rhs`). When the cached base and key are
-  side-effect-free, the rule replaces the three-local pattern with a direct `arr[i] = arr[i] + rhs`
-  assignment. The value-temp form (`return (arr[i] += 5)`) is also handled. Enabled by default;
-  disable with `"rules": { "unspill": false }`.
-- `tstl-optimize/lua-ast` subpath — exports `unspillStatements` and `isLuaRhsPure` for downstream
-  plugins that need to perform the same fold before their own hoisting pass.
+  side-effect-free, the rule rewrites `arr[i] += rhs` to a direct `arr[i] = arr[i] + rhs`
+  assignment, eliminating the intermediate temporaries. The value-temp form (`return (arr[i] += 5)`)
+  is also handled. Enabled by default; disable with `"rules": { "unspill": false }`.
+- Public subpath exports for downstream plugins that need to reuse the analysis and transform
+  passes without depending on internal paths:
+  - `tstl-optimize/ts-ast` — TypeScript expression analysis (`hasSideEffects`, `unwrapTransparent`,
+    `isNilExpression`, `SideEffectOptions` including the new `AssumePropertyAccessPure` option, and
+    the transparent-wrapper kind sets).
+  - `tstl-optimize/lua-ast` — `unspillStatements` and `isLuaRhsPure` for performing the unspill fold
+    before a custom hoisting pass.
+  - `tstl-optimize/transforms` — cross-module hoisting helpers (`hoistCrossModuleAccesses`,
+    `getModuleExports`, `getRequireBindings`).
+
+### Changed
+
+- **inline** cross-module rejections are now silent by default — functions that cannot be inlined
+  are skipped without emitting diagnostic 90003. Set `"rules": { "inline": { "warnCrossModule": true } }`
+  to restore the warnings.
+- **inline** now substitutes pure, simple arguments (identifiers, numeric/string literals,
+  `nil`/`true`/`false`) directly at each use site, removing the redundant locals that previously
+  wrapped them.
+- **math-intrinsics** `Math.floor` now passes through to `math.floor()` for non-literal arguments,
+  matching `Math.ceil` and `Math.round`, instead of emitting a guarded ternary expression. Literal
+  arguments are still folded at compile time.
 
 ## [0.9.0] - 2026-05-20
 
@@ -195,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
 - Runnable examples with generation script.
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.0...v0.7.1
