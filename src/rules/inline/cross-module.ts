@@ -1,8 +1,10 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 import {
+  type ImportBinding,
   type LiteralKind,
   resolveConstLiteral,
+  resolveRequireChain,
   unwrapTransparentExpression,
 } from "./const-literal";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
@@ -32,6 +34,7 @@ export function hasCrossModuleFreeVariable(
 interface CrossModuleFreeVariableClassification {
   blocking: ts.Identifier[];
   substitutions: Map<ts.Symbol, LiteralKind>;
+  imports: Map<ts.Symbol, ImportBinding>;
   ambients: Set<ts.Symbol>;
 }
 
@@ -69,9 +72,16 @@ function classifyAliasedIdentifier(
   const literal = resolveConstLiteral(aliasedSymbol, checker);
   if (literal !== undefined && allowSubstitution) {
     classification.substitutions.set(aliasedSymbol, literal);
-  } else {
-    classification.blocking.push(node);
+    return true;
   }
+
+  const importBinding = resolveRequireChain(aliasedSymbol, checker);
+  if (importBinding !== undefined) {
+    classification.imports.set(aliasedSymbol, importBinding);
+    return true;
+  }
+
+  classification.blocking.push(node);
   return true;
 }
 
@@ -94,9 +104,16 @@ function classifySameFileIdentifier(
     const literal = resolveConstLiteral(symbol, checker);
     if (allowSubstitution && literal !== undefined && ts.isVariableDeclaration(declaration)) {
       classification.substitutions.set(symbol, literal);
-    } else {
-      classification.blocking.push(node);
+      return true;
     }
+
+    const importBinding = resolveRequireChain(symbol, checker);
+    if (importBinding !== undefined) {
+      classification.imports.set(symbol, importBinding);
+      return true;
+    }
+
+    classification.blocking.push(node);
     return true;
   }
 
@@ -180,6 +197,7 @@ export function classifyCrossModuleFreeVariables(
   const classification: CrossModuleFreeVariableClassification = {
     blocking: [],
     substitutions: new Map<ts.Symbol, LiteralKind>(),
+    imports: new Map<ts.Symbol, ImportBinding>(),
     ambients: new Set<ts.Symbol>(),
   };
 
@@ -314,15 +332,21 @@ export function classifyCrossModuleInline(
   context: tstl.TransformationContext,
   strict: boolean,
   warnCrossModule: boolean,
-): { reject: true } | { reject: false; substitutions: Map<ts.Symbol, LiteralKind> } {
+):
+  | { reject: true }
+  | {
+      reject: false;
+      substitutions: Map<ts.Symbol, LiteralKind>;
+      imports: Map<ts.Symbol, ImportBinding>;
+    } {
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
 
   if (!isCrossModule) {
-    return { reject: false, substitutions: new Map() };
+    return { reject: false, substitutions: new Map(), imports: new Map() };
   }
 
-  const { blocking, substitutions, ambients } = classifyCrossModuleFreeVariables(
+  const { blocking, substitutions, imports, ambients } = classifyCrossModuleFreeVariables(
     nodes,
     target.params,
     target.declaration,
@@ -339,5 +363,5 @@ export function classifyCrossModuleInline(
     }
   }
 
-  return { reject: false, substitutions };
+  return { reject: false, substitutions, imports };
 }

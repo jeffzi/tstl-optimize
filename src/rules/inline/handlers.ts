@@ -7,7 +7,7 @@ import {
   createDiscardTemp,
   inlineExpressionBody,
 } from "./builders";
-import type { LiteralKind } from "./const-literal";
+import type { ImportBinding, LiteralKind } from "./const-literal";
 import { classifyCrossModuleInline } from "./cross-module";
 import { buildArrayDestructureInline, buildObjectDestructureInline } from "./destructure-builders";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
@@ -43,7 +43,9 @@ function validateAndClassifyReturnValueInline(
   context: tstl.TransformationContext,
   strict: boolean,
   warnCrossModule: boolean,
-): Map<ts.Symbol, LiteralKind> | undefined {
+):
+  | { substitutions: Map<ts.Symbol, LiteralKind>; imports: Map<ts.Symbol, ImportBinding> }
+  | undefined {
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== undefined) {
     context.diagnostics.push(
@@ -64,7 +66,7 @@ function validateAndClassifyReturnValueInline(
   if (classification.reject) {
     return undefined;
   }
-  return classification.substitutions;
+  return { substitutions: classification.substitutions, imports: classification.imports };
 }
 
 export function handleCallExpression(
@@ -122,7 +124,7 @@ export function handleVariableStatement(
   const target = getReturnValueInlineTarget(callNode, checker);
   if (target === undefined) return undefined;
 
-  const substitutions = validateAndClassifyReturnValueInline(
+  const classified = validateAndClassifyReturnValueInline(
     callNode,
     target,
     checker,
@@ -130,10 +132,19 @@ export function handleVariableStatement(
     strict,
     warnCrossModule,
   );
-  if (substitutions === undefined) return undefined;
+  if (classified === undefined) return undefined;
+  const { substitutions, imports } = classified;
 
   if (ts.isIdentifier(decl.name)) {
-    return buildVarDeclInline(decl.name, target, callNode, checker, context, substitutions);
+    return buildVarDeclInline(
+      decl.name,
+      target,
+      callNode,
+      checker,
+      context,
+      substitutions,
+      imports,
+    );
   }
 
   if (ts.isObjectBindingPattern(decl.name)) {
@@ -144,6 +155,7 @@ export function handleVariableStatement(
       checker,
       context,
       substitutions,
+      imports,
     );
   }
 
@@ -155,6 +167,7 @@ export function handleVariableStatement(
       checker,
       context,
       substitutions,
+      imports,
     );
   }
 
@@ -174,7 +187,7 @@ export function handleReturnStatement(
   const target = getReturnValueInlineTarget(callNode, checker);
   if (target === undefined) return undefined;
 
-  const substitutions = validateAndClassifyReturnValueInline(
+  const classified = validateAndClassifyReturnValueInline(
     callNode,
     target,
     checker,
@@ -182,9 +195,10 @@ export function handleReturnStatement(
     strict,
     warnCrossModule,
   );
-  if (substitutions === undefined) return undefined;
+  if (classified === undefined) return undefined;
+  const { substitutions, imports } = classified;
 
-  return buildReturnSiteInline(target, callNode, checker, context, substitutions);
+  return buildReturnSiteInline(target, callNode, checker, context, substitutions, imports);
 }
 
 export function handleExpressionStatement(
@@ -252,9 +266,9 @@ export function handleExpressionStatement(
   if (classification.reject) {
     return undefined;
   }
-  const { substitutions } = classification;
+  const { substitutions, imports } = classification;
 
-  return buildDoEndBlock(target, callNode, checker, context, substitutions);
+  return buildDoEndBlock(target, callNode, checker, context, substitutions, imports);
 }
 
 const INLINE_TAG_RE = /^\s*@inline\s*$/;

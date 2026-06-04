@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import type { LiteralKind } from "../../../src/rules/inline/const-literal";
+import type { ImportBinding, LiteralKind } from "../../../src/rules/inline/const-literal";
 import { rewriteWithConstSubstitutions } from "../../../src/rules/inline/rewrite-body";
 import { findNode, makeChecker } from "./helpers";
 
@@ -111,5 +111,135 @@ describe("rewriteWithConstSubstitutions", () => {
     const result = rewriteWithConstSubstitutions(shorthand, substitutions, checker);
 
     expect(ts.isShorthandPropertyAssignment(result)).toBe(true);
+  });
+
+  describe("import substitution via imports map", () => {
+    it("returns the original node when both substitutions and imports are empty", () => {
+      const { checker } = makeChecker("const X = 1;");
+      const node = ts.factory.createNumericLiteral("1");
+
+      const result = rewriteWithConstSubstitutions(node, new Map(), checker, new Map());
+
+      expect(result).toBe(node);
+    });
+
+    it("rewrites an identifier mapped to an import binding with a member to require().member", () => {
+      const { checker, sourceFile } = makeChecker(`
+        declare const band: unknown;
+        const x = band;
+      `);
+      const bandSymbol = getSymbol(sourceFile, checker, "band");
+      const binding: ImportBinding = { requirePath: "bit", memberName: "band" };
+      const imports = new Map<ts.Symbol, ImportBinding>([[bandSymbol, binding]]);
+
+      const xDecl = findNode(
+        sourceFile,
+        (n): n is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "x",
+      );
+      if (!xDecl || !xDecl.initializer) throw new Error("expected x declaration with initializer");
+
+      const result = rewriteWithConstSubstitutions(xDecl.initializer, new Map(), checker, imports);
+
+      expect(ts.isPropertyAccessExpression(result)).toBe(true);
+      const propAccess = result as ts.PropertyAccessExpression;
+      expect(ts.isCallExpression(propAccess.expression)).toBe(true);
+      const call = propAccess.expression as ts.CallExpression;
+      expect(ts.isIdentifier(call.expression) && (call.expression as ts.Identifier).text).toBe(
+        "require",
+      );
+      expect(
+        ts.isStringLiteral(call.arguments[0]) && (call.arguments[0] as ts.StringLiteral).text,
+      ).toBe("bit");
+      expect(propAccess.name.text).toBe("band");
+    });
+
+    it("rewrites an identifier mapped to a bare import binding to require()", () => {
+      const { checker, sourceFile } = makeChecker(`
+        declare const bit: unknown;
+        const x = bit;
+      `);
+      const bitSymbol = getSymbol(sourceFile, checker, "bit");
+      const binding: ImportBinding = { requirePath: "bit", memberName: undefined };
+      const imports = new Map<ts.Symbol, ImportBinding>([[bitSymbol, binding]]);
+
+      const xDecl = findNode(
+        sourceFile,
+        (n): n is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "x",
+      );
+      if (!xDecl || !xDecl.initializer) throw new Error("expected x declaration with initializer");
+
+      const result = rewriteWithConstSubstitutions(xDecl.initializer, new Map(), checker, imports);
+
+      expect(ts.isCallExpression(result)).toBe(true);
+      const call = result as ts.CallExpression;
+      expect(ts.isIdentifier(call.expression) && (call.expression as ts.Identifier).text).toBe(
+        "require",
+      );
+      expect(
+        ts.isStringLiteral(call.arguments[0]) && (call.arguments[0] as ts.StringLiteral).text,
+      ).toBe("bit");
+    });
+
+    it("literal substitution takes priority over import substitution for the same symbol", () => {
+      const { checker, sourceFile } = makeChecker(`
+        declare const x: unknown;
+        const y = x;
+      `);
+      const xSymbol = getSymbol(sourceFile, checker, "x");
+      const substitutions = new Map<ts.Symbol, LiteralKind>([
+        [xSymbol, { kind: "number", value: 42 }],
+      ]);
+      const imports = new Map<ts.Symbol, ImportBinding>([
+        [xSymbol, { requirePath: "bit", memberName: "band" }],
+      ]);
+
+      const yDecl = findNode(
+        sourceFile,
+        (n): n is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "y",
+      );
+      if (!yDecl || !yDecl.initializer) throw new Error("expected y declaration with initializer");
+
+      const result = rewriteWithConstSubstitutions(
+        yDecl.initializer,
+        substitutions,
+        checker,
+        imports,
+      );
+
+      // Should be a numeric literal (42), not a require() expression
+      expect(ts.isNumericLiteral(result)).toBe(true);
+      expect((result as ts.NumericLiteral).text).toBe("42");
+    });
+
+    it("applies import substitutions when substitutions is empty", () => {
+      const { checker, sourceFile } = makeChecker(`
+        declare const x: unknown;
+        const y = x;
+      `);
+      const xSymbol = getSymbol(sourceFile, checker, "x");
+      const imports = new Map<ts.Symbol, ImportBinding>([
+        [xSymbol, { requirePath: "mymod", memberName: "fn" }],
+      ]);
+
+      const yDecl = findNode(
+        sourceFile,
+        (n): n is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "y",
+      );
+      if (!yDecl || !yDecl.initializer) throw new Error("expected y declaration with initializer");
+
+      // Empty substitutions but non-empty imports — the fast path must NOT trigger
+      const result = rewriteWithConstSubstitutions(yDecl.initializer, new Map(), checker, imports);
+
+      expect(ts.isPropertyAccessExpression(result)).toBe(true);
+      const propAccess = result as ts.PropertyAccessExpression;
+      expect(ts.isCallExpression(propAccess.expression)).toBe(true);
+      const call = propAccess.expression as ts.CallExpression;
+      expect((call.arguments[0] as ts.StringLiteral).text).toBe("mymod");
+      expect(propAccess.name.text).toBe("fn");
+    });
   });
 });

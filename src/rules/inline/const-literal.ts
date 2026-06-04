@@ -286,3 +286,121 @@ export function resolveConstLiteral(
 
   return evaluateConstInitializer(constInitializer.initializer, checker, new Set());
 }
+
+/**
+ * Describes a `require()` chain resolved from a const binding.
+ *
+ * - `requirePath` — the string argument passed to `require()`.
+ * - `memberName`  — the property accessed on the result, or `undefined` when the
+ *   binding holds the raw require result (e.g. `const lib = require("bit")`).
+ */
+export type ImportBinding = { requirePath: string; memberName: string | undefined };
+
+/**
+ * Resolves a const symbol to an `ImportBinding` if it is backed by a `require()` call
+ * — either directly or through an intermediate const local.
+ *
+ * Handles:
+ * - `const band = require("bit").band`   → `{ requirePath: "bit", memberName: "band" }`
+ * - Indirect: `const lib = require("bit"); const X = lib.band`
+ * - Const require arg: `const m = "bit"; const band = require(m).band`
+ * - Type-assertion wrappers stripped via `unwrapTransparentExpression`
+ * - Bare require: `const lib = require("bit")` → `{ requirePath: "bit", memberName: undefined }`
+ * - Non-require initializers → `undefined`
+ * - Non-const bindings (`let`, `var`) → `undefined`
+ * - Cyclic references → `undefined` (no stack overflow)
+ */
+export function resolveRequireChain(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+  visited: Set<ts.Symbol> = new Set(),
+): ImportBinding | undefined {
+  const valueSymbol = getConstValueSymbol(symbol, checker);
+  if (visited.has(valueSymbol)) return undefined;
+
+  const constInitializer = findConstInitializer(valueSymbol);
+  if (constInitializer === undefined) return undefined;
+
+  visited.add(valueSymbol);
+  try {
+    return resolveRequireChainFromExpression(constInitializer.initializer, checker, visited);
+  } finally {
+    visited.delete(valueSymbol);
+  }
+}
+
+/**
+ * Inspects an expression (the const initializer) to extract an `ImportBinding`.
+ * Strips transparent wrappers (parens, `as`, `!`, etc.) before pattern-matching.
+ */
+function resolveRequireChainFromExpression(
+  node: ts.Expression,
+  checker: ts.TypeChecker,
+  visited: Set<ts.Symbol>,
+): ImportBinding | undefined {
+  const expression = unwrapTransparentExpression(node);
+
+  // Pattern: require("path")
+  // The bare require() itself — no member access — means memberName is undefined.
+  if (isRequireCall(expression)) {
+    const requirePath = resolveRequireArgument(expression, checker, visited);
+    if (requirePath === undefined) return undefined;
+    return { requirePath, memberName: undefined };
+  }
+
+  // Pattern: require("path").member  OR  (require("path") as any).member
+  if (ts.isPropertyAccessExpression(expression)) {
+    const object = unwrapTransparentExpression(expression.expression);
+    const memberName = expression.name.text;
+
+    if (isRequireCall(object)) {
+      const requirePath = resolveRequireArgument(object, checker, visited);
+      if (requirePath === undefined) return undefined;
+      return { requirePath, memberName };
+    }
+
+    // Indirect chain: `lib.member` where `lib` is itself a require() binding.
+    if (ts.isIdentifier(object)) {
+      const sym = checker.getSymbolAtLocation(object);
+      if (!sym) return undefined;
+      const inner = resolveRequireChain(sym, checker, visited);
+      if (inner === undefined) return undefined;
+      // Unwrap one level: replace memberName from the intermediate link.
+      // Only follow one property hop — deeper chains are not part of require idioms.
+      return { requirePath: inner.requirePath, memberName };
+    }
+  }
+
+  return undefined;
+}
+
+/** Returns true when `node` is a call to the bare `require` identifier. */
+function isRequireCall(node: ts.Expression): node is ts.CallExpression {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === "require" &&
+    node.arguments.length === 1
+  );
+}
+
+/**
+ * Evaluates the single argument of a `require()` call as a const string literal.
+ * Returns `undefined` if the argument cannot be reduced to a string.
+ */
+function resolveRequireArgument(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  visited: Set<ts.Symbol>,
+): string | undefined {
+  const arg = call.arguments[0];
+  // Fast path: literal string argument.
+  const literal = extractPrimitiveLiteral(arg);
+  if (literal?.kind === "string") return literal.value;
+
+  // Slow path: the argument may be a const local (e.g. `const m = "bit"; require(m)`).
+  const evaluated = evaluateConstInitializer(arg, checker, visited);
+  if (evaluated?.kind === "string") return evaluated.value;
+
+  return undefined;
+}

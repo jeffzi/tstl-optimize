@@ -1,22 +1,26 @@
 import ts from "typescript";
-import { type LiteralKind, synthesizeLiteralExpression } from "./const-literal";
+import { type ImportBinding, type LiteralKind, synthesizeLiteralExpression } from "./const-literal";
 
 /**
- * Rewrites a TypeScript node, substituting identifiers that map to const literals.
+ * Rewrites a TypeScript node, substituting identifiers that map to const literals or
+ * import require-chain bindings.
  *
  * - Skips type nodes (which don't emit to Lua)
  * - Avoids rewriting property names (only the object side of property access)
- * - Resolves symbols and their aliases, looking up in substitutions
+ * - Resolves symbols and their aliases, looking up in substitutions and imports
+ * - Literal substitutions (`substitutions`) take priority over import substitutions (`imports`)
+ * - Synthesized require nodes are terminal — the visitor does not recurse into them
  * - Returns a fresh node with substitutions applied (deep rewrite via ts.transform)
  *
- * If substitutions is empty, returns the node unchanged (fast path).
+ * If both `substitutions` and `imports` are empty/absent, returns the node unchanged (fast path).
  */
 export function rewriteWithConstSubstitutions<T extends ts.Node>(
   node: T,
   substitutions: Map<ts.Symbol, LiteralKind>,
   checker: ts.TypeChecker,
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): T {
-  if (substitutions.size === 0) {
+  if (substitutions.size === 0 && (!imports || imports.size === 0)) {
     return node;
   }
 
@@ -34,6 +38,36 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
     }
 
     return undefined;
+  }
+
+  function findImportSubstitution(sym: ts.Symbol): ImportBinding | undefined {
+    if (!imports || imports.size === 0) return undefined;
+
+    const symbolsToCheck =
+      sym.flags & ts.SymbolFlags.Alias ? [sym, checker.getAliasedSymbol(sym)] : [sym];
+
+    for (const symbolToCheck of symbolsToCheck) {
+      const binding = imports.get(symbolToCheck);
+      if (binding !== undefined) {
+        return binding;
+      }
+    }
+
+    return undefined;
+  }
+
+  function synthesizeRequireExpression(binding: ImportBinding): ts.Expression {
+    const requireCall = ts.factory.createCallExpression(
+      ts.factory.createIdentifier("require"),
+      undefined,
+      [ts.factory.createStringLiteral(binding.requirePath)],
+    );
+
+    if (binding.memberName !== undefined) {
+      return ts.factory.createPropertyAccessExpression(requireCall, binding.memberName);
+    }
+
+    return requireCall;
   }
 
   function visit(n: ts.Node): ts.Node {
@@ -94,10 +128,19 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
       /* v8 ignore next -- synthetic nodes lack source positions */
       if (!sym) return n;
 
+      // Literal substitution takes priority over import substitution
       const literal = findSubstitution(sym);
       if (literal !== undefined) {
         return synthesizeLiteralExpression(literal);
       }
+
+      // Import substitution: synthesize require("path").member or bare require("path").
+      // The synthesized node is terminal — do NOT recurse into it.
+      const importBinding = findImportSubstitution(sym);
+      if (importBinding !== undefined) {
+        return synthesizeRequireExpression(importBinding);
+      }
+
       return n;
     }
 

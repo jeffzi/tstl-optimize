@@ -2,7 +2,7 @@ import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { hasSideEffects } from "../../ast/ts-ast";
-import type { LiteralKind } from "./const-literal";
+import type { ImportBinding, LiteralKind } from "./const-literal";
 import { classifyCrossModuleInline } from "./cross-module";
 import { createInlineWarning } from "./diagnostics";
 import {
@@ -138,8 +138,11 @@ function rewriteInlineStatements(
   bodyStmts: readonly ts.Statement[],
   substitutions: Map<ts.Symbol, LiteralKind>,
   checker: ts.TypeChecker,
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): readonly ts.Statement[] {
-  return bodyStmts.map((stmt) => rewriteWithConstSubstitutions(stmt, substitutions, checker));
+  return bodyStmts.map((stmt) =>
+    rewriteWithConstSubstitutions(stmt, substitutions, checker, imports),
+  );
 }
 
 /** Run inline transforms in a fresh function scope so locals produce `local` in Lua. */
@@ -184,9 +187,15 @@ export function transformInlineBodyAndReturn(
   context: tstl.TransformationContext,
   checker: ts.TypeChecker,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): TransformedInlineFunction | undefined {
-  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
-  const rewrittenReturnExpr = rewriteWithConstSubstitutions(returnExpr, substitutions, checker);
+  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker, imports);
+  const rewrittenReturnExpr = rewriteWithConstSubstitutions(
+    returnExpr,
+    substitutions,
+    checker,
+    imports,
+  );
   const returnStmt = createInlineReturnStatement(rewrittenReturnExpr);
   const { luaBody, luaReturnStmts } = transformInFunctionScope(declaration, context, () => ({
     luaBody: rewrittenBodyStmts.flatMap((s) => context.transformStatements(s)),
@@ -219,11 +228,17 @@ export function prepareReturnValueInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): PreparedReturnValueInline | undefined {
   const { bodyStmts, params, declaration, returnExpr } = target;
 
-  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
-  const rewrittenReturnExpr = rewriteWithConstSubstitutions(returnExpr, substitutions, checker);
+  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker, imports);
+  const rewrittenReturnExpr = rewriteWithConstSubstitutions(
+    returnExpr,
+    substitutions,
+    checker,
+    imports,
+  );
 
   // Transform body and return expression first so ALL param symbols are registered
   // in context.symbolIdMaps before buildParamMap looks them up. A param that only
@@ -255,10 +270,11 @@ export function buildDoEndBlock(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker);
+  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker, imports);
 
   // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
   const luaBody = transformBodyStatements(rewrittenBodyStmts, declaration, context);
@@ -329,9 +345,14 @@ export function inlineExpressionBody(
   if (classification.reject) {
     return undefined;
   }
-  const { substitutions } = classification;
+  const { substitutions, imports } = classification;
 
-  const rewrittenExpr = rewriteWithConstSubstitutions(target.bodyExpr, substitutions, checker);
+  const rewrittenExpr = rewriteWithConstSubstitutions(
+    target.bodyExpr,
+    substitutions,
+    checker,
+    imports,
+  );
   const luaBody = context.transformExpression(rewrittenExpr);
   clearExpressionPositions(luaBody);
 
@@ -435,6 +456,7 @@ export function buildVarDeclInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): tstl.Statement[] | undefined {
   const { bodyStmts } = target;
 
@@ -451,7 +473,14 @@ export function buildVarDeclInline(
   const resultIdent = tstl.createIdentifier(resultName, undefined, resultSymId);
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
+  const prepared = prepareReturnValueInline(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+  );
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
@@ -486,6 +515,7 @@ export function buildReturnSiteInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
   const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
@@ -497,6 +527,7 @@ export function buildReturnSiteInline(
       context,
       checker,
       substitutions,
+      imports,
     );
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
@@ -527,7 +558,14 @@ export function buildReturnSiteInline(
     return multiResult;
   }
 
-  const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
+  const prepared = prepareReturnValueInline(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+  );
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 

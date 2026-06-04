@@ -244,6 +244,136 @@ describe("cross-module inlining", () => {
     });
   });
 
+  describe("when the target closes over require() bindings", () => {
+    // `require` is a Lua built-in; declare it to satisfy the TypeScript type checker
+    // in the virtual project. The "bit" module is a native Lua library that does not
+    // exist as a TypeScript file — include a minimal stub so TSTL's module resolver
+    // can find it without emitting broken output.
+    const REQUIRE_DECL = "declare function require(path: string): any;";
+    const BIT_STUB = "export declare const band: (a: number, b: number) => number;";
+
+    it("substitutes a direct require with member access in the inlined body", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "utils.ts": `
+          ${REQUIRE_DECL}
+          const band = (require("bit") as any).band;
+
+          /** @inline */
+          export function bitwiseAnd(a: number, b: number): number {
+            return band(a, b);
+          }
+        `,
+        "main.ts": `
+          import { bitwiseAnd } from "./utils";
+          export const result = bitwiseAnd(5, 3);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('require("bit").band');
+      expect(normalized).not.toContain("bitwiseAnd(");
+    });
+
+    it("substitutes a bare require (no member) in the inlined body", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "utils.ts": `
+          ${REQUIRE_DECL}
+          const bit = require("bit") as any;
+
+          /** @inline */
+          export function getBitLib(): any {
+            return bit;
+          }
+        `,
+        "main.ts": `
+          import { getBitLib } from "./utils";
+          export const lib = getBitLib();
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('require("bit")');
+      expect(normalized).not.toContain("getBitLib(");
+    });
+
+    it("substitutes both a const literal and a require binding when both appear in the body", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "utils.ts": `
+          ${REQUIRE_DECL}
+          const X = 42;
+          const band = (require("bit") as any).band;
+
+          /** @inline */
+          export function maskWith42(a: number): number {
+            return band(a, X);
+          }
+        `,
+        "main.ts": `
+          import { maskWith42 } from "./utils";
+          export const result = maskWith42(255);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('require("bit").band');
+      expect(normalized).toContain("42");
+      expect(normalized).not.toContain("maskWith42(");
+    });
+
+    it("inlines a multi-statement body that references a require binding", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "utils.ts": `
+          ${REQUIRE_DECL}
+          const band = (require("bit") as any).band;
+
+          /** @inline */
+          export function mask(a: number, b: number): number {
+            const masked = band(a, b);
+            return masked;
+          }
+        `,
+        "main.ts": `
+          import { mask } from "./utils";
+          export const result = mask(0xff, 0x0f);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('require("bit").band');
+      expect(normalized).not.toContain("mask(");
+    });
+
+    it("inlines an expression-bodied arrow function that references a require binding", () => {
+      const { diagnostics, lua } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "utils.ts": `
+          ${REQUIRE_DECL}
+          const band = (require("bit") as any).band;
+
+          /** @inline */
+          export const bitwiseAnd = (a: number, b: number): number => band(a, b);
+        `,
+        "main.ts": `
+          import { bitwiseAnd } from "./utils";
+          export const result = bitwiseAnd(12, 10);
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('require("bit").band');
+      expect(normalized).not.toContain("bitwiseAnd(");
+    });
+  });
+
   describe("warnCrossModule", () => {
     const CROSS_MODULE_FILES = {
       "utils.ts": `

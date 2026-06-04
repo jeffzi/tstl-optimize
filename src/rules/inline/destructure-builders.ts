@@ -7,7 +7,7 @@ import {
   stampCallSitePositions,
   transformInlineBodyAndReturn,
 } from "./builders";
-import type { LiteralKind } from "./const-literal";
+import type { ImportBinding, LiteralKind } from "./const-literal";
 import { substituteParams, substituteParamsInStatements } from "./lua-substitute";
 import { type ReturnValueInlineTarget, returnsLuaMultiReturn } from "./target";
 
@@ -31,6 +31,7 @@ function buildDestructureShared(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): DestructureShared | undefined {
   const resultSymId = context.nextSymbolId();
   const resultIdent = tstl.createIdentifier(
@@ -40,7 +41,14 @@ function buildDestructureShared(
   );
   const resultDecl = tstl.createVariableDeclarationStatement([resultIdent]);
 
-  const prepared = prepareReturnValueInline(target, callNode, checker, context, substitutions);
+  const prepared = prepareReturnValueInline(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+  );
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
 
@@ -60,6 +68,7 @@ export function buildObjectDestructureInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): tstl.Statement[] | undefined {
   const bindings: { bindingName: ts.Identifier; keyNode: ts.Identifier }[] = [];
   for (const element of pattern.elements) {
@@ -73,7 +82,7 @@ export function buildObjectDestructureInline(
     bindings.push({ bindingName: element.name, keyNode });
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context, substitutions);
+  const shared = buildDestructureShared(target, callNode, checker, context, substitutions, imports);
   if (!shared) return undefined;
   const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 
@@ -102,6 +111,7 @@ export function buildArrayDestructureInline(
   checker: ts.TypeChecker,
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
+  imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
 ): tstl.Statement[] | undefined {
   const bindingNames: ts.Identifier[] = [];
   for (const element of pattern.elements) {
@@ -142,6 +152,7 @@ export function buildArrayDestructureInline(
       context,
       checker,
       substitutions,
+      imports,
     );
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
@@ -170,7 +181,7 @@ export function buildArrayDestructureInline(
     return multiResult;
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context, substitutions);
+  const shared = buildDestructureShared(target, callNode, checker, context, substitutions, imports);
   if (!shared) return undefined;
   const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 

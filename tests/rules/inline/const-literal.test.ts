@@ -2,8 +2,10 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   extractPrimitiveLiteral,
+  type ImportBinding,
   type LiteralKind,
   resolveConstLiteral,
+  resolveRequireChain,
   synthesizeLiteralExpression,
 } from "../../../src/rules/inline/const-literal";
 import { makeChecker } from "./helpers";
@@ -614,5 +616,89 @@ describe("resolveConstLiteral", () => {
         ).toBeUndefined();
       });
     });
+  });
+});
+
+describe("resolveRequireChain", () => {
+  it.each<{ name: string; source: string; variable: string; expected: ImportBinding }>([
+    {
+      name: "direct require with member access",
+      source: 'const band = require("bit").band;',
+      variable: "band",
+      expected: { requirePath: "bit", memberName: "band" },
+    },
+    {
+      name: "bare require with no member access",
+      source: 'const lib = require("bit");',
+      variable: "lib",
+      expected: { requirePath: "bit", memberName: undefined },
+    },
+    {
+      name: "indirect chain: lib assigned from require, member accessed separately",
+      source: 'const lib = require("bit");\nconst X = lib.band;',
+      variable: "X",
+      expected: { requirePath: "bit", memberName: "band" },
+    },
+    {
+      name: "const require arg resolved before member access",
+      source: 'const m = "bit";\nconst band = require(m).band;',
+      variable: "band",
+      expected: { requirePath: "bit", memberName: "band" },
+    },
+    {
+      name: "type-assertion wrapper around require call",
+      source: 'const band = (require("bit") as any).band;',
+      variable: "band",
+      expected: { requirePath: "bit", memberName: "band" },
+    },
+  ])("resolves $name → { requirePath: $expected.requirePath, memberName: $expected.memberName }", ({
+    source,
+    variable,
+    expected,
+  }) => {
+    const { symbol, checker } = getSymbolAtSourceLocation(source, variable);
+    expect(resolveRequireChain(symbol, checker)).toStrictEqual(expected);
+  });
+
+  it.each<{ name: string; source: string; variable: string }>([
+    {
+      name: "non-require initializer (plain number literal)",
+      source: "const X = 42;",
+      variable: "X",
+    },
+    {
+      name: "non-const binding (let with require)",
+      source: 'let band = require("bit").band;',
+      variable: "band",
+    },
+    {
+      name: "require with non-string arg (numeric literal)",
+      source: "const X = require(42).band;",
+      variable: "X",
+    },
+    {
+      name: "bare require with unresolvable arg",
+      source: "declare const dynamic: string;\nconst lib = require(dynamic);",
+      variable: "lib",
+    },
+    {
+      name: "property access on non-require, non-identifier object",
+      source: "const X = ((() => ({}))()).band;",
+      variable: "X",
+    },
+    {
+      name: "indirect chain where intermediate is not a require binding",
+      source: "const obj = { band: 1 };\nconst X = obj.band;",
+      variable: "X",
+    },
+  ])("returns undefined for $name", ({ source, variable }) => {
+    const { symbol, checker } = getSymbolAtSourceLocation(source, variable);
+    expect(resolveRequireChain(symbol, checker)).toBeUndefined();
+  });
+
+  it("returns undefined for cyclic reference (X → Y → X)", () => {
+    const source = "const X: any = Y;\nconst Y: any = X;";
+    const { symbol, checker } = getSymbolAtSourceLocation(source, "X");
+    expect(resolveRequireChain(symbol, checker)).toBeUndefined();
   });
 });
