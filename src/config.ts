@@ -53,6 +53,7 @@ export interface RulesConfig {
   "merge-locals": boolean;
   localizer: LocalizerRuleConfig;
   "debug-strip": DebugStripRuleConfig;
+  "hoist-require": boolean;
 }
 
 export type InterpreterTarget = "puc" | "luajit";
@@ -90,6 +91,7 @@ const DEFAULT_RULES: RulesConfig = {
   "merge-locals": true,
   localizer: true,
   "debug-strip": false,
+  "hoist-require": true,
 };
 
 function resolveStructuredRuleConfig<T extends { enabled: boolean }>(

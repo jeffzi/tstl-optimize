@@ -58,6 +58,7 @@ Rule reference:
 - [`loop-rebase`](#loop-rebase)
 - [`inline`](#inline)
 - [`localizer`](#localizer)
+- [`hoist-require`](#hoist-require)
 - [`unspill`](#unspill)
 - [`debug-strip`](#debug-strip)
 
@@ -133,7 +134,7 @@ Use the rules in two groups:
 
 - **Build specialization:** `conditional-compilation`, `debug-strip`
 - **Performance optimization:** `constant-folding`, `dead-local`, `merge-locals`, `localizer`,
-  `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`, `unspill`
+  `hoist-require`, `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`, `unspill`
 
 `conditional-compilation` and `debug-strip` are useful even when raw speed is not the main goal.
 Lua has no native preprocessor, so these rules let you remove platform-specific branches, debug
@@ -696,6 +697,12 @@ it would for hand-written code. `math-intrinsics` rewrites `Math.*` calls inside
 same way. Rules apply to the fully expanded output, so inlined code receives the same optimizations
 as the rest of the file.
 
+Cross-module `@inline` functions that close over `require()` bindings emit a require chain at each
+call site. When the consumer already imports the same binding, the inlined body reuses the consumer's
+existing local instead of synthesizing a fresh chain. When the consumer does not import it,
+`hoist-require` (which runs first in refold) deduplicates any chains that appear at two or more call
+sites into a single hoisted local.
+
 ### `localizer`
 
 Hoists repeated table-index chains (e.g., `math.sqrt`, `game.players.count`) into local variables
@@ -799,6 +806,56 @@ in `include`:
 ```jsonc
 "localizer": { "include": ["assert"] }
 ```
+
+### `hoist-require`
+
+Deduplicates repeated `require("path")` and `require("path").member` patterns within each scope
+by hoisting them into a single named local variable. Runs first in the `refold` phase, so it
+catches require chains that `inline` introduces when expanding cross-module `@inline` functions.
+
+```typescript
+// compat.ts
+declare function require(path: string): any;
+export const bit_and = (require("bit") as any).band;
+
+// utils.ts
+import { bit_and } from "./compat";
+/** @inline */
+export const maskBits = (a: number, b: number): number => bit_and(a, b);
+
+// main.ts
+import { maskBits } from "./utils";
+declare const x: number, y: number;
+const a = maskBits(x, y);
+const b = maskBits(a, y);
+```
+
+Without `hoist-require`, each inlined call site emits its own require chain:
+
+```lua
+-- After inline, before hoist-require
+local a = require("bit").band(x, y)
+local b = require("bit").band(a, y)
+```
+
+With `hoist-require`:
+
+```lua
+local ____req_bit_band = require("bit").band
+local a = ____req_bit_band(x, y)
+local b = ____req_bit_band(a, y)
+```
+
+Hoisted local names are derived from the path and member: `require("path").member` →
+`____req_path_member`; bare `require("path")` → `____req_path`.
+
+**Limitations:**
+
+- Patterns appearing only once stay inline; the threshold is two or more occurrences per scope.
+- Each scope (function body, module scope) is processed independently — a pattern must repeat
+  within the same scope to be hoisted.
+- Expression-body inlines have no statement context for a hoisted declaration; require chains
+  inside expression bodies are left inline.
 
 ### `unspill`
 
@@ -1000,19 +1057,20 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
 | `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)); `warnCrossModule: true` emits code 90003 for silent cross-module rejections. |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
+| `rules.hoist-require`           | `boolean`                                            | `true`        | Deduplicate repeated `require()` and `require().member` patterns within each scope by hoisting them into a named local. Runs first in refold to catch chains introduced by `inline`.                      |
 | `rules.unspill`                 | `boolean`                                            | `true`        | Fold the base/key temporaries TSTL emits for compound assignment on element/index access (`arr[i] += rhs`) when the cached parts are pure.                                                                |
 | `rules.debug-strip`             | `boolean \| DebugStripConfig`                        | `false`       | Strip debug and profiling calls.                                                                                                                                                                          |
 | `target`                        | `"puc" \| "luajit"`                                  | auto-detected | Lua interpreter target. When omitted, the plugin derives it from TSTL's `luaTarget`.                                                                                                                      |
 
 ### Refold phase
 
-After all rules have run, the plugin re-runs `constant-propagation`, `constant-folding`,
-`dead-local`, `merge-locals`, and `remove-empty-branch` in a final "refold" phase. Later rules sometimes create new opportunities for
-earlier ones — for example, `localizer` can introduce consecutive `local` declarations that
-`merge-locals` can combine, or `inline` can expand a body whose constants `constant-folding` can
-evaluate. The refold phase catches these cross-rule wins automatically. Each rule in the refold
-phase is still gated by its own `rules.*` toggle, so disabling `merge-locals` globally also
-disables it during refold.
+After all rules have run, the plugin executes a final "refold" phase. `hoist-require` runs first
+to deduplicate require chains that `inline` introduced during expansion. Then `constant-propagation`,
+`constant-folding`, `dead-local`, `merge-locals`, and `remove-empty-branch` re-run to catch
+opportunities those earlier phases opened — for example, `localizer` can introduce consecutive
+`local` declarations that `merge-locals` can combine, or `inline` can expand a body whose constants
+`constant-folding` can evaluate. Each rule in the refold phase is still gated by its own `rules.*`
+toggle, so disabling `merge-locals` globally also disables it during refold.
 
 ## Composing into another plugin
 

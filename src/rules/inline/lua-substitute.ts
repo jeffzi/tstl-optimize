@@ -335,3 +335,47 @@ export function needsParentheses(node: tstl.Expression): boolean {
     tstl.isConditionalExpression(node)
   );
 }
+
+// ---------------------------------------------------------------------------
+// Require-chain pattern recognition
+//
+// `extractRequirePattern` identifies bare `require("path")` calls and
+// `require("path").member` table-index expressions.  Consumed by the
+// `hoist-require` refold-phase rule to deduplicate repeated require chains
+// at function/module scope.
+// ---------------------------------------------------------------------------
+
+export interface RequirePattern {
+  requirePath: string;
+  /** Undefined for a bare `require("path")` without a member access. */
+  memberName: string | undefined;
+}
+
+/**
+ * Check whether `expr` is a `require("path")` call (bare) or a
+ * `require("path").member` table-index expression.
+ *
+ * Returns `{ requirePath, memberName }` on a match, `undefined` otherwise.
+ */
+export function extractRequirePattern(expr: tstl.Expression): RequirePattern | undefined {
+  // Bare require("path")
+  if (
+    tstl.isCallExpression(expr) &&
+    tstl.isIdentifier(expr.expression) &&
+    expr.expression.text === "require" &&
+    expr.params.length === 1 &&
+    tstl.isStringLiteral(expr.params[0])
+  ) {
+    return { requirePath: expr.params[0].value, memberName: undefined };
+  }
+
+  // require("path").member  →  TableIndexExpression(CallExpression(require, ["path"]), StringLiteral(member))
+  if (tstl.isTableIndexExpression(expr) && tstl.isStringLiteral(expr.index)) {
+    const tablePattern = extractRequirePattern(expr.table);
+    if (tablePattern !== undefined && tablePattern.memberName === undefined) {
+      return { requirePath: tablePattern.requirePath, memberName: expr.index.value };
+    }
+  }
+
+  return undefined;
+}

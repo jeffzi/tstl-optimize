@@ -7,6 +7,7 @@ import { createVisitors as constantFoldingVisitors } from "./rules/constant-fold
 import { createVisitors as constantPropagationVisitors } from "./rules/constant-propagation";
 import { createVisitors as deadLocalVisitors } from "./rules/dead-local";
 import { createVisitors as debugStripVisitors } from "./rules/debug-strip";
+import { createVisitors as hoistRequireVisitors } from "./rules/hoist-require";
 import { createVisitors as inlineVisitors } from "./rules/inline";
 import { createVisitors as localizerVisitors } from "./rules/localizer";
 import { createVisitors as loopRebaseVisitors } from "./rules/loop-rebase";
@@ -27,7 +28,8 @@ import { createVisitors as unspillVisitors } from "./rules/unspill";
 // earlier phases would have caught had they seen them:
 // - localizer creates consecutive `local` declarations that merge-locals can combine
 // - inline introduces new constant expressions and substitution sites for constant-propagation,
-//   as well as dead locals and empty blocks
+//   as well as dead locals and empty blocks; its require() chains are deduplicated by
+//   hoist-require (runs first in refold) before the other cleanup rules see them
 // - debug-strip leaves empty branches and unused locals behind argument removal
 //
 // Refold runs once (not to fixpoint). This is sufficient because the cleanup
@@ -74,6 +76,7 @@ const PHASE_ENTRIES: [string, [keyof PluginConfig["rules"], RuleFactory][]][] = 
   [
     "refold",
     [
+      ["hoist-require", hoistRequireVisitors],
       ["constant-propagation", constantPropagationVisitors],
       ["constant-folding", constantFoldingVisitors],
       ["dead-local", deadLocalVisitors],

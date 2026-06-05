@@ -148,6 +148,7 @@ const EXPECTED_RULE_KEYS: ReadonlyArray<keyof RulesConfig> = [
   "constant-propagation",
   "dead-local",
   "debug-strip",
+  "hoist-require",
   "inline",
   "localizer",
   "loop-rebase",
