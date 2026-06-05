@@ -137,7 +137,7 @@ describe("rewriteWithConstSubstitutions", () => {
         (n): n is ts.VariableDeclaration =>
           ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "x",
       );
-      if (!xDecl || !xDecl.initializer) throw new Error("expected x declaration with initializer");
+      if (!xDecl?.initializer) throw new Error("expected x declaration with initializer");
 
       const result = rewriteWithConstSubstitutions(xDecl.initializer, new Map(), checker, imports);
 
@@ -168,7 +168,7 @@ describe("rewriteWithConstSubstitutions", () => {
         (n): n is ts.VariableDeclaration =>
           ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "x",
       );
-      if (!xDecl || !xDecl.initializer) throw new Error("expected x declaration with initializer");
+      if (!xDecl?.initializer) throw new Error("expected x declaration with initializer");
 
       const result = rewriteWithConstSubstitutions(xDecl.initializer, new Map(), checker, imports);
 
@@ -200,7 +200,7 @@ describe("rewriteWithConstSubstitutions", () => {
         (n): n is ts.VariableDeclaration =>
           ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "y",
       );
-      if (!yDecl || !yDecl.initializer) throw new Error("expected y declaration with initializer");
+      if (!yDecl?.initializer) throw new Error("expected y declaration with initializer");
 
       const result = rewriteWithConstSubstitutions(
         yDecl.initializer,
@@ -229,7 +229,7 @@ describe("rewriteWithConstSubstitutions", () => {
         (n): n is ts.VariableDeclaration =>
           ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "y",
       );
-      if (!yDecl || !yDecl.initializer) throw new Error("expected y declaration with initializer");
+      if (!yDecl?.initializer) throw new Error("expected y declaration with initializer");
 
       // Empty substitutions but non-empty imports — the fast path must NOT trigger
       const result = rewriteWithConstSubstitutions(yDecl.initializer, new Map(), checker, imports);

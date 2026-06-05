@@ -3,7 +3,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { hasSideEffects } from "../../ast/ts-ast";
 import type { ImportBinding, LiteralKind } from "./const-literal";
-import { classifyCrossModuleInline } from "./cross-module";
+import { classifyCrossModuleInline, resolveConsumerBindings } from "./cross-module";
 import { createInlineWarning } from "./diagnostics";
 import {
   canInline,
@@ -27,13 +27,51 @@ import type {
 } from "./target";
 import { FUNCTION_SCOPE, returnsLuaMultiReturn } from "./target";
 
+interface ConsumerBindingRegistration {
+  skipSymbols: ReadonlySet<ts.Symbol>;
+  cleanup: () => void;
+}
+
+/**
+ * Pre-register target alias symbols in `context.symbolIdMaps` so TSTL resolves
+ * them to the consumer's existing locals instead of emitting fresh require chains.
+ *
+ * Returns a `skipSymbols` set (for `rewriteWithConstSubstitutions`) and a
+ * `cleanup` function that removes the temporary registrations.
+ */
+function registerConsumerBindings(
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol>,
+  context: tstl.TransformationContext,
+): ConsumerBindingRegistration {
+  const skipSymbols = new Set<ts.Symbol>();
+  const registered: ts.Symbol[] = [];
+
+  for (const [targetSymbol, consumerSymbol] of consumerBindings) {
+    const consumerSymbolId = context.symbolIdMaps.get(consumerSymbol);
+    /* v8 ignore next -- defensive: matched consumer symbol always has a SymbolId when the import is live */
+    if (consumerSymbolId === undefined) continue;
+    context.symbolIdMaps.set(targetSymbol, consumerSymbolId);
+    registered.push(targetSymbol);
+    skipSymbols.add(targetSymbol);
+  }
+
+  return {
+    skipSymbols,
+    cleanup: () => {
+      for (const sym of registered) {
+        context.symbolIdMaps.delete(sym);
+      }
+    },
+  };
+}
+
 export interface ParamMapResult {
   tempDecls: tstl.VariableDeclarationStatement[];
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }
 
 interface PreparedReturnValueInline {
-  tempDecls: tstl.VariableDeclarationStatement[];
+  tempDecls: tstl.Statement[];
   substitutedBody: tstl.Statement[];
   substitutedReturn: tstl.Expression;
 }
@@ -139,9 +177,10 @@ function rewriteInlineStatements(
   substitutions: Map<ts.Symbol, LiteralKind>,
   checker: ts.TypeChecker,
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  skipSymbols?: ReadonlySet<ts.Symbol>,
 ): readonly ts.Statement[] {
   return bodyStmts.map((stmt) =>
-    rewriteWithConstSubstitutions(stmt, substitutions, checker, imports),
+    rewriteWithConstSubstitutions(stmt, substitutions, checker, imports, skipSymbols),
   );
 }
 
@@ -159,7 +198,6 @@ function transformInFunctionScope<T>(
   }
 }
 
-/** Transform body statements inside a fresh function scope so locals produce `local` in Lua. */
 function transformBodyStatements(
   bodyStmts: readonly ts.Statement[],
   declaration: ts.Node,
@@ -188,19 +226,32 @@ export function transformInlineBodyAndReturn(
   checker: ts.TypeChecker,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): TransformedInlineFunction | undefined {
-  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker, imports);
+  const { skipSymbols, cleanup } = registerConsumerBindings(consumerBindings, context);
+
+  const rewrittenBodyStmts = rewriteInlineStatements(
+    bodyStmts,
+    substitutions,
+    checker,
+    imports,
+    skipSymbols,
+  );
   const rewrittenReturnExpr = rewriteWithConstSubstitutions(
     returnExpr,
     substitutions,
     checker,
     imports,
+    skipSymbols,
   );
   const returnStmt = createInlineReturnStatement(rewrittenReturnExpr);
   const { luaBody, luaReturnStmts } = transformInFunctionScope(declaration, context, () => ({
     luaBody: rewrittenBodyStmts.flatMap((s) => context.transformStatements(s)),
     luaReturnStmts: context.transformStatements(returnStmt),
   }));
+
+  cleanup();
+
   // Erase function-body positions so stampCallSitePositions can attribute every
   // body node to the call site.
   clearNodePositions(luaBody);
@@ -229,15 +280,25 @@ export function prepareReturnValueInline(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): PreparedReturnValueInline | undefined {
   const { bodyStmts, params, declaration, returnExpr } = target;
 
-  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker, imports);
+  const { skipSymbols, cleanup } = registerConsumerBindings(consumerBindings, context);
+
+  const rewrittenBodyStmts = rewriteInlineStatements(
+    bodyStmts,
+    substitutions,
+    checker,
+    imports,
+    skipSymbols,
+  );
   const rewrittenReturnExpr = rewriteWithConstSubstitutions(
     returnExpr,
     substitutions,
     checker,
     imports,
+    skipSymbols,
   );
 
   // Transform body and return expression first so ALL param symbols are registered
@@ -245,6 +306,9 @@ export function prepareReturnValueInline(
   // appears in the return expression (not in body statements) would be missing otherwise.
   const luaBody = transformBodyStatements(rewrittenBodyStmts, declaration, context);
   const luaReturnExpr = context.transformExpression(rewrittenReturnExpr);
+
+  cleanup();
+
   clearExpressionPositions(luaReturnExpr);
 
   const directSubs = computeDirectSubstitutableParams(
@@ -257,10 +321,13 @@ export function prepareReturnValueInline(
   if (!mapped) return undefined;
   const { tempDecls, paramMap } = mapped;
 
+  const substitutedBody = substituteParamsInStatements(luaBody, paramMap);
+  const substitutedReturn = substituteParams(luaReturnExpr, paramMap);
+
   return {
     tempDecls,
-    substitutedBody: substituteParamsInStatements(luaBody, paramMap),
-    substitutedReturn: substituteParams(luaReturnExpr, paramMap),
+    substitutedBody,
+    substitutedReturn,
   };
 }
 
@@ -271,13 +338,24 @@ export function buildDoEndBlock(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
 
-  const rewrittenBodyStmts = rewriteInlineStatements(bodyStmts, substitutions, checker, imports);
+  const { skipSymbols, cleanup } = registerConsumerBindings(consumerBindings, context);
+
+  const rewrittenBodyStmts = rewriteInlineStatements(
+    bodyStmts,
+    substitutions,
+    checker,
+    imports,
+    skipSymbols,
+  );
 
   // Transform body first so cross-module param symbols are registered in context.symbolIdMaps.
   const luaBody = transformBodyStatements(rewrittenBodyStmts, declaration, context);
+
+  cleanup();
 
   // If a lower-priority rule (e.g. conditional-compilation) stripped the body
   // to nothing, the params were never referenced and may lack Lua SymbolIds.
@@ -347,13 +425,23 @@ export function inlineExpressionBody(
   }
   const { substitutions, imports } = classification;
 
+  // Check whether the consumer already has in-scope locals that back any of the
+  // require() bindings in `imports`.  For those symbols, skip synthesizing a fresh
+  // require chain and instead let TSTL resolve the identifier via symbolIdMaps —
+  // after we pre-register the target alias symbol → consumer's SymbolId mapping.
+  const consumerBindings = resolveConsumerBindings(imports, callNode, checker);
+  const { skipSymbols, cleanup } = registerConsumerBindings(consumerBindings, context);
+
   const rewrittenExpr = rewriteWithConstSubstitutions(
     target.bodyExpr,
     substitutions,
     checker,
     imports,
+    skipSymbols,
   );
   const luaBody = context.transformExpression(rewrittenExpr);
+
+  cleanup();
   clearExpressionPositions(luaBody);
 
   if (needsEagerArgumentTemps(target, callNode, checker)) {
@@ -457,6 +545,7 @@ export function buildVarDeclInline(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): tstl.Statement[] | undefined {
   const { bodyStmts } = target;
 
@@ -480,6 +569,7 @@ export function buildVarDeclInline(
     context,
     substitutions,
     imports,
+    consumerBindings,
   );
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
@@ -516,6 +606,7 @@ export function buildReturnSiteInline(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): tstl.Statement[] | undefined {
   const { bodyStmts, params, declaration } = target;
   const isMultiReturn = returnsLuaMultiReturn(declaration, callNode, checker);
@@ -528,6 +619,7 @@ export function buildReturnSiteInline(
       checker,
       substitutions,
       imports,
+      consumerBindings,
     );
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
@@ -565,6 +657,7 @@ export function buildReturnSiteInline(
     context,
     substitutions,
     imports,
+    consumerBindings,
   );
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;

@@ -19,6 +19,7 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
   substitutions: Map<ts.Symbol, LiteralKind>,
   checker: ts.TypeChecker,
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  skipSymbols?: ReadonlySet<ts.Symbol>,
 ): T {
   if (substitutions.size === 0 && (!imports || imports.size === 0)) {
     return node;
@@ -47,6 +48,10 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
       sym.flags & ts.SymbolFlags.Alias ? [sym, checker.getAliasedSymbol(sym)] : [sym];
 
     for (const symbolToCheck of symbolsToCheck) {
+      // When the consumer already has an in-scope local for this binding,
+      // skip synthesizing a fresh require chain — let TSTL resolve it via symbolIdMaps.
+      if (skipSymbols?.has(symbolToCheck) === true) return undefined;
+
       const binding = imports.get(symbolToCheck);
       if (binding !== undefined) {
         return binding;

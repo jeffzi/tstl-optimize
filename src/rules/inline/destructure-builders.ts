@@ -15,7 +15,7 @@ interface DestructureShared {
   resultIdent: tstl.Identifier;
   resultSymId: tstl.SymbolId;
   resultDecl: tstl.VariableDeclarationStatement;
-  tempDecls: tstl.VariableDeclarationStatement[];
+  tempDecls: tstl.Statement[];
   doEnd: tstl.DoStatement;
 }
 
@@ -32,6 +32,7 @@ function buildDestructureShared(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): DestructureShared | undefined {
   const resultSymId = context.nextSymbolId();
   const resultIdent = tstl.createIdentifier(
@@ -48,6 +49,7 @@ function buildDestructureShared(
     context,
     substitutions,
     imports,
+    consumerBindings,
   );
   if (!prepared) return undefined;
   const { tempDecls, substitutedBody, substitutedReturn } = prepared;
@@ -69,6 +71,7 @@ export function buildObjectDestructureInline(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): tstl.Statement[] | undefined {
   const bindings: { bindingName: ts.Identifier; keyNode: ts.Identifier }[] = [];
   for (const element of pattern.elements) {
@@ -82,7 +85,15 @@ export function buildObjectDestructureInline(
     bindings.push({ bindingName: element.name, keyNode });
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context, substitutions, imports);
+  const shared = buildDestructureShared(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+    consumerBindings,
+  );
   if (!shared) return undefined;
   const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 
@@ -112,6 +123,7 @@ export function buildArrayDestructureInline(
   context: tstl.TransformationContext,
   substitutions: Map<ts.Symbol, LiteralKind> = new Map(),
   imports?: ReadonlyMap<ts.Symbol, ImportBinding>,
+  consumerBindings: ReadonlyMap<ts.Symbol, ts.Symbol> = new Map(),
 ): tstl.Statement[] | undefined {
   const bindingNames: ts.Identifier[] = [];
   for (const element of pattern.elements) {
@@ -153,6 +165,7 @@ export function buildArrayDestructureInline(
       checker,
       substitutions,
       imports,
+      consumerBindings,
     );
     if (!transformed) return undefined;
     const { luaBody, luaReturn } = transformed;
@@ -181,7 +194,15 @@ export function buildArrayDestructureInline(
     return multiResult;
   }
 
-  const shared = buildDestructureShared(target, callNode, checker, context, substitutions, imports);
+  const shared = buildDestructureShared(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+    consumerBindings,
+  );
   if (!shared) return undefined;
   const { resultIdent, resultSymId, resultDecl, tempDecls, doEnd } = shared;
 

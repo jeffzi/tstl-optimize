@@ -8,7 +8,7 @@ import {
   inlineExpressionBody,
 } from "./builders";
 import type { ImportBinding, LiteralKind } from "./const-literal";
-import { classifyCrossModuleInline } from "./cross-module";
+import { classifyCrossModuleInline, resolveConsumerBindings } from "./cross-module";
 import { buildArrayDestructureInline, buildObjectDestructureInline } from "./destructure-builders";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import {
@@ -44,7 +44,11 @@ function validateAndClassifyReturnValueInline(
   strict: boolean,
   warnCrossModule: boolean,
 ):
-  | { substitutions: Map<ts.Symbol, LiteralKind>; imports: Map<ts.Symbol, ImportBinding> }
+  | {
+      substitutions: Map<ts.Symbol, LiteralKind>;
+      imports: Map<ts.Symbol, ImportBinding>;
+      consumerBindings: Map<ts.Symbol, ts.Symbol>;
+    }
   | undefined {
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== undefined) {
@@ -66,7 +70,12 @@ function validateAndClassifyReturnValueInline(
   if (classification.reject) {
     return undefined;
   }
-  return { substitutions: classification.substitutions, imports: classification.imports };
+  const consumerBindings = resolveConsumerBindings(classification.imports, callNode, checker);
+  return {
+    substitutions: classification.substitutions,
+    imports: classification.imports,
+    consumerBindings,
+  };
 }
 
 export function handleCallExpression(
@@ -133,7 +142,7 @@ export function handleVariableStatement(
     warnCrossModule,
   );
   if (classified === undefined) return undefined;
-  const { substitutions, imports } = classified;
+  const { substitutions, imports, consumerBindings } = classified;
 
   if (ts.isIdentifier(decl.name)) {
     return buildVarDeclInline(
@@ -144,6 +153,7 @@ export function handleVariableStatement(
       context,
       substitutions,
       imports,
+      consumerBindings,
     );
   }
 
@@ -156,6 +166,7 @@ export function handleVariableStatement(
       context,
       substitutions,
       imports,
+      consumerBindings,
     );
   }
 
@@ -168,6 +179,7 @@ export function handleVariableStatement(
       context,
       substitutions,
       imports,
+      consumerBindings,
     );
   }
 
@@ -196,9 +208,17 @@ export function handleReturnStatement(
     warnCrossModule,
   );
   if (classified === undefined) return undefined;
-  const { substitutions, imports } = classified;
+  const { substitutions, imports, consumerBindings } = classified;
 
-  return buildReturnSiteInline(target, callNode, checker, context, substitutions, imports);
+  return buildReturnSiteInline(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+    consumerBindings,
+  );
 }
 
 export function handleExpressionStatement(
@@ -267,8 +287,17 @@ export function handleExpressionStatement(
     return undefined;
   }
   const { substitutions, imports } = classification;
+  const consumerBindings = resolveConsumerBindings(imports, callNode, checker);
 
-  return buildDoEndBlock(target, callNode, checker, context, substitutions, imports);
+  return buildDoEndBlock(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+    consumerBindings,
+  );
 }
 
 const INLINE_TAG_RE = /^\s*@inline\s*$/;
