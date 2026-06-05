@@ -46,6 +46,8 @@ function isConfiguredGlobalIdentifier(
   }
 
   const symbol = checker.getSymbolAtLocation(identifier);
+  // If symbol lookup fails (e.g., external or unresolved), conservatively treat as a
+  // configured global to avoid stripping calls with ambiguous origins.
   if (symbol === undefined) {
     return true;
   }

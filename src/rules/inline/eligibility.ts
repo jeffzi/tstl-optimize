@@ -43,7 +43,9 @@ export function isModuleScopeDeclaration(node: ts.Node): boolean {
   if (ts.isVariableDeclaration(node)) {
     const varStatement = node.parent?.parent;
     return (
-      !!varStatement && ts.isVariableStatement(varStatement) && ts.isSourceFile(varStatement.parent)
+      varStatement !== undefined &&
+      ts.isVariableStatement(varStatement) &&
+      ts.isSourceFile(varStatement.parent)
     );
   }
   return false;
@@ -98,7 +100,7 @@ export function isCallSiteFullyInlined(
 
   const variableStatement = callNode.parent.parent?.parent;
   return (
-    !!variableStatement &&
+    variableStatement !== undefined &&
     ts.isVariableStatement(variableStatement) &&
     variableStatement.declarationList.declarations.length === 1 &&
     isSupportedInlineBindingPattern(callNode.parent.name) &&

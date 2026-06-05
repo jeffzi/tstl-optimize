@@ -364,7 +364,7 @@ describe("optimize rule interactions", () => {
         }),
         FC_OPTS,
       );
-    }, 20_000);
+    }, 10_000);
 
     it("assigns arg temps in left-to-right parameter order for multi-arg side-effectful calls", () => {
       fc.assert(
@@ -396,7 +396,7 @@ describe("optimize rule interactions", () => {
         }),
         FC_OPTS,
       );
-    }, 20_000);
+    }, 10_000);
 
     it("inlines a function that captures a module-level const (upvalue access is preserved)", () => {
       // SCALE is a module-level const. After inlining times(n), the body `n * SCALE` must
@@ -417,7 +417,7 @@ describe("optimize rule interactions", () => {
         }),
         FC_OPTS,
       );
-    }, 20_000);
+    }, 10_000);
   });
 
   describe("when constant-propagation interacts with other rules", () => {

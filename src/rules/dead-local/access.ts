@@ -54,11 +54,22 @@ export function findFirstAccessKind(
     }
 
     let result: AccessKind | undefined;
-    forEachAccess(stmt, ({ identifier, kind, inFunctionBody }) => {
-      if (identifier.symbolId !== symbolId) return;
-      result = inFunctionBody ? "read" : kind;
-      return true;
-    });
+    forEachAccess(
+      stmt,
+      ({
+        identifier,
+        kind,
+        inFunctionBody,
+      }: {
+        identifier: tstl.Identifier;
+        kind: AccessKind;
+        inFunctionBody: boolean;
+      }) => {
+        if (identifier.symbolId !== symbolId) return;
+        result = inFunctionBody ? "read" : kind;
+        return true;
+      },
+    );
     if (result !== undefined) return result;
   }
   return undefined;
@@ -76,7 +87,7 @@ function isConditionalStatement(stmt: tstl.Statement): boolean {
 
 function statementMentionsSymbol(stmt: tstl.Statement, symbolId: number): boolean {
   let found = false;
-  forEachAccess(stmt, ({ identifier }) => {
+  forEachAccess(stmt, ({ identifier }: { identifier: tstl.Identifier }) => {
     if (identifier.symbolId === symbolId) {
       found = true;
       return true;

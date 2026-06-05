@@ -241,7 +241,7 @@ describe("cross-module inlining", () => {
           `,
         },
       },
-    ])("preserves $expectedCall for $name", ({ expectedCall, files }) => {
+    ])("rejects inline when $name has non-const state", ({ expectedCall, files }) => {
       const { diagnostics, lua } = compileMultiFileWithDiagnostics(files, {
         pluginOptions: { rules: { inline: { warnCrossModule: true } } },
       });
@@ -554,63 +554,64 @@ describe("cross-module inlining", () => {
     }
 
     describe("when the inlined body uses the same require chain multiple times", () => {
-      it("hoists a member require pattern used 2+ times into a single local in a return-value inline", () => {
-        // main.ts does NOT import bit_and — consumer has no existing local to reuse.
-        // The inlined body uses band(a, b) twice (via require("bit").band each time).
-        // Expect ONE hoisted local for require("bit").band, referenced from both call sites.
-        const { diagnostics, lua } = compileMultiFileWithDiagnostics({
-          "bit.ts": BIT_STUB,
-          "utils.ts": `
-            ${REQUIRE_DECL}
-            const band = (require("bit") as any).band;
+      it.each<{
+        returnType: string;
+        files: Record<string, string>;
+        fnName: string;
+      }>([
+        {
+          returnType: "return-value",
+          files: {
+            "bit.ts": BIT_STUB,
+            "utils.ts": `
+              ${REQUIRE_DECL}
+              const band = (require("bit") as any).band;
 
-            /** @inline */
-            export function doubleMask(a: number, b: number): number {
-              const first = band(a, b);
-              const second = band(first, b);
-              return second;
-            }
-          `,
-          "main.ts": `
-            import { doubleMask } from "./utils";
-            export const result = doubleMask(0xff, 0x0f);
-          `,
-        });
+              /** @inline */
+              export function doubleMask(a: number, b: number): number {
+                const first = band(a, b);
+                const second = band(first, b);
+                return second;
+              }
+            `,
+            "main.ts": `
+              import { doubleMask } from "./utils";
+              export const result = doubleMask(0xff, 0x0f);
+            `,
+          },
+          fnName: "doubleMask",
+        },
+        {
+          returnType: "void",
+          files: {
+            "bit.ts": BIT_STUB,
+            "utils.ts": `
+              ${REQUIRE_DECL}
+              const band = (require("bit") as any).band;
 
+              /** @inline */
+              export function logDouble(a: number, b: number): void {
+                const first = band(a, b);
+                const second = band(first, b);
+                const msg = "results: " + first + ", " + second;
+              }
+            `,
+            "main.ts": `
+              import { logDouble } from "./utils";
+              export function run(): void {
+                logDouble(0xff, 0x0f);
+              }
+            `,
+          },
+          fnName: "logDouble",
+        },
+      ])("hoists require in $returnType inline when used 2+ times", ({ files, fnName }) => {
+        const { diagnostics, lua } = compileMultiFileWithDiagnostics(files);
         expect(diagnostics).toHaveLength(0);
-        assertRequireBandHoisted(normalizeLua(lua), "doubleMask");
+        assertRequireBandHoisted(normalizeLua(lua), fnName);
       });
 
-      it("hoists a member require pattern used 2+ times into a single local in a do-end (void) inline", () => {
-        // main.ts does NOT import bit_and — inlined void function uses band twice.
-        // Expect one hoisted local in the do..end block.
-        const { diagnostics, lua } = compileMultiFileWithDiagnostics({
-          "bit.ts": BIT_STUB,
-          "utils.ts": `
-            ${REQUIRE_DECL}
-            const band = (require("bit") as any).band;
-
-            /** @inline */
-            export function logDouble(a: number, b: number): void {
-              const first = band(a, b);
-              const second = band(first, b);
-              const msg = "results: " + first + ", " + second;
-            }
-          `,
-          "main.ts": `
-            import { logDouble } from "./utils";
-            export function run(): void {
-              logDouble(0xff, 0x0f);
-            }
-          `,
-        });
-
-        expect(diagnostics).toHaveLength(0);
-        assertRequireBandHoisted(normalizeLua(lua), "logDouble");
-      });
-
-      it("does not hoist when the require pattern appears only once in a multi-statement body", () => {
-        // body uses band exactly once — no hoisting, require("bit").band emitted inline
+      it("emits inline when require pattern appears only once", () => {
         const { diagnostics, lua } = compileMultiFileWithDiagnostics({
           "bit.ts": BIT_STUB,
           "utils.ts": `
@@ -631,15 +632,12 @@ describe("cross-module inlining", () => {
 
         expect(diagnostics).toHaveLength(0);
         const normalized = normalizeLua(lua);
-        // Single occurrence — must appear inline, no hoisted local
         expect(normalized).toContain('require("bit").band');
         expect(normalized).not.toMatch(/local ____req_\w+ = require\("bit"\)\.band/);
         expect(normalized).not.toContain("mask(");
       });
 
-      it("hoists a bare require (no member) used 2+ times and leaves a single-occurrence member require inline", () => {
-        // Body uses a bare require("transform") twice (no .member) and require("bit").band once.
-        // The bare pattern gets hoisted; the member pattern stays inline (only 1 occurrence).
+      it("hoists bare require when used 2+ times, leaves single-use member require inline", () => {
         const { diagnostics, lua } = compileMultiFileWithDiagnostics({
           "bit.ts": BIT_STUB,
           "transform.ts": "export declare function transform(x: number): number;",
@@ -664,25 +662,18 @@ describe("cross-module inlining", () => {
 
         expect(diagnostics).toHaveLength(0);
         const normalized = normalizeLua(lua);
-        // Bare require("transform") appears 2+ times → hoisted into a local
         const hoistedMatch = normalized.match(
           /local (____req_transform\w*) = require\("transform"\)/,
         );
         expect(hoistedMatch).not.toBeNull();
         const hoistedName = hoistedMatch?.[1];
-        // Hoisted local used at declaration + 2 call sites
         const useCount = (normalized.match(new RegExp(`\\b${hoistedName}\\b`, "g")) ?? []).length;
         expect(useCount).toBeGreaterThanOrEqual(3);
-        // Member require("bit").band appears once → NOT hoisted, left inline
         expect(normalized).toContain('require("bit").band');
         expect(normalized).not.toContain("process(");
       });
 
-      it("does not hoist in an expression-body inline even when the require chain appears multiple times", () => {
-        // Expression bodies have no statement context — no hoisting possible.
-        // (A single-expression body cannot reference band twice in practice, but the
-        //  rule must not crash when it's not invoked for expression bodies.)
-        // Use a single-occurrence expression body to confirm the current emit is unchanged.
+      it("skips hoisting in expression-body inline (no statement context)", () => {
         const { diagnostics, lua } = compileMultiFileWithDiagnostics({
           "bit.ts": BIT_STUB,
           "utils.ts": `
@@ -700,7 +691,6 @@ describe("cross-module inlining", () => {
 
         expect(diagnostics).toHaveLength(0);
         const normalized = normalizeLua(lua);
-        // Expression body — require chain emitted directly, no hoisted local
         expect(normalized).toContain('require("bit").band');
         expect(normalized).not.toMatch(/local ____req_\w+ = require\("bit"\)\.band/);
         expect(normalized).not.toContain("bitwiseAnd(");

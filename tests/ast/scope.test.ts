@@ -393,7 +393,8 @@ describe("collectScopeInfo", () => {
     const variadicExpr = tstl.createFunctionExpression(tstl.createBlock([]), [
       tstl.createIdentifier("arg"),
     ]);
-    Reflect.set(variadicExpr, "params", [tstl.createDotsLiteral()]);
+    const dotsLiteral1 = tstl.createDotsLiteral();
+    Reflect.set(variadicExpr, "params", [dotsLiteral1]);
     const variadicDefinition = tstl.createAssignmentStatement(
       tstl.createIdentifier("fn"),
       tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("arg")]),
@@ -402,13 +403,15 @@ describe("collectScopeInfo", () => {
     if (!tstl.isFunctionExpression(definedFunction)) {
       throw new Error("Expected FunctionExpression");
     }
-    Reflect.set(definedFunction, "params", [tstl.createDotsLiteral()]);
+    const dotsLiteral2 = tstl.createDotsLiteral();
+    Reflect.set(definedFunction, "params", [dotsLiteral2]);
     const forIn = tstl.createForInStatement(
       tstl.createBlock([]),
       [tstl.createIdentifier("value")],
       [tstl.createIdentifier("iter")],
     );
-    Reflect.set(forIn, "names", [tstl.createDotsLiteral()]);
+    const dotsLiteral3 = tstl.createDotsLiteral();
+    Reflect.set(forIn, "names", [dotsLiteral3]);
 
     const { scopeDefs } = collectScopeInfo(
       [tstl.createExpressionStatement(variadicExpr), variadicDefinition, forIn],

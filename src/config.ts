@@ -224,7 +224,7 @@ export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boo
 export type RuleFactory = (checker: ts.TypeChecker, config: PluginConfig) => tstl.Visitors;
 
 export function isRecord(val: unknown): val is Record<string, unknown> {
-  return typeof val === "object" && val != null && !Array.isArray(val);
+  return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
 function isLocalizerScope(val: unknown): val is LocalizerScope {

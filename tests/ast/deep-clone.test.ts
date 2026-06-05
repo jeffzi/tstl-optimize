@@ -106,7 +106,7 @@ describe("deepCloneExpression", () => {
   it.each([
     { expr: tstl.createStringLiteral("hello"), name: "StringLiteral" },
     { expr: tstl.createNumericLiteral(42), name: "NumericLiteral" },
-  ])("clones leaf node: $name", ({ expr }) => {
+  ])("clones leaf node ($name)", ({ expr }) => {
     const cloned = deepCloneExpression(expr);
 
     expect(cloned).not.toBe(expr);

@@ -3043,11 +3043,11 @@ describe("inline: statement-position and argument handling", () => {
         pushScope: () => {},
         popScope: () => {},
         transformExpression: () => tstl.createIdentifier("mapped"),
-        transformStatements: () => [],
         // superTransformStatements is called by the @inline comment-strip path when a
         // non-erasable declaration keeps its @inline tag. Return an empty array — the
         // call-path is what's being tested, not the TSTL default transform result.
         superTransformStatements: () => [],
+        transformStatements: () => [],
         ...overrides,
       } as unknown as tstl.TransformationContext;
     }

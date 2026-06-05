@@ -351,7 +351,7 @@ describe("cross-module const literal inlining", () => {
         },
         preservedCall: "____exports.result = argumentCount()",
       },
-    ])("emits diagnostic 90003 when $name", ({ files, preservedCall }) => {
+    ])("preserves $preservedCall when $name", ({ files, preservedCall }) => {
       const normalized = compileAndExpectCrossModuleDiagnostic(files);
       expect(normalized).toContain(preservedCall);
     });
@@ -416,7 +416,7 @@ describe("cross-module const literal inlining", () => {
           `,
         },
       },
-    ])("emits diagnostic 90003 when const is $name", ({ files }) => {
+    ])("emits 90003 when const is $name (non-primitive)", ({ files }) => {
       const { diagnostics } = compileMultiFileWithDiagnostics(files, {
         pluginOptions: { rules: { inline: { warnCrossModule: true } } },
       });
@@ -567,7 +567,7 @@ describe("cross-module const literal inlining", () => {
           `,
         },
       },
-    ])("inlines $name", ({ expectedLua, files, removedCall }) => {
+    ])("substitutes const in $name", ({ expectedLua, files, removedCall }) => {
       const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain(expectedLua);
       expect(normalized).not.toContain(removedCall);
@@ -697,9 +697,9 @@ describe("cross-module const literal inlining", () => {
   });
 
   describe("when function body has multiple statements", () => {
-    it.each<{ name: string; files: Record<string, string>; assertion: string }>([
+    it.each<{ returnType: string; files: Record<string, string>; assertion: string }>([
       {
-        name: "number-returning",
+        returnType: "number",
         assertion: "15",
         files: {
           "utils.ts": `
@@ -718,7 +718,7 @@ describe("cross-module const literal inlining", () => {
         },
       },
       {
-        name: "void",
+        returnType: "void",
         assertion: "0",
         files: {
           "utils.ts": `
@@ -736,7 +736,7 @@ describe("cross-module const literal inlining", () => {
           `,
         },
       },
-    ])("inlines $name function with const reference", ({ files, assertion }) => {
+    ])("inlines $returnType function with const reference", ({ files, assertion }) => {
       const normalized = compileAndExpectNoDiagnostics(files);
       expect(normalized).toContain(assertion);
     });
@@ -765,50 +765,50 @@ describe("cross-module const literal inlining", () => {
   });
 
   describe("when const is a computed expression", () => {
-    it("inlines simple computed const (power operation)", () => {
-      const files = {
-        "shared.ts": `
-          const BITS = 24;
-          export const MAX = 2 ** BITS;
+    it.each<{ files: Record<string, string>; assertion: string }>([
+      {
+        files: {
+          "shared.ts": `
+            const BITS = 24;
+            export const MAX = 2 ** BITS;
 
-          /** @inline */
-          export function scale(x: number): number {
-            return x * MAX;
-          }
-        `,
-        "main.ts": `
-          import { scale } from "./shared";
-          export const result = scale(3);
-        `,
-      };
+            /** @inline */
+            export function scale(x: number): number {
+              return x * MAX;
+            }
+          `,
+          "main.ts": `
+            import { scale } from "./shared";
+            export const result = scale(3);
+          `,
+        },
+        assertion: "50331648",
+      },
+      {
+        files: {
+          "shared.ts": `
+            const A = 2;
+            const B = A ** 3;
+            export const C = B * 2;
 
+            /** @inline */
+            export function apply(x: number): number {
+              return x + C;
+            }
+          `,
+          "main.ts": `
+            import { apply } from "./shared";
+            export const result = apply(1);
+          `,
+        },
+        assertion: "17",
+      },
+    ])("inlines computed const and folds result", ({ files, assertion }) => {
       const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain("50331648");
+      expect(normalized).toContain(assertion);
     });
 
-    it("inlines chained computed consts", () => {
-      const files = {
-        "shared.ts": `
-          const A = 2;
-          const B = A ** 3;
-          export const C = B * 2;
-
-          /** @inline */
-          export function apply(x: number): number {
-            return x + C;
-          }
-        `,
-        "main.ts": `
-          import { apply } from "./shared";
-          export const result = apply(1);
-        `,
-      };
-
-      const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain("17");
-    });
-
-    it("emits diagnostic 90003 when mixed computed const and blocking refs", () => {
+    it("blocks inline when mixing computed const with non-const function calls", () => {
       const files = {
         "shared.ts": `
           const BITS = 8;
@@ -835,141 +835,140 @@ describe("cross-module const literal inlining", () => {
       expect(hasDiagnosticCode(diagnostics, CROSS_MODULE_CONST_LITERAL_DIAGNOSTIC)).toBe(true);
     });
 
-    it("inlines computed const through import alias", () => {
-      const files = {
-        "constants.ts": `
-          const BASE = 255;
-          export const MULTIPLIER = BASE * 8;
-        `,
-        "shared.ts": `
-          import { MULTIPLIER } from "./constants";
+    it.each<{ files: Record<string, string>; assertion: string }>([
+      {
+        files: {
+          "constants.ts": `
+            const BASE = 255;
+            export const MULTIPLIER = BASE * 8;
+          `,
+          "shared.ts": `
+            import { MULTIPLIER } from "./constants";
 
-          /** @inline */
-          export function scale(val: number): number {
-            return val * MULTIPLIER;
-          }
-        `,
-        "main.ts": `
-          import { scale } from "./shared";
-          export const result = scale(2);
-        `,
-      };
+            /** @inline */
+            export function scale(val: number): number {
+              return val * MULTIPLIER;
+            }
+          `,
+          "main.ts": `
+            import { scale } from "./shared";
+            export const result = scale(2);
+          `,
+        },
+        assertion: "4080",
+      },
+      {
+        files: {
+          "constants.ts": `
+            export const BASE = 255;
+          `,
+          "shared.ts": `
+            import { BASE } from "./constants";
+            export const MULTIPLIER = BASE * 8;
 
+            /** @inline */
+            export function scale(val: number): number {
+              return val * MULTIPLIER;
+            }
+          `,
+          "main.ts": `
+            import { scale } from "./shared";
+            export const result = scale(2);
+          `,
+        },
+        assertion: "4080",
+      },
+    ])("handles import aliases and multi-level imports", ({ files, assertion }) => {
       const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain("4080");
-    });
-
-    it("inlines computed const whose initializer reads an imported const", () => {
-      const files = {
-        "constants.ts": `
-          export const BASE = 255;
-        `,
-        "shared.ts": `
-          import { BASE } from "./constants";
-          export const MULTIPLIER = BASE * 8;
-
-          /** @inline */
-          export function scale(val: number): number {
-            return val * MULTIPLIER;
-          }
-        `,
-        "main.ts": `
-          import { scale } from "./shared";
-          export const result = scale(2);
-        `,
-      };
-
-      const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain("4080");
+      expect(normalized).toContain(assertion);
     });
   });
 
   describe("when body references computed template literal const", () => {
-    it("inlines simple computed template literal", () => {
-      const files = {
-        "utils.ts": `
-          export const MAX = 2 ** 8;
-          export const MSG = \`max: \${MAX - 1}\`;
+    it.each<{ files: Record<string, string>; assertion: string | string[] }>([
+      {
+        files: {
+          "utils.ts": `
+            export const MAX = 2 ** 8;
+            export const MSG = \`max: \${MAX - 1}\`;
 
-          /** @inline */
-          export function getMessage(): string {
-            return MSG;
-          }
-        `,
-        "main.ts": `
-          import { getMessage } from "./utils";
-          const m = getMessage();
-        `,
-      };
+            /** @inline */
+            export function getMessage(): string {
+              return MSG;
+            }
+          `,
+          "main.ts": `
+            import { getMessage } from "./utils";
+            const m = getMessage();
+          `,
+        },
+        assertion: '"max: 255"',
+      },
+      {
+        files: {
+          "utils.ts": `
+            const SAFE_BITS = 53;
+            const GEN_BITS = 24;
+            export const MAX_INDEX = 2 ** (SAFE_BITS - GEN_BITS);
 
+            export const OVERFLOW_MSG = \`entity index overflow (max \${MAX_INDEX - 1} per world)\`;
+
+            /** @inline */
+            export function getConstraints(): { msg: string; limit: number } {
+              return { msg: OVERFLOW_MSG, limit: MAX_INDEX };
+            }
+          `,
+          "main.ts": `
+            import { getConstraints } from "./utils";
+            const c = getConstraints();
+          `,
+        },
+        assertion: ['"entity index overflow (max 536870911 per world)"', "536870912"],
+      },
+      {
+        files: {
+          "utils.ts": `
+            const MSG = "boom";
+
+            /** @inline */
+            export function bang(): string {
+              return MSG;
+            }
+          `,
+          "main.ts": `
+            import { bang } from "./utils";
+            const m = bang();
+          `,
+        },
+        assertion: '"boom"',
+      },
+      {
+        files: {
+          "utils.ts": `
+            const BITS = 24;
+            const MAX = 2 ** BITS;
+
+            /** @inline */
+            export function getMax(): number {
+              return MAX;
+            }
+          `,
+          "main.ts": `
+            import { getMax } from "./utils";
+            const m = getMax();
+          `,
+        },
+        assertion: "16777216",
+      },
+    ])("inlines and folds const literal in templates and private consts", ({
+      files,
+      assertion,
+    }) => {
       const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain('"max: 255"');
-    });
-
-    it("inlines OVERFLOW_MSG pattern with computed template literal and computed const", () => {
-      const files = {
-        "utils.ts": `
-          const SAFE_BITS = 53;
-          const GEN_BITS = 24;
-          export const MAX_INDEX = 2 ** (SAFE_BITS - GEN_BITS);
-
-          export const OVERFLOW_MSG = \`entity index overflow (max \${MAX_INDEX - 1} per world)\`;
-
-          /** @inline */
-          export function getConstraints(): { msg: string; limit: number } {
-            return { msg: OVERFLOW_MSG, limit: MAX_INDEX };
-          }
-        `,
-        "main.ts": `
-          import { getConstraints } from "./utils";
-          const c = getConstraints();
-        `,
-      };
-
-      const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain('"entity index overflow (max 536870911 per world)"');
-      expect(normalized).toContain("536870912");
-    });
-
-    it("inlines cross-module function with non-exported same-file const literal", () => {
-      const files = {
-        "utils.ts": `
-          const MSG = "boom";
-
-          /** @inline */
-          export function bang(): string {
-            return MSG;
-          }
-        `,
-        "main.ts": `
-          import { bang } from "./utils";
-          const m = bang();
-        `,
-      };
-
-      const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain('"boom"');
-    });
-
-    it("inlines cross-module function with non-exported computed const literal", () => {
-      const files = {
-        "utils.ts": `
-          const BITS = 24;
-          const MAX = 2 ** BITS;
-
-          /** @inline */
-          export function getMax(): number {
-            return MAX;
-          }
-        `,
-        "main.ts": `
-          import { getMax } from "./utils";
-          const m = getMax();
-        `,
-      };
-
-      const normalized = compileAndExpectNoDiagnostics(files);
-      expect(normalized).toContain("16777216");
+      const assertions = Array.isArray(assertion) ? assertion : [assertion];
+      assertions.forEach((a) => {
+        expect(normalized).toContain(a);
+      });
     });
   });
 });

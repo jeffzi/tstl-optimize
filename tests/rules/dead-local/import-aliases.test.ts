@@ -40,7 +40,7 @@ describe("dead-local — import alias elimination", () => {
     expect(normalized).not.toContain('require("helper")');
     expect(normalized).not.toContain("local double");
     // Inlined body may be constant-folded or kept as-is
-    expect(normalized.includes("21 * 2") || normalized.includes("42")).toBe(true);
+    expect(normalized.includes("21 * 2") || normalized.includes("42")).toBeTruthy();
   });
 
   it("keeps alive alias with at least one surviving read", () => {
@@ -114,15 +114,15 @@ describe("dead-local — import alias elimination", () => {
     expect(normalized).toContain('require("helper")');
   });
 
-  it("does not touch non-import module-scope locals", () => {
-    const lua = compile("const x = 1;", {
+  it("does not modify module-scope or single-file locals (no import context)", () => {
+    // Module scope: const x = 1
+    const moduleLua = compile("const x = 1;", {
       pluginOptions: { rules: { "constant-propagation": false } },
     });
-    expect(lua).toContain("x = 1");
-  });
+    expect(moduleLua).toContain("x = 1");
 
-  it("does not affect single-file code without imports", () => {
-    const lua = compile(
+    // Single-file function scope (no imports)
+    const functionLua = compile(
       `
       function f() {
         const x = 1;
@@ -131,8 +131,8 @@ describe("dead-local — import alias elimination", () => {
     `,
       { pluginOptions: { rules: { "constant-propagation": false } } },
     );
-    expect(lua).toContain("x = 1");
-    expect(lua).toContain("return x");
+    expect(functionLua).toContain("x = 1");
+    expect(functionLua).toContain("return x");
   });
 
   it("removes alias when local re-export of inlined function survives with no other reads", () => {
@@ -154,7 +154,7 @@ describe("dead-local — import alias elimination", () => {
     expect(normalized).not.toContain("____helper");
     expect(normalized).not.toContain('require("helper")');
     // Inlined body may be constant-folded or kept as-is
-    expect(normalized.includes("10 * 3") || normalized.includes("30")).toBe(true);
+    expect(normalized.includes("10 * 3") || normalized.includes("30")).toBeTruthy();
   });
 
   it("preserves alias when used in closure capture", () => {

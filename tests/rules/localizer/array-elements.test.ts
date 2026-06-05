@@ -43,10 +43,9 @@ describe("replaceArrayElements", () => {
 
       // Walker recursed into the body and replaced arr[i] with the hoisted identifier
       expect(tstl.isIdentifier(innerStmt.expression)).toBe(true);
-      if (!tstl.isIdentifier(innerStmt.expression)) {
-        throw new Error("Expected identifier");
+      if (tstl.isIdentifier(innerStmt.expression)) {
+        expect(innerStmt.expression.text).toBe("____arr");
       }
-      expect(innerStmt.expression.text).toBe("____arr");
     });
   });
 

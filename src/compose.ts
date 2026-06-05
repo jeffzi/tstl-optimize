@@ -1,7 +1,7 @@
 import type ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { type InterpreterTarget, parseConfig, type RulesConfig } from "./config";
+import { type InterpreterTarget, isRecord, parseConfig, type RulesConfig } from "./config";
 import {
   buildOptimizeVisitors,
   mergeVisitor,
@@ -45,7 +45,8 @@ export function createScopedOptimizeVisitors(
   config?: OptimizeComposeOptions,
 ): tstl.Visitors {
   const checker = program.getTypeChecker();
-  const parsed = parseConfig(config as Record<string, unknown> | undefined);
+  // Convert config to plain record; parseConfig accepts unknown and validates internally
+  const parsed = parseConfig(isRecord(config) ? config : undefined);
   if (parsed.target === undefined) {
     parsed.target = options.luaTarget === tstl.LuaTarget.LuaJIT ? "luajit" : "puc";
   }
@@ -72,12 +73,21 @@ export function mergeVisitorMaps(primary: tstl.Visitors, fallback: tstl.Visitors
   // them out rather than propagating them into the merged map.
   const fallbackByKind = new Map<number, RegisteredVisitor>();
   for (const [k, v] of Object.entries(fallback)) {
-    if (v !== undefined) fallbackByKind.set(Number(k), v as RegisteredVisitor);
+    if (v !== undefined) {
+      // v is not undefined due to the guard above, so it's safely a RegisteredVisitor
+      fallbackByKind.set(Number(k), v as RegisteredVisitor);
+    }
   }
 
   for (const [k, rawPrimary] of Object.entries(primary)) {
     const kind = Number(k);
-    const primaryEntry = normalizeVisitor(rawPrimary as RegisteredVisitor | undefined);
+    // rawPrimary from Object.entries of tstl.Visitors; filter out undefined values.
+    // TSTL visitor types are complex unions; after checking shape, we safely cast.
+    const visitor =
+      typeof rawPrimary === "function" || (rawPrimary && typeof rawPrimary === "object")
+        ? (rawPrimary as RegisteredVisitor)
+        : undefined;
+    const primaryEntry = normalizeVisitor(visitor);
     const fallbackEntry = fallbackByKind.get(kind);
     fallbackByKind.delete(kind);
     const entry =

@@ -26,13 +26,17 @@ function isLuaStatement(node: unknown): node is tstl.Statement {
   return isLuaNode(node) && LUA_STATEMENT_KINDS.has(node.kind);
 }
 
+function isLuaStatementArray(value: unknown): value is tstl.Statement[] {
+  return Array.isArray(value) && value.every(isLuaStatement);
+}
+
 export function getTransformedFile(result: unknown): tstl.File {
   if (Array.isArray(result)) {
     const [file] = result;
     if (isLuaNode(file) && tstl.isFile(file)) {
       return file;
     }
-    if (result.every(isLuaStatement)) {
+    if (isLuaStatementArray(result)) {
       return tstl.createFile(result, new Set<tstl.LuaLibFeature>(), "");
     }
   } else if (isLuaNode(result) && tstl.isFile(result)) {

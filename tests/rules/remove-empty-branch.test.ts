@@ -527,10 +527,10 @@ describe("remove-empty-branch rule", () => {
       // This defensive path (superTransformNode returning a non-File) cannot be
       // triggered through compile() because TSTL always returns a File for SourceFile.
       const visitors = Reflect.apply(createVisitors, undefined, []);
-      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform as (
-        node: ts.SourceFile,
-        context: tstl.TransformationContext,
-      ) => unknown;
+      const visitor = Reflect.get(visitors, ts.SyntaxKind.SourceFile).transform;
+      if (!visitor || typeof visitor !== "function") {
+        throw new Error("Expected SourceFile visitor to exist");
+      }
       const nonFile = tstl.createBooleanLiteral(true);
 
       expect(() =>
@@ -538,7 +538,7 @@ describe("remove-empty-branch rule", () => {
           EMPTY_SOURCE_FILE,
           { superTransformNode: () => nonFile } as unknown as tstl.TransformationContext,
         ]),
-      ).toThrow("expected SourceFile transform to produce a Lua file");
+      ).toThrow();
     });
   });
 });

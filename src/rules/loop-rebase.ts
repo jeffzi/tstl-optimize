@@ -63,6 +63,7 @@ function analyzeBody(body: tstl.Block, varName: string): AnalysisResult {
       // ForIn with shadowing iteration variable → skip
       if (tstl.isForInStatement(stmt) && stmt.names.some((n) => n.text === varName)) {
         control.skip();
+        return;
       }
     },
   });

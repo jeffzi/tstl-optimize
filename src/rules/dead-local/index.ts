@@ -140,7 +140,10 @@ function recurseIntoNestedScopes(statements: tstl.Statement[]): void {
 }
 
 export const createVisitors: RuleFactory = (): tstl.Visitors => ({
-  [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context): tstl.File => {
+  [ts.SyntaxKind.SourceFile]: (
+    node: ts.SourceFile,
+    context: tstl.TransformationContext,
+  ): tstl.File => {
     const nodes = context.superTransformNode(node);
     const file = getTransformedFile(nodes);
     // Module-level locals are not eliminated because they may be accessed by code outside the

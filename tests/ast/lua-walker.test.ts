@@ -919,10 +919,6 @@ describe("walkStatements", () => {
 });
 
 describe("isLuaRhsPure", () => {
-  function id(text: string): tstl.Identifier {
-    return tstl.createIdentifier(text);
-  }
-
   it("returns true for identifiers", () => {
     expect(isLuaRhsPure(id("a"))).toBe(true);
   });
@@ -953,10 +949,6 @@ describe("isLuaRhsPure", () => {
 });
 
 describe("isLuaExprPure", () => {
-  function id(text: string): tstl.Identifier {
-    return tstl.createIdentifier(text);
-  }
-
   it("returns false for call and method expressions", () => {
     expect(isLuaExprPure(tstl.createCallExpression(id("f"), []))).toBe(false);
   });
@@ -991,14 +983,6 @@ describe("isLuaExprPure", () => {
 });
 
 describe("Walk action API", () => {
-  function id(name: string): tstl.Identifier {
-    return tstl.createIdentifier(name);
-  }
-
-  function num(value: number): tstl.NumericLiteral {
-    return tstl.createNumericLiteral(value);
-  }
-
   describe("Walk.keep", () => {
     it("returning Walk.keep recurses into visited node children", () => {
       // Binary expression: left + right

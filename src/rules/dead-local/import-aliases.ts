@@ -71,7 +71,7 @@ function matchImportAlias(
 
 function removeStatements(statements: tstl.Statement[], toRemove: Set<tstl.Statement>): void {
   if (toRemove.size === 0) return;
-  const kept = statements.filter((s) => !toRemove.has(s));
+  const kept = statements.filter((s: tstl.Statement) => !toRemove.has(s));
   statements.splice(0, statements.length, ...kept);
 }
 

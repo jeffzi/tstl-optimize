@@ -39,9 +39,17 @@ function evaluateEquality(
 ): boolean | undefined {
   if (operator === ts.SyntaxKind.EqualsEqualsEqualsToken) return left === right;
   if (operator === ts.SyntaxKind.ExclamationEqualsEqualsToken) return left !== right;
-  if (typeof left !== typeof right) return undefined;
-  if (operator === ts.SyntaxKind.EqualsEqualsToken) return left === right;
-  if (operator === ts.SyntaxKind.ExclamationEqualsToken) return left !== right;
+  if (operator === ts.SyntaxKind.EqualsEqualsToken) {
+    // Loose equality allows type coercion (e.g., 1 == true), but we can only fold
+    // when types match since ConstantValue lacks runtime type info to coerce correctly.
+    if (typeof left !== typeof right) return undefined;
+    return left === right;
+  }
+  if (operator === ts.SyntaxKind.ExclamationEqualsToken) {
+    // Loose inequality; same type-matching constraint as loose equality.
+    if (typeof left !== typeof right) return undefined;
+    return left !== right;
+  }
   // Unhandled operator — not an equality comparison
   return undefined;
 }

@@ -304,6 +304,8 @@ class OptimizePlugin implements tstl.Plugin {
 
 // TSTL calls `typeof factory === "function" ? factory(pluginOption) : factory`
 // so the default export must be a function to receive tsconfig.json options.
-export default (options?: Record<string, unknown>): OptimizePlugin => new OptimizePlugin(options);
+export default function createOptimizePlugin(options?: Record<string, unknown>): OptimizePlugin {
+  return new OptimizePlugin(options);
+}
 
 export { OptimizePlugin };

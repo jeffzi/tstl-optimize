@@ -13,8 +13,9 @@ export function walkAstNode(node: luaparse.Node, onNode: (n: luaparse.Node) => v
 
   onNode(node);
 
-  for (const key in node as unknown as Record<string, unknown>) {
-    const value = (node as unknown as Record<string, unknown>)[key];
+  const nodeRecord = node as unknown as Record<string, unknown>;
+  for (const key in nodeRecord) {
+    const value = nodeRecord[key];
     if (Array.isArray(value)) {
       for (const item of value) {
         walkAstNode(item as luaparse.Node, onNode);

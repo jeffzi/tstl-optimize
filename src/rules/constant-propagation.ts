@@ -154,7 +154,10 @@ export const createVisitors: RuleFactory = (checker): tstl.Visitors => ({
     const literal = createResolvedLiteral(symbol, checker, node);
     return literal ?? context.superTransformExpression(node);
   },
-  [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context): tstl.File => {
+  [ts.SyntaxKind.SourceFile]: (
+    node: ts.SourceFile,
+    context: tstl.TransformationContext,
+  ): tstl.File => {
     const nodes = context.superTransformNode(node);
     const file = getTransformedFile(nodes);
     propagateScope(file.statements);

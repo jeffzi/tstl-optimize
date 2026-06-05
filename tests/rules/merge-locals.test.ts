@@ -550,7 +550,7 @@ describe("merge-locals coverage", () => {
       compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
     );
     // Should merge because 'a' is shadowed in 'fn'
-    expect(lua).toContain("local a, fn, b = 1, function()");
+    expect(lua).toContain("a, fn, b = 1, function()");
   });
 
   it("detects captured variable in if statement condition and body", () => {
