@@ -23,13 +23,13 @@ const y = double(5);
 x ^ 0.5
 local ____math_abs = math.abs
 ____math_abs(a) + ____math_abs(b)
--- (inlined at call sites)
+-- double() removed — body inlined at each call site
 local y = 5 * 2
 ```
 
 The plugin targets **Lua 5.1 (PUC-Rio)** and **LuaJIT** primarily. Other TSTL targets (5.2–5.4) compile
 without errors but are not specifically tuned — treat optimizations as best-effort on those targets.
-Every rule is independently toggleable. All rules are on by default **except**
+Each rule can be enabled or disabled independently. All rules are on by default **except**
 `conditional-compilation` and `debug-strip`, which remove code.
 
 ## Contents
@@ -145,8 +145,7 @@ known hot paths or release builds.
 
 ### Safe default
 
-This profile keeps the low-risk cleanup rules enabled, treats build specialization as explicit, and
-avoids relying on aggressive call-site rewrites everywhere:
+For most projects as a starting point. This profile keeps the low-risk cleanup rules enabled, treats build specialization as explicit, and avoids relying on aggressive call-site rewrites everywhere:
 
 ```jsonc
 {
@@ -179,7 +178,7 @@ configs.
 
 ### Release build with specialization
 
-This profile is better for projects that need platform-specific code and log stripping:
+For production builds that need platform-specific code paths and build-time log stripping:
 
 ```jsonc
 {
@@ -301,7 +300,7 @@ Substitutes literal values for single-assignment locals whose initializer is a `
 or `string` literal. Each read of the local is replaced with the literal itself, which lets
 `constant-folding` collapse the surrounding arithmetic and `dead-local` remove the now-unused
 declaration. The rule runs first in both the `fold` and `refold` phases, so downstream rules see the
-substituted values.
+substituted values. On by default.
 
 ```typescript
 function area(): number {
@@ -327,24 +326,24 @@ local function mask()
 end
 ```
 
-Imported `const` literals are resolved at the TypeScript level, so constants cross module
+Because imported `const` literals are resolved at the TypeScript level, constants cross module
 boundaries — both named imports (`import { X }`) and namespace imports (`import * as mod`) feed the
 same folding.
 
 **Limitations:**
 
 - Reassigned locals are left alone — only single-assignment bindings qualify.
-- Reads inside a nested function body (closure capture) are conservatively skipped, even when the
+- The rule conservatively skips reads inside a nested function body (closure capture), even when the
   local is provably constant.
-- Destructured and multi-binding declarations (`const [a, b] = ...`) are not propagated.
-- Only `boolean`, `number`, and `string` literals propagate; non-literal initializers (function
-  calls, object/array literals) and `nil` are left in place.
+- The rule does not propagate destructured or multi-binding declarations (`const [a, b] = ...`).
+- Only `boolean`, `number`, and `string` literals propagate; the rule leaves non-literal
+  initializers (function calls, object/array literals) and `nil` in place.
 
 ### `constant-folding`
 
 Evaluates side-effect-free constant expressions after TypeScriptToLua lowers the file to Lua. The
 rule runs repeated bottom-up passes until the output stops changing, so nested constant
-subexpressions collapse without relying on source order.
+subexpressions collapse without relying on source order. On by default.
 
 ```typescript
 const nested = (1 + 2) * (3 + 4);
@@ -361,7 +360,8 @@ local greeting = "hello world"
 **Limitations:**
 
 - Folds only side-effect-free constant subexpressions.
-- Skips results that cannot be written as Lua literals, such as `1 / 0`.
+- Skips results that cannot be written as Lua literals, such as `1 / 0` (which produces `inf`, a
+  value with no Lua literal form).
 - Leaves mixed runtime expressions like `x + 1` alone unless a nested constant subexpression stands
   on its own.
 
@@ -369,7 +369,10 @@ local greeting = "hello world"
 
 Replaces `Math.*` calls and arithmetic patterns with inline Lua expressions. Call-expression
 rewrites (`Math.sqrt`, `Math.abs`, etc.) skip LuaJIT targets, which already handle C calls
-efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless noted otherwise.
+efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless noted otherwise. On by default.
+
+_Lossless_ in the table below means the rewrite produces bit-identical results to the original call
+for all finite inputs.
 
 | Source               | Lua output                                                           | Notes                                                          |
 | -------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
@@ -377,15 +380,13 @@ efficiently. Binary-expression rewrites (`**`, `/`) run on all targets unless no
 | `Math.floor(n)`      | Literal folded (e.g. `Math.floor(1.7)` → `1`)                        | Numeric-literal argument only; non-literal falls through       |
 | `Math.ceil(n)`       | Literal folded (e.g. `Math.ceil(1.5)` → `2`)                         | Numeric-literal argument only; non-literal falls through       |
 | `Math.round(n)`      | Literal folded (e.g. `Math.round(1.5)` → `2`)                        | Numeric-literal argument only; non-literal falls through       |
-| `Math.abs(x)`        | `(x == 0) and 0 or ((x < 0) and -x or x)`                            | Lossless; zero-check preserves `+0` for `-0` input             |
+| `Math.abs(x)`        | `(x == 0) and 0 or ((x < 0) and -x or x)`                            | Lossless; side-effect-free args only (arg is duplicated); `== 0` branch matches `-0` |
 | `Math.max(1, 2)`     | `(1 > 2) and 1 or 2`                                                 | 2-arg, numeric literals only                                   |
 | `Math.min(1, 2)`     | `(1 < 2) and 1 or 2`                                                 | 2-arg, numeric literals only                                   |
 | `x ** 2`             | `x * x`                                                              | Lossless                                                       |
 | `x ** 3`             | `(x * x) * x`                                                        | Lossless                                                       |
 | `x ** 4`             | `(x * x) * (x * x)`                                                  | LuaJIT only; PUC-Rio keeps `^` (C `pow` is faster than 3 MULs) |
 | `x / n` (power of 2) | `x * (1/n)`                                                          | E.g. `x / 4` → `x * 0.25`; positive power-of-2 divisor only    |
-
-_Lossless: the rewrite produces bit-identical results to the original call for all finite inputs._
 
 `abs` rewrites only side-effect-free arguments, so duplicating them is safe. `floor`, `ceil`, and
 `round` fold only when the argument is a numeric literal — non-literal arguments pass through to
@@ -400,8 +401,8 @@ non-literal arguments fall through to `math.max` / `math.min`.
 ### `dead-local`
 
 Removes unused single-name local declarations inside function bodies when the initializer is pure.
-If the variable is overwritten before any read, the rule keeps the local and drops only the
-initializer.
+If code overwrites the variable before any read, the rule keeps the local and removes only the
+initializer. On by default.
 
 ```typescript
 function pureUnused(): number {
@@ -427,7 +428,7 @@ end
 ### `merge-locals`
 
 Merges consecutive single-name local declarations into one Lua `local` statement when every
-initializer in the run is pure and the merged assignment preserves capture semantics.
+initializer in the run is pure and the merged assignment preserves capture semantics. On by default.
 
 ```lua
 -- Before
@@ -441,15 +442,14 @@ local a, b, c = 1, 2, 3
 
 **Limitations:**
 
-- Stops before an initializer that reads an earlier local in the same run.
-- Stops before closures that would capture a variable before the merged assignment binds it.
-- Applies only inside function bodies; module-scope locals are left as written.
+- The rule stops before an initializer that reads an earlier local in the same run.
+- The rule stops before closures that would capture a variable before the merged assignment binds it.
+- The rule applies only inside function bodies; module-scope locals are left as written.
 
 ### `remove-empty-branch`
 
 Removes empty `if`/`elseif`/`else` branches and promotes a non-empty `else` block when the empty
-`if` branch can be inverted safely. The rule also removes fully empty chains when their conditions
-are safe to read.
+`if` branch can be inverted safely. The rule also removes fully empty `if` chains whose conditions are side-effect-free. On by default.
 
 ```lua
 -- Before
@@ -466,7 +466,7 @@ end
 
 **Limitations:**
 
-- The rule removes a condition only when the truthiness check has no side effects and cannot trigger
+- The rule removes a branch only when the truthiness check has no side effects and cannot trigger
   metamethods.
 - Non-empty branches are left alone unless the rule is inverting an empty `if` with a plain `else`.
 - Branches with side-effecting conditions such as function calls are preserved.
@@ -475,7 +475,7 @@ end
 
 Converts 0-based `$range` for-of loops into 1-based Lua for loops. TSTL emits `i + 1` in Lua
 wherever TypeScript uses `i` to index a 1-based array; the rule eliminates that per-iteration
-arithmetic by shifting the loop bounds up by one instead.
+arithmetic by shifting the loop bounds up by one instead. On by default.
 
 ```typescript
 // Input
@@ -493,7 +493,7 @@ The rule skips the loop when the body assigns the control variable, reads it wit
 
 ### `inline`
 
-Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)). Pass `{ warnCrossModule: true }` to emit diagnostic code 90003 when a cross-module inline is rejected (silent by default).
+Inlines `@inline`-tagged functions at call sites, both within the same module and across module boundaries. Pass `false` or `{ enabled: false }` to disable; pass `{ strict: false }` to keep the rule active but downgrade its diagnostics to warnings (see [Strict mode](#strict-mode)). Pass `{ warnCrossModule: true }` to emit diagnostic code 90003 when a cross-module inline is rejected (silent by default). On by default.
 
 ```typescript
 /** @inline */
@@ -667,9 +667,11 @@ emitting a diagnostic. No `do...end` block is generated.
 
 #### Call-site limitations
 
-Multi-statement inline is rejected with a diagnostic warning (code 90010) at expression positions
-where the result feeds another expression. The function declaration is kept and the call is left
-unchanged:
+Multi-statement inline is rejected with a diagnostic warning at expression positions where the
+result feeds another expression (code 90010), or at void statement sites where the body's shape
+prevents safe expansion — for example, when the body ends with something other than a `return`
+statement and the call site expects a value (code 90009). The function declaration is kept and the
+call is left unchanged:
 
 ```typescript
 // Not inlined — expression position
@@ -678,7 +680,7 @@ bar(effect(a));             // warns: multi-statement body cannot be inlined at 
 ```
 
 Functions with an early `return`, `break`, or `continue` in the body are also rejected — Lua's
-`do...end` block has no "return from block" construct, so a `return` inside the inlined body would
+`do...end` block has no `return from block` construct, so a `return` inside the inlined body would
 return from the enclosing function rather than just exiting the inline. `break` inside a `switch` or
 loop is allowed (it is scoped to that construct and does not affect the inlined block):
 
@@ -707,7 +709,7 @@ sites into a single hoisted local.
 
 Hoists repeated table-index chains (e.g., `math.sqrt`, `game.players.count`) into local variables
 at the top of the scope. Inside loop bodies, the rule also localizes repeated `arr[i]` accesses
-(where `i` is the loop control variable) and appends a write-back when the element is assigned.
+(where `i` is the loop control variable) and appends a write-back when the element is assigned. On by default.
 
 ```lua
 -- Static chain hoisting
@@ -746,7 +748,7 @@ Options:
 
 - `module`: Run only the module-level pass. Hoists are emitted at file scope, not inside functions.
   This mode counts stdlib chains that appear inside nested functions. For non-stdlib roots added via
-  `include`, the chain must also be read at module scope to be hoisted — this avoids snapshotting a
+  `include`, the chain must also appear at module scope for the rule to hoist it — this avoids snapshotting a
   mutable global once at load time and reusing a stale value across later function calls.
 - `function`: Skip module hoisting and only localize inside function bodies, guarded blocks, and
   loop bodies. This is useful when you want caching close to the reads instead of at file scope.
@@ -756,7 +758,10 @@ Options:
 
 #### Root filtering
 
-#### Default behavior
+Root filtering controls which global roots the localizer hoists. By default only Lua stdlib roots
+are eligible; the options below expand or restrict that set.
+
+##### Default allowlist (stdlib only)
 
 The localizer hoists only chains rooted at Lua stdlib globals by default:
 `math`, `string`, `table`, `os`, `io`, `coroutine`, `bit`, `bit32`, `jit`, `debug`.
@@ -773,7 +778,7 @@ An internal blocklist (`assert`, `spy`, `stub`, `mock`, `describe`, `it`, `pendi
 `teardown`, `before_each`, `after_each`, `insist`) is always active. Blocklisted roots are
 excluded unless the user explicitly names them in `include`.
 
-#### Restoring previous behavior
+##### Allow all roots (opt-out mode)
 
 To hoist all chains regardless of root, set `include: ["*"]`. This enables opt-out mode — all roots
 are allowed except those in `exclude` and the internal blocklist (unless also named in `include`).
@@ -782,8 +787,9 @@ are allowed except those in `exclude` and the internal blocklist (unless also na
 "localizer": { "include": ["*"] }
 ```
 
-**Defold engine** — Defold exposes flat function tables (`go`, `msg`, `vmath`, etc.) that are
-safe to hoist. List the ones you use:
+##### Defold
+
+Defold exposes flat function tables (`go`, `msg`, `vmath`, etc.) that are safe to hoist. List the ones you use:
 
 ```jsonc
 "localizer": {
@@ -791,7 +797,9 @@ safe to hoist. List the ones you use:
 }
 ```
 
-**WoW API** — Same pattern for World of Warcraft namespaced APIs:
+##### WoW API
+
+Same pattern for World of Warcraft namespaced APIs:
 
 ```jsonc
 "localizer": {
@@ -799,9 +807,9 @@ safe to hoist. List the ones you use:
 }
 ```
 
-**Overriding the internal blocklist** — If you know a blocklisted global is safe in your
-codebase (e.g., you use a custom `assert` that is a plain function table), name it explicitly
-in `include`:
+##### Overriding the blocklist
+
+If you know a blocklisted global is safe in your codebase (e.g., you use a custom `assert` that is a plain function table), name it explicitly in `include`:
 
 ```jsonc
 "localizer": { "include": ["assert"] }
@@ -810,8 +818,9 @@ in `include`:
 ### `hoist-require`
 
 Deduplicates repeated `require("path")` and `require("path").member` patterns within each scope
-by hoisting them into a single named local variable. Runs first in the `refold` phase, so it
-catches require chains that `inline` introduces when expanding cross-module `@inline` functions.
+by hoisting them into a single named local variable. The rule runs first in the `refold` phase,
+catching require chains that `inline` introduces when expanding cross-module `@inline` functions.
+On by default.
 
 ```typescript
 // compat.ts
@@ -852,10 +861,10 @@ Hoisted local names are derived from the path and member: `require("path").membe
 **Limitations:**
 
 - Patterns appearing only once stay inline; the threshold is two or more occurrences per scope.
-- Each scope (function body, module scope) is processed independently — a pattern must repeat
-  within the same scope to be hoisted.
-- Expression-body inlines have no statement context for a hoisted declaration; require chains
-  inside expression bodies are left inline.
+- The rule processes each scope (function body, module scope) independently — a pattern must repeat
+  within the same scope to qualify.
+- Inline functions with expression bodies have no statement context for a hoisted declaration;
+  require chains inside such bodies are left inline.
 
 ### `unspill`
 
@@ -863,6 +872,7 @@ Removes the redundant base/key temporaries TSTL emits when lowering a compound a
 element/index access. When `arr[i] += rhs` is rewritten by TSTL into
 `local ____v1, ____v2 = arr, i; ____v1[____v2] = ____v1[____v2] + rhs`, the rule folds it back to
 `arr[i] = arr[i] + rhs` once the cached base (`arr`) and key (`i`) are provably side-effect-free.
+On by default.
 
 ```typescript
 // Input
@@ -1055,7 +1065,7 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 | `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
 | `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
-| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Set `enabled: false` to disable; `strict` controls per-rule error promotion (see [Strict mode](#strict-mode)); `warnCrossModule: true` emits code 90003 for silent cross-module rejections. |
+| `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Pass `{ enabled: false }` to disable. See [`inline`](#inline) and [Strict mode](#strict-mode). |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
 | `rules.hoist-require`           | `boolean`                                            | `true`        | Deduplicate repeated `require()` and `require().member` patterns within each scope by hoisting them into a named local. Runs first in refold to catch chains introduced by `inline`.                      |
 | `rules.unspill`                 | `boolean`                                            | `true`        | Fold the base/key temporaries TSTL emits for compound assignment on element/index access (`arr[i] += rhs`) when the cached parts are pure.                                                                |
@@ -1067,7 +1077,7 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 After all rules have run, the plugin executes a final "refold" phase. `hoist-require` runs first
 to deduplicate require chains that `inline` introduced during expansion. Then `constant-propagation`,
 `constant-folding`, `dead-local`, `merge-locals`, and `remove-empty-branch` re-run to catch
-opportunities those earlier phases opened — for example, `localizer` can introduce consecutive
+opportunities those earlier phases opened. For example, `localizer` can introduce consecutive
 `local` declarations that `merge-locals` can combine, or `inline` can expand a body whose constants
 `constant-folding` can evaluate. Each rule in the refold phase is still gated by its own `rules.*`
 toggle, so disabling `merge-locals` globally also disables it during refold.
