@@ -6,6 +6,7 @@ import { Walk, walkStatements } from "../../ast/lua-walker";
 import type { RuleFactory } from "../../config";
 import { getTransformedFile } from "../source-file";
 import { collectReadSymbols, findFirstAccessKind } from "./access";
+import { eliminateDeadImportAliases } from "./import-aliases";
 
 /**
  * Metadata about a dead-local candidate.
@@ -146,6 +147,8 @@ export const createVisitors: RuleFactory = (): tstl.Visitors => ({
     // module (e.g., by other modules that import them). We only eliminate dead locals within
     // function bodies, where scope is guaranteed to be contained.
     recurseIntoNestedScopes(file.statements);
+    // Eliminate dead import aliases at module scope (requires + aliases from inlined calls)
+    eliminateDeadImportAliases(file.statements);
     return file;
   },
 });
