@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **hoist-require** rule — deduplicates `require("path").member` chains introduced by cross-module
+  inlining. When the same chain appears two or more times within the same scope (function body or
+  module scope), a single named local replaces all occurrences; single-occurrence chains remain
+  inline. Expression-body inlines are skipped (no statement context for a declaration). Runs first
+  in the `refold` phase so `dead-local` and `merge-locals` see the deduplicated form.
 - `tstl-optimize/compose` subpath for composing the optimizer into another TSTL plugin's transpile,
   scoped to a caller-supplied set of files, without registering tstl-optimize as a `luaPlugin`:
   - `createScopedOptimizeVisitors(program, options, isOwnedFile, config?)` builds a file-scoped
@@ -20,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     clobbering. `primary` runs first and wins; `fallback` runs only when `primary` returns
     `undefined`.
   - `OptimizeComposeOptions` type for the `rules` / `target` / `strict` config.
+
+### Changed
+
+- **inline** cross-module inlining now resolves `require()`-backed const bindings (e.g.,
+  `const band = require("bit").band`) that previously blocked inlining, synthesizing the
+  corresponding `require().member` expression at each call site. When the call-site module already
+  imports the same underlying symbol, the inlined body reuses the consumer's existing local instead
+  of emitting a fresh chain.
+- **dead-local** now removes unused import aliases (`local alias = ____mod.member`) left over after
+  cross-module `@inline` expansion, and prunes the orphaned `require()` binding when all of its
+  aliases are dead.
 
 ## [0.10.0] - 2026-06-03
 
