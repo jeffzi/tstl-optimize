@@ -310,6 +310,43 @@ describe("mergeVisitorMaps", () => {
     });
   });
 
+  describe("when primary entry is an object-form visitor", () => {
+    it("recognizes { transform } entries the same as bare functions", () => {
+      const files = {
+        "owned_shared.ts": INLINE_SHARED,
+        "main.ts": `
+          import { add } from "./owned_shared";
+          export const result = add(1, 2);
+        `,
+      };
+
+      class ObjectFormPlugin implements tstl.Plugin {
+        visitors: tstl.Visitors = {};
+
+        beforeTransform(program: ts.Program, options: tstl.CompilerOptions): void {
+          const optimizeVisitors = createScopedOptimizeVisitors(program, options, ownAll);
+
+          const ownVisitors = {
+            [ts.SyntaxKind.CallExpression]: {
+              transform: () => tstl.createNumericLiteral(77),
+            },
+          };
+
+          this.visitors = mergeVisitorMaps(ownVisitors as tstl.Visitors, optimizeVisitors);
+        }
+      }
+
+      const result = tstl.transpileVirtualProject(files, {
+        ...BASE_OPTIONS,
+        luaPlugins: [{ plugin: new ObjectFormPlugin() }],
+      });
+
+      const lua = extractLua(result);
+      expect(normalizeLua(lua)).toContain("77");
+      expect(normalizeLua(lua)).not.toContain("1 + 2");
+    });
+  });
+
   describe("when a visitor entry is explicit undefined", () => {
     // A caller may build a map conditionally, e.g. `{ [kind]: flag ? fn : undefined }`.
     // An explicit `undefined` value is an own-enumerable key, so `Object.entries`
