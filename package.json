@@ -63,7 +63,7 @@
     "source-map": "^0.7.0",
     "tsx": "^4.22.0",
     "typescript": "^6.0.0",
-    "typescript-to-lua": "^1.36.0",
+    "typescript-to-lua": "^1.37.0",
     "vitest": "^4.1.0"
   },
   "files": [
