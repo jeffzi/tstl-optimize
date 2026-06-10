@@ -1,11 +1,15 @@
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type ConstantValue,
   createScopedOptimizeVisitors,
+  findOptimizerPluginEntry,
+  isTruthy,
   mergeVisitorMaps,
   type OptimizeComposeOptions,
+  resolveConstantFromOptions,
 } from "../src/compose";
 import { OptimizePlugin } from "../src/index";
 import { normalizeLua } from "./helpers";
@@ -75,16 +79,26 @@ function extractLua(result: tstl.TranspileVirtualProjectResult, suffix = "main.l
     (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
   );
   if (errors.length > 0) {
-    const msgs = errors
-      .map((d) => (typeof d.messageText === "string" ? d.messageText : d.messageText.messageText))
-      .join("\n");
-    throw new Error(msgs);
+    const messages = errors.map((d) =>
+      typeof d.messageText === "string" ? d.messageText : d.messageText.messageText,
+    );
+    throw new Error(messages.join("\n"));
   }
   const file = result.transpiledFiles.find((f) => f.outPath.endsWith(suffix));
   if (file === undefined || file.lua === undefined) {
     throw new Error(`No Lua output for ${suffix}.`);
   }
   return file.lua;
+}
+
+/**
+ * Extract optimization errors from transpile diagnostics.
+ * Filters for errors with source "tstl-optimize".
+ */
+function getOptimizeErrors(result: tstl.TranspileVirtualProjectResult): ts.Diagnostic[] {
+  return result.diagnostics.filter(
+    (d) => d.source === "tstl-optimize" && d.category === ts.DiagnosticCategory.Error,
+  );
 }
 
 /** Transpile with NO plugins (baseline) for scoping assertion. */
@@ -145,10 +159,7 @@ describe("createScopedOptimizeVisitors", () => {
       const lua = extractLua(result);
       const normalized = normalizeLua(lua);
 
-      const tstlOptimizeDiagErrors = result.diagnostics.filter(
-        (d) => d.source === "tstl-optimize" && d.category === ts.DiagnosticCategory.Error,
-      );
-      expect(tstlOptimizeDiagErrors).toHaveLength(0);
+      expect(getOptimizeErrors(result)).toHaveLength(0);
       // The call should be inlined — add(2, 3) must not appear
       expect(normalized).not.toContain("add(2, 3)");
       // The inlined arithmetic or result literal should be present
@@ -177,10 +188,7 @@ describe("createScopedOptimizeVisitors", () => {
       const lua = extractLua(result);
       const normalized = normalizeLua(lua);
 
-      const tstlOptimizeDiagErrors = result.diagnostics.filter(
-        (d) => d.source === "tstl-optimize" && d.category === ts.DiagnosticCategory.Error,
-      );
-      expect(tstlOptimizeDiagErrors).toHaveLength(0);
+      expect(getOptimizeErrors(result)).toHaveLength(0);
       // The add() call should be inlined inside the loop
       expect(normalized).not.toContain("add(total");
     });
@@ -257,10 +265,7 @@ describe("mergeVisitorMaps", () => {
       const lua = extractLua(result);
       const normalized = normalizeLua(lua);
 
-      const tstlOptimizeDiagErrors = result.diagnostics.filter(
-        (d) => d.source === "tstl-optimize" && d.category === ts.DiagnosticCategory.Error,
-      );
-      expect(tstlOptimizeDiagErrors).toHaveLength(0);
+      expect(getOptimizeErrors(result)).toHaveLength(0);
 
       // Optimizer fallback should inline add(1, 2)
       expect(normalized).not.toContain("add(1, 2)");
@@ -436,5 +441,223 @@ describe("idempotency", () => {
     const doubleLua = extractLua(doubleResult);
 
     expect(normalizeLua(doubleLua)).toStrictEqual(normalizeLua(ownerOnlyLua));
+  });
+});
+
+describe("findOptimizerPluginEntry", () => {
+  it("returns the entry when name is exactly 'tstl-optimize'", () => {
+    // Arrange
+    const entry: tstl.LuaPluginImport = { name: "tstl-optimize" };
+    const options: Partial<tstl.CompilerOptions> = { luaPlugins: [entry] };
+
+    // Act
+    const result = findOptimizerPluginEntry(options as tstl.CompilerOptions);
+
+    // Assert
+    expect(result).toStrictEqual(entry);
+  });
+
+  it("returns the entry when name contains tstl-optimize as a path segment", () => {
+    // Arrange
+    const entry: tstl.LuaPluginImport = {
+      name: "../node_modules/tstl-optimize/dist/index.js",
+    };
+    const options: Partial<tstl.CompilerOptions> = { luaPlugins: [entry] };
+
+    // Act
+    const result = findOptimizerPluginEntry(options as tstl.CompilerOptions);
+
+    // Assert
+    expect(result).toStrictEqual(entry);
+  });
+
+  it.each<[label: string, input: Partial<tstl.CompilerOptions>]>([
+    ["near-miss name (my-tstl-optimizer)", { luaPlugins: [{ name: "my-tstl-optimizer" }] }],
+    [
+      "nameless in-memory entry",
+      // biome-ignore lint/suspicious/noExplicitAny: intentionally creating invalid plugin entry
+      { luaPlugins: [{ plugin: {} as any }] as tstl.InMemoryLuaPlugin[] },
+    ],
+    ["no luaPlugins", {}],
+    ["only non-optimize plugins", { luaPlugins: [{ name: "other-plugin" }] }],
+  ])("returns undefined when %s", (_label, options) => {
+    // Act
+    const result = findOptimizerPluginEntry(options as tstl.CompilerOptions);
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("resolveConstantFromOptions", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function optionsWith(ruleConfig: unknown, pluginName = "tstl-optimize"): tstl.CompilerOptions {
+    return {
+      luaPlugins: [{ name: pluginName, rules: { "conditional-compilation": ruleConfig } }],
+    } as tstl.CompilerOptions;
+  }
+
+  it("returns undefined when no luaPlugins configured", () => {
+    // Arrange
+    const options: tstl.CompilerOptions = {} as tstl.CompilerOptions;
+
+    // Act
+    const result = resolveConstantFromOptions(options, "ANY_CONSTANT");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when only non-optimize plugins registered", () => {
+    // Arrange
+    const options: tstl.CompilerOptions = {
+      luaPlugins: [{ name: "other-plugin" }],
+    } as tstl.CompilerOptions;
+
+    // Act
+    const result = resolveConstantFromOptions(options, "ANY_CONSTANT");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+
+  it("returns true when constant default is true with env unset", () => {
+    // Arrange
+    const options = optionsWith({
+      constants: { MY_FLAG: { env: "MY_ENV_VAR", default: true } },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBe(true);
+  });
+
+  it("returns false when constant default is false with env unset", () => {
+    // Arrange
+    const options = optionsWith({
+      constants: { MY_FLAG: { env: "MY_ENV_VAR", default: false } },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBe(false);
+  });
+
+  it("returns false when env 'false' overrides a true default", () => {
+    // Arrange
+    vi.stubEnv("TEST_COMPOSE_ENV_FALSE", "false");
+    const options = optionsWith({
+      constants: { MY_FLAG: { env: "TEST_COMPOSE_ENV_FALSE", default: true } },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBe(false);
+  });
+
+  it("returns true when env '1' overrides a false default", () => {
+    // Arrange
+    vi.stubEnv("TEST_COMPOSE_ENV_ONE", "1");
+    const options = optionsWith({
+      constants: { MY_FLAG: { env: "TEST_COMPOSE_ENV_ONE", default: false } },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBe(true);
+  });
+
+  it("returns undefined when rule object has enabled: false", () => {
+    // Arrange
+    const options = optionsWith({
+      enabled: false,
+      constants: { MY_FLAG: { env: "MY_ENV", default: true } },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when rule value is true (no constants map)", () => {
+    // Arrange
+    const options = optionsWith(true);
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when constant definition is malformed (literal instead of object)", () => {
+    // Arrange
+    const options = optionsWith({
+      constants: { MY_FLAG: "not-a-constant-def" },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+
+  it("resolves constant when plugin name is a path with tstl-optimize as segment", () => {
+    // Arrange
+    const options = optionsWith(
+      {
+        constants: { MY_FLAG: { env: "MY_ENV", default: 42 } },
+      },
+      "../node_modules/tstl-optimize/dist/index.js",
+    );
+
+    // Act
+    const result = resolveConstantFromOptions(options, "MY_FLAG");
+
+    // Assert
+    expect(result).toBe(42);
+  });
+
+  it("returns undefined when constant name is not in the resolved map", () => {
+    // Arrange
+    const options = optionsWith({
+      constants: { EXISTING: { env: "ENV", default: true } },
+    });
+
+    // Act
+    const result = resolveConstantFromOptions(options, "NONEXISTENT");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("isTruthy", () => {
+  it.each<ConstantValue>([false, 0, ""])("returns false for falsy value %s", (value) => {
+    expect(isTruthy(value)).toBe(false);
+  });
+
+  it.each<ConstantValue>([
+    true,
+    1,
+    -1,
+    42,
+    "hello",
+  ])("returns true for truthy value %s", (value) => {
+    expect(isTruthy(value)).toBe(true);
   });
 });

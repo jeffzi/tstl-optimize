@@ -1123,6 +1123,29 @@ class MyPlugin implements tstl.Plugin {
 - **`mergeVisitorMaps(primary, fallback)`** chains two visitor maps per `SyntaxKind` with the correct
   per-kind fallback. `primary` runs first and wins; `fallback` runs only when `primary` returns
   `undefined`. Order the arguments by desired precedence.
+- **`findOptimizerPluginEntry(options)`** returns the first `luaPlugins` entry whose `name` matches
+  `tstl-optimize` as an exact string or path segment (e.g. `../node_modules/tstl-optimize/dist/index.js`).
+  Returns `undefined` when no entry matches or `luaPlugins` is absent. Useful for detecting whether
+  the optimizer is already registered.
+- **`resolveConstantFromOptions(options, name)`** resolves a single compile-time constant exactly as
+  the `conditional-compilation` rule will at transpile time — same code path, with env overrides and
+  coercion applied. Returns `undefined` when the optimizer is not registered, the rule is disabled,
+  or the constant is not defined. Combine with **`isTruthy(value)`** (also exported) to make the
+  same strip/keep decision the rule makes:
+
+  ```typescript
+  import {
+    resolveConstantFromOptions,
+    isTruthy,
+  } from "tstl-optimize/compose";
+
+  const ndebug = resolveConstantFromOptions(options, "ECSTATIC_NDEBUG");
+  if (ndebug !== undefined && isTruthy(ndebug)) {
+    // strip the safety check — the rule will strip the if-block too
+  }
+  ```
+
+- **`ConstantValue`** (`boolean | number | string`) — the type re-exported from the config module.
 
 > **Diagnostics:** running the rules during the consumer's transpile means tstl-optimize diagnostics
 > (codes 90000+) can surface in the consumer's build. Cross-module `inline` rejections are silent by

@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     clobbering. `primary` runs first and wins; `fallback` runs only when `primary` returns
     `undefined`.
   - `OptimizeComposeOptions` type for the `rules` / `target` / `strict` config.
+  - `findOptimizerPluginEntry(options)` locates the tstl-optimize entry in `luaPlugins` by matching
+    the `name` field as an exact string or path segment — so embedding plugins can detect whether the
+    optimizer is already registered.
+  - `resolveConstantFromOptions(options, name)` resolves a single compile-time constant exactly as
+    the `conditional-compilation` rule will at transpile time (same code path, env override and
+    coercion included). Lets embedding plugins make strip/keep decisions that agree with the rule.
+  - Re-exports **`isTruthy`** (the truthiness the rule applies when folding) and the
+    **`ConstantValue`** type.
 
 ### Changed
 
@@ -36,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **dead-local** now removes unused import aliases (`local alias = ____mod.member`) left over after
   cross-module `@inline` expansion, and prunes the orphaned `require()` binding when all of its
   aliases are dead.
+
+### Fixed
+
+- **dead-local** now preserves import aliases emitted by other TSTL plugins. Previously such
+  aliases were incorrectly treated as unread and removed.
 
 ## [0.10.0] - 2026-06-03
 
