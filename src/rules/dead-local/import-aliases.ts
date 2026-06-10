@@ -46,7 +46,7 @@ function matchRequireBinding(stmt: tstl.Statement): RequireBinding | undefined {
 
 function matchImportAlias(
   stmt: tstl.Statement,
-  requireIds: Map<tstl.Identifier, RequireBinding>,
+  requireIdsByText: Map<string, RequireBinding>,
 ): ImportAlias | undefined {
   if (!tstl.isVariableDeclarationStatement(stmt) || stmt.left.length !== 1 || !stmt.right?.length) {
     return undefined;
@@ -60,11 +60,14 @@ function matchImportAlias(
 
   const table = rhs.table;
   /* v8 ignore next -- TSTL import aliases always index an Identifier bound to a require */
-  if (!tstl.isIdentifier(table) || !requireIds.has(table)) return undefined;
+  if (!tstl.isIdentifier(table)) return undefined;
+
+  const binding = requireIdsByText.get(table.text);
+  if (!binding) return undefined;
 
   return {
     stmt,
-    requireId: table,
+    requireId: binding.id,
     aliasId,
   };
 }
@@ -95,14 +98,13 @@ function removeStatements(statements: tstl.Statement[], toRemove: Set<tstl.State
  * - We use Identifier object references as keys, not symbolIds (which TSTL doesn't assign)
  */
 export function eliminateDeadImportAliases(statements: tstl.Statement[]): void {
-  const requireBindings = new Map<tstl.Identifier, RequireBinding>();
+  const requireBindings = new Map<string, RequireBinding>();
   const importAliases: ImportAlias[] = [];
 
-  // Pass 1: Collect require bindings and track their identifiers
   for (const stmt of statements) {
     const binding = matchRequireBinding(stmt);
     if (binding) {
-      requireBindings.set(binding.id, binding);
+      requireBindings.set(binding.id.text, binding);
     }
   }
 
@@ -110,7 +112,6 @@ export function eliminateDeadImportAliases(statements: tstl.Statement[]): void {
     return;
   }
 
-  // Pass 2: Collect import aliases that reference known require bindings
   for (const stmt of statements) {
     const alias = matchImportAlias(stmt, requireBindings);
     if (alias) {
@@ -122,42 +123,38 @@ export function eliminateDeadImportAliases(statements: tstl.Statement[]): void {
     return;
   }
 
-  // Pass 3: Collect all identifier reads in the module
   const reads = new Set<number>();
   collectReadSymbols(statements, reads);
 
-  // Pass 4: Mark dead aliases (not read) for removal
   const aliasesToRemove = new Set<tstl.Statement>();
   const aliveRequireIds = new Set<tstl.Identifier>();
 
   for (const alias of importAliases) {
-    if (alias.aliasId.symbolId !== undefined && reads.has(alias.aliasId.symbolId)) {
-      // This alias is live — keep its require binding alive
+    if (alias.aliasId.symbolId === undefined) {
+      // Plugin-emitted identifiers lack symbolId — we cannot reliably track reads via symbolId.
+      // Treat conservatively: assume they might be read and keep the alias and its require.
+      aliveRequireIds.add(alias.requireId);
+    } else if (reads.has(alias.aliasId.symbolId)) {
       aliveRequireIds.add(alias.requireId);
     } else {
-      // This alias is never read or has no symbolId — mark for removal
       aliasesToRemove.add(alias.stmt);
     }
   }
 
-  // Pass 5: Filter out dead aliases
   removeStatements(statements, aliasesToRemove);
 
-  // Pass 6: Re-scan reads on the filtered list
   const updatedReads = new Set<number>();
   collectReadSymbols(statements, updatedReads);
 
-  // Pass 7: Mark require bindings with no live aliases and no other reads for removal
   const requiresToRemove = new Set<tstl.Statement>();
-  for (const [id, binding] of requireBindings) {
-    const hasLiveAlias = aliveRequireIds.has(id);
-    const hasOtherRead = id.symbolId !== undefined && updatedReads.has(id.symbolId);
+  for (const binding of requireBindings.values()) {
+    const hasLiveAlias = aliveRequireIds.has(binding.id);
+    const hasOtherRead = binding.id.symbolId !== undefined && updatedReads.has(binding.id.symbolId);
 
     if (!hasLiveAlias && !hasOtherRead) {
       requiresToRemove.add(binding.stmt);
     }
   }
 
-  // Pass 8: Filter out dead requires
   removeStatements(statements, requiresToRemove);
 }
