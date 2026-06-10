@@ -338,7 +338,9 @@ describe("optimize rule interactions", () => {
   // fast-check property tests
   // ---------------------------------------------------------------------------
 
-  // Compilation is ~30–50 ms per run; keep numRuns small so the suite stays well under 30s.
+  // Compilation is ~30–50 ms per run in isolation but ~250 ms under full-suite parallel load
+  // (each test measures ~5 s total), so keep numRuns small and give each property test an
+  // explicit 15 s timeout — Vitest's 5 s default is too tight under load.
   const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 20 };
 
   describe("inline rule properties", () => {
@@ -364,7 +366,7 @@ describe("optimize rule interactions", () => {
         }),
         FC_OPTS,
       );
-    }, 10_000);
+    }, 15_000);
 
     it("assigns arg temps in left-to-right parameter order for multi-arg side-effectful calls", () => {
       fc.assert(
@@ -396,7 +398,7 @@ describe("optimize rule interactions", () => {
         }),
         FC_OPTS,
       );
-    }, 10_000);
+    }, 15_000);
 
     it("inlines a function that captures a module-level const (upvalue access is preserved)", () => {
       // SCALE is a module-level const. After inlining times(n), the body `n * SCALE` must
@@ -417,7 +419,7 @@ describe("optimize rule interactions", () => {
         }),
         FC_OPTS,
       );
-    }, 10_000);
+    }, 15_000);
   });
 
   describe("when constant-propagation interacts with other rules", () => {
