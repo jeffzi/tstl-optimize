@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-13
+
 ### Added
 
 - **hoist-require** rule — deduplicates `require("path").member` chains introduced by cross-module
@@ -49,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dead-local** now preserves import aliases emitted by other TSTL plugins. Previously such
   aliases were incorrectly treated as unread and removed.
+- **dead-local** now preserves import aliases read through identifiers without a `symbolId` (e.g.,
+  JSX-transpiled `React.createElement` calls). Previously the symbolId-based liveness scan could not
+  see such references, causing the alias and its `require()` binding to be incorrectly removed.
 
 ## [0.10.0] - 2026-06-03
 
@@ -264,7 +269,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
 - Runnable examples with generation script.
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.7.1...v0.8.0
