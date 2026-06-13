@@ -119,13 +119,15 @@ describe("dead-local — import alias elimination", () => {
   });
 
   describe("when no imports are present", () => {
-    it("does not modify module-scope or function-scope locals", () => {
-      const moduleLua = compile("const x = 1;", {
+    it("does not modify module-scope locals", () => {
+      const lua = compile("const x = 1;", {
         pluginOptions: { rules: { "constant-propagation": false } },
       });
-      expect(moduleLua).toContain("x = 1");
+      expect(lua).toContain("x = 1");
+    });
 
-      const functionLua = compile(
+    it("does not modify function-scope locals", () => {
+      const lua = compile(
         `
         function f() {
           const x = 1;
@@ -134,8 +136,8 @@ describe("dead-local — import alias elimination", () => {
       `,
         { pluginOptions: { rules: { "constant-propagation": false } } },
       );
-      expect(functionLua).toContain("x = 1");
-      expect(functionLua).toContain("return x");
+      expect(lua).toContain("x = 1");
+      expect(lua).toContain("return x");
     });
   });
 
@@ -271,6 +273,56 @@ describe("dead-local — import alias elimination", () => {
       expect(statements.length).toBe(2);
       expect(statements).toContain(requireStmt);
       expect(statements).toContain(aliasStmt);
+    });
+
+    it("preserves alias with defined symbolId when read via undefined symbolId identifier", () => {
+      // When an alias has a defined symbolId (properly tracked by TSTL) but is read through an
+      // identifier with symbolId === undefined (JSX-transpiled code), the alias should be preserved.
+      // This tests the scenario where the alias declaration has symbolId but is read by code
+      // that lacks symbolId.
+      const requireId = tstl.createIdentifier("____React");
+      requireId.symbolId = 100 as tstl.SymbolId; // Proper TSTL-assigned symbolId
+
+      const requireStmt = tstl.createVariableDeclarationStatement(
+        [requireId],
+        [
+          tstl.createCallExpression(tstl.createIdentifier("require"), [
+            tstl.createStringLiteral("react"),
+          ]),
+        ],
+      );
+
+      // Alias: local React = ____React.default
+      const ReactId = tstl.createIdentifier("React");
+      ReactId.symbolId = 200 as tstl.SymbolId; // Proper TSTL-assigned symbolId
+
+      const ReactStmt = tstl.createVariableDeclarationStatement(
+        [ReactId],
+        [tstl.createTableIndexExpression(requireId, tstl.createStringLiteral("default"))],
+      );
+
+      // Usage: React.createElement(...) but the identifier has symbolId = undefined
+      // (This simulates JSX transpilation creating code outside normal TSTL tracking)
+      const ReactUsageId = tstl.createIdentifier("React");
+      ReactUsageId.symbolId = undefined; // JSX-generated code has no symbolId
+
+      const useReactStmt = tstl.createExpressionStatement(
+        tstl.createCallExpression(
+          tstl.createTableIndexExpression(ReactUsageId, tstl.createStringLiteral("createElement")),
+          [],
+        ),
+      );
+
+      const statements: tstl.Statement[] = [requireStmt, ReactStmt, useReactStmt];
+
+      eliminateDeadImportAliases(statements);
+
+      // Both the require and the alias should be preserved because an undefined-symbolId
+      // identifier with the name "React" exists in a read position.
+      expect(statements.length).toBe(3);
+      expect(statements).toContain(requireStmt);
+      expect(statements).toContain(ReactStmt);
+      expect(statements).toContain(useReactStmt);
     });
   });
 });

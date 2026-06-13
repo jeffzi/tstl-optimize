@@ -1,5 +1,6 @@
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { forEachAccess } from "../../ast/lua-references";
 import { collectReadSymbols } from "./access";
 
 // TSTL names its synthetic require-binding locals with a `____` prefix (e.g. `____mod`).
@@ -74,8 +75,25 @@ function matchImportAlias(
 
 function removeStatements(statements: tstl.Statement[], toRemove: Set<tstl.Statement>): void {
   if (toRemove.size === 0) return;
-  const kept = statements.filter((s: tstl.Statement) => !toRemove.has(s));
+  const kept = statements.filter((s) => !toRemove.has(s));
   statements.splice(0, statements.length, ...kept);
+}
+
+/**
+ * Collects names of identifiers that appear in read positions with symbolId === undefined.
+ * These are typically plugin-emitted identifiers (e.g., JSX-transpiled code) that lack
+ * TSTL's normal symbolId tracking.
+ */
+function collectUndefinedSymbolIdReads(statements: readonly tstl.Statement[]): Set<string> {
+  const names = new Set<string>();
+  for (const stmt of statements) {
+    forEachAccess(stmt, ({ identifier, kind }) => {
+      if (kind === "read" && identifier.symbolId === undefined) {
+        names.add(identifier.text);
+      }
+    });
+  }
+  return names;
 }
 
 /**
@@ -126,6 +144,11 @@ export function eliminateDeadImportAliases(statements: tstl.Statement[]): void {
   const reads = new Set<number>();
   collectReadSymbols(statements, reads);
 
+  // Collect identifiers read with symbolId === undefined. These are typically plugin-emitted
+  // identifiers (e.g., JSX code) that lack TSTL's symbolId tracking. We must conservatively
+  // keep aliases whose names match, even if their own symbolId is not in the read set.
+  const undefinedSymbolIdReads = collectUndefinedSymbolIdReads(statements);
+
   const aliasesToRemove = new Set<tstl.Statement>();
   const aliveRequireIds = new Set<tstl.Identifier>();
 
@@ -134,7 +157,12 @@ export function eliminateDeadImportAliases(statements: tstl.Statement[]): void {
       // Plugin-emitted identifiers lack symbolId — we cannot reliably track reads via symbolId.
       // Treat conservatively: assume they might be read and keep the alias and its require.
       aliveRequireIds.add(alias.requireId);
-    } else if (reads.has(alias.aliasId.symbolId)) {
+    } else if (
+      reads.has(alias.aliasId.symbolId) ||
+      undefinedSymbolIdReads.has(alias.aliasId.text)
+    ) {
+      // Alias is either read via its symbolId, or read via an undefined-symbolId identifier
+      // with the same name (e.g., JSX-transpiled code). Keep the alias and its require.
       aliveRequireIds.add(alias.requireId);
     } else {
       aliasesToRemove.add(alias.stmt);
