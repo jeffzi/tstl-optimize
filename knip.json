@@ -2,5 +2,6 @@
   "$schema": "https://raw.githubusercontent.com/webpro-nl/knip/main/packages/knip/schema.json",
   "project": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": ["@typescript-to-lua/language-extensions"]
+  "ignoreDependencies": ["@typescript-to-lua/language-extensions"],
+  "ignoreBinaries": ["luac"]
 }
