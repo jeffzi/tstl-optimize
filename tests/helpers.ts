@@ -178,11 +178,16 @@ function extractSourceMapResult(
     .replace(/\["(\d+)"\]/g, '"$1"') // ["4"] → "4"
     .replace(/\s*=\s*/g, ": ") // = → :
     .replace(/,\s*\}/, "}"); // trailing comma guard
-  const traceback = JSON.parse(tableJson) as Record<string, number>;
+  const raw: unknown = JSON.parse(tableJson);
 
   const tracebackTable: TracebackTable = {};
-  for (const [k, v] of Object.entries(traceback)) {
-    tracebackTable[Number(k)] = v;
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw)) {
+      const num = Number(v);
+      if (Number.isInteger(num)) {
+        tracebackTable[Number(k)] = num;
+      }
+    }
   }
 
   return { lua, externalMap, traceback: tracebackTable };

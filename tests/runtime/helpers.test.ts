@@ -182,7 +182,7 @@ describe("assertExpectedRuntimes", () => {
     });
 
     it("passes when runtimes.length > 0", () => {
-      const runtimes = [{ label: "lua5.1", cmd: "lua5.1" }];
+      const runtimes: LuaRuntime[] = [{ label: "lua5.1", cmd: "lua5.1" }];
       expect(() => assertExpectedRuntimes(runtimes)).not.toThrow();
     });
 

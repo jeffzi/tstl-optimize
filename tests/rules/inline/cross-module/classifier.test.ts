@@ -267,18 +267,9 @@ describe("hasCrossModuleFreeVariable", () => {
         `,
       },
     },
-  ])("detects $name", ({ files }) => {
-    const { checker, sourceFile } = makeMultiFileChecker(files, "test.ts");
-    const fn = findFunction(sourceFile);
-
-    expect(hasCrossModuleFreeVariable(fn.body?.statements ?? [], fn.parameters, fn, checker)).toBe(
-      true,
-    );
-  });
-
-  it("detects cross-module variables in destructured parameter defaults", () => {
-    const { checker, sourceFile } = makeMultiFileChecker(
-      {
+    {
+      name: "cross-module variables in destructured parameter defaults",
+      files: {
         "shared.ts": "export const enhanced = { x: 2 };",
         "test.ts": `
             import { enhanced } from "./shared";
@@ -288,12 +279,16 @@ describe("hasCrossModuleFreeVariable", () => {
             }
           `,
       },
-      "test.ts",
-    );
+    },
+  ])("detects $name", ({ files }) => {
+    const { checker, sourceFile } = makeMultiFileChecker(files, "test.ts");
     const fn = findFunction(sourceFile);
-    const params = fn.parameters;
+    // For destructured parameter defaults, check parameters; for body usage, check statements
+    const isParameterTest = files["test.ts"].includes("fn({ shared");
+    const nodesToCheck = isParameterTest ? fn.parameters : (fn.body?.statements ?? []);
+    const params = isParameterTest ? [] : fn.parameters;
 
-    expect(hasCrossModuleFreeVariable(params, [], fn, checker)).toBe(true);
+    expect(hasCrossModuleFreeVariable(nodesToCheck, params, fn, checker)).toBe(true);
   });
 });
 

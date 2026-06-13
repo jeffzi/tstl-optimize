@@ -83,7 +83,7 @@ describe("dead-local", () => {
       { pluginOptions: { rules: { "constant-propagation": false } } },
     );
     // The call must still execute; the whole declaration stays
-    expect(lua).toContain("someFunc()");
+    expect(lua).toContain("x = someFunc()");
   });
 
   it("does NOT remove module-level unused locals", () => {
@@ -139,7 +139,7 @@ describe("dead-local", () => {
     expect(lua).not.toContain("local function add");
   });
 
-  it("rule can be disabled via config", () => {
+  it("respects config to disable the rule", () => {
     const lua = compile("function f() { const x = 42; }", {
       pluginOptions: { rules: { "constant-propagation": false, "dead-local": false } },
     });
@@ -790,12 +790,12 @@ describe("dead-local", () => {
           ).join("\n");
           const lua = compile(
             `
-            declare function sideEffect(): number;
-            function f(): void {
+              declare function sideEffect(): number;
+              function f(): void {
 ${unusedDecls}
-            }
-            f();
-          `,
+              }
+              f();
+            `,
             { pluginOptions: { rules: { "constant-propagation": false } } },
           );
           // Each sideEffect() call must survive (either as a bare call statement or in a stripped-decl form).
@@ -816,13 +816,13 @@ ${unusedDecls}
           ).join("\n");
           const lua = compile(
             `
-            declare function obs(): void;
-            function f(): void {
+              declare function obs(): void;
+              function f(): void {
 ${pureDecls}
-              obs();
-            }
-            f();
-          `,
+                obs();
+              }
+              f();
+            `,
             { pluginOptions: { rules: { "constant-propagation": false } } },
           );
           for (let i = 0; i < n; i++) {

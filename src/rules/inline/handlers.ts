@@ -7,8 +7,8 @@ import {
   createDiscardTemp,
   inlineExpressionBody,
 } from "./builders";
-import type { LiteralKind } from "./const-literal";
-import { classifyCrossModuleInline } from "./cross-module";
+import type { ImportBinding, LiteralKind } from "./const-literal";
+import { classifyCrossModuleInline, resolveConsumerBindings } from "./cross-module";
 import { buildArrayDestructureInline, buildObjectDestructureInline } from "./destructure-builders";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import {
@@ -43,7 +43,13 @@ function validateAndClassifyReturnValueInline(
   context: tstl.TransformationContext,
   strict: boolean,
   warnCrossModule: boolean,
-): Map<ts.Symbol, LiteralKind> | undefined {
+):
+  | {
+      substitutions: Map<ts.Symbol, LiteralKind>;
+      imports: Map<ts.Symbol, ImportBinding>;
+      consumerBindings: Map<ts.Symbol, ts.Symbol>;
+    }
+  | undefined {
   const canInlineResult = canInlineStatements(target, callNode, checker);
   if (canInlineResult !== undefined) {
     context.diagnostics.push(
@@ -64,7 +70,12 @@ function validateAndClassifyReturnValueInline(
   if (classification.reject) {
     return undefined;
   }
-  return classification.substitutions;
+  const consumerBindings = resolveConsumerBindings(classification.imports, callNode, checker);
+  return {
+    substitutions: classification.substitutions,
+    imports: classification.imports,
+    consumerBindings,
+  };
 }
 
 export function handleCallExpression(
@@ -122,7 +133,7 @@ export function handleVariableStatement(
   const target = getReturnValueInlineTarget(callNode, checker);
   if (target === undefined) return undefined;
 
-  const substitutions = validateAndClassifyReturnValueInline(
+  const classified = validateAndClassifyReturnValueInline(
     callNode,
     target,
     checker,
@@ -130,10 +141,20 @@ export function handleVariableStatement(
     strict,
     warnCrossModule,
   );
-  if (substitutions === undefined) return undefined;
+  if (classified === undefined) return undefined;
+  const { substitutions, imports, consumerBindings } = classified;
 
   if (ts.isIdentifier(decl.name)) {
-    return buildVarDeclInline(decl.name, target, callNode, checker, context, substitutions);
+    return buildVarDeclInline(
+      decl.name,
+      target,
+      callNode,
+      checker,
+      context,
+      substitutions,
+      imports,
+      consumerBindings,
+    );
   }
 
   if (ts.isObjectBindingPattern(decl.name)) {
@@ -144,6 +165,8 @@ export function handleVariableStatement(
       checker,
       context,
       substitutions,
+      imports,
+      consumerBindings,
     );
   }
 
@@ -155,6 +178,8 @@ export function handleVariableStatement(
       checker,
       context,
       substitutions,
+      imports,
+      consumerBindings,
     );
   }
 
@@ -174,7 +199,7 @@ export function handleReturnStatement(
   const target = getReturnValueInlineTarget(callNode, checker);
   if (target === undefined) return undefined;
 
-  const substitutions = validateAndClassifyReturnValueInline(
+  const classified = validateAndClassifyReturnValueInline(
     callNode,
     target,
     checker,
@@ -182,9 +207,18 @@ export function handleReturnStatement(
     strict,
     warnCrossModule,
   );
-  if (substitutions === undefined) return undefined;
+  if (classified === undefined) return undefined;
+  const { substitutions, imports, consumerBindings } = classified;
 
-  return buildReturnSiteInline(target, callNode, checker, context, substitutions);
+  return buildReturnSiteInline(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+    consumerBindings,
+  );
 }
 
 export function handleExpressionStatement(
@@ -252,9 +286,18 @@ export function handleExpressionStatement(
   if (classification.reject) {
     return undefined;
   }
-  const { substitutions } = classification;
+  const { substitutions, imports } = classification;
+  const consumerBindings = resolveConsumerBindings(imports, callNode, checker);
 
-  return buildDoEndBlock(target, callNode, checker, context, substitutions);
+  return buildDoEndBlock(
+    target,
+    callNode,
+    checker,
+    context,
+    substitutions,
+    imports,
+    consumerBindings,
+  );
 }
 
 const INLINE_TAG_RE = /^\s*@inline\s*$/;

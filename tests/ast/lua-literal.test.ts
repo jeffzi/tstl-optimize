@@ -33,6 +33,16 @@ function assertNumeric(expr: tstl.Expression): asserts expr is tstl.NumericLiter
   }
 }
 
+/**
+ * Asserts that an expression is a StringLiteral and returns it.
+ * Fails the test if the type check fails.
+ */
+function assertString(expr: tstl.Expression): asserts expr is tstl.StringLiteral {
+  if (!tstl.isStringLiteral(expr)) {
+    throw new Error(`Expected StringLiteral, got ${expr.kind}`);
+  }
+}
+
 describe("getLiteralValue", () => {
   it.each([
     {
@@ -100,9 +110,7 @@ describe("createLiteral", () => {
 
   it("creates StringLiteral for string", () => {
     const result = createLiteral("test");
-    if (!tstl.isStringLiteral(result)) {
-      throw new Error(`Expected StringLiteral, got ${result.kind}`);
-    }
+    assertString(result);
     expect(result.value).toBe("test");
   });
 

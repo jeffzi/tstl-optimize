@@ -19,13 +19,11 @@ import { assertExpectedRuntimes, detectRuntimes, runtimeEqual } from "./helpers"
 // Harness sanity: at least one runtime reachable when tests run via test:runtime
 // ---------------------------------------------------------------------------
 
-it("has expected Lua runtimes available", () => {
-  assertExpectedRuntimes(detectRuntimes());
+describe("harness sanity", () => {
+  it("has expected Lua runtimes available", () => {
+    assertExpectedRuntimes(detectRuntimes());
+  });
 });
-
-// ---------------------------------------------------------------------------
-// Helpers shared across fixtures
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // inline — 5 fixtures

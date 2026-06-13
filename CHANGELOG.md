@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **hoist-require** rule — deduplicates `require("path").member` chains introduced by cross-module
+  inlining. When the same chain appears two or more times within the same scope (function body or
+  module scope), a single named local replaces all occurrences; single-occurrence chains remain
+  inline. Expression-body inlines are skipped (no statement context for a declaration). Runs first
+  in the `refold` phase so `dead-local` and `merge-locals` see the deduplicated form.
+- `tstl-optimize/compose` subpath for composing the optimizer into another TSTL plugin's transpile,
+  scoped to a caller-supplied set of files, without registering tstl-optimize as a `luaPlugin`:
+  - `createScopedOptimizeVisitors(program, options, isOwnedFile, config?)` builds a file-scoped
+    visitor map that runs the rules on the consumer's real program and type checker — so cross-module
+    `@inline` and symbol resolution work with no isolated re-transpile. Files rejected by
+    `isOwnedFile` pass through unchanged.
+  - `mergeVisitorMaps(primary, fallback)` chains two visitor maps per `SyntaxKind` with the correct
+    per-kind fallback, so a mounting plugin's own visitors compose with the optimizer's without
+    clobbering. `primary` runs first and wins; `fallback` runs only when `primary` returns
+    `undefined`.
+  - `OptimizeComposeOptions` type for the `rules` / `target` / `strict` config.
+  - `findOptimizerPluginEntry(options)` locates the tstl-optimize entry in `luaPlugins` by matching
+    the `name` field as an exact string or path segment — so embedding plugins can detect whether the
+    optimizer is already registered.
+  - `resolveConstantFromOptions(options, name)` resolves a single compile-time constant exactly as
+    the `conditional-compilation` rule will at transpile time (same code path, env override and
+    coercion included). Lets embedding plugins make strip/keep decisions that agree with the rule.
+  - Re-exports **`isTruthy`** (the truthiness the rule applies when folding) and the
+    **`ConstantValue`** type.
+
+### Changed
+
+- **inline** cross-module inlining now resolves `require()`-backed const bindings (e.g.,
+  `const band = require("bit").band`) that previously blocked inlining, synthesizing the
+  corresponding `require().member` expression at each call site. When the call-site module already
+  imports the same underlying symbol, the inlined body reuses the consumer's existing local instead
+  of emitting a fresh chain.
+- **dead-local** now removes unused import aliases (`local alias = ____mod.member`) left over after
+  cross-module `@inline` expansion, and prunes the orphaned `require()` binding when all of its
+  aliases are dead.
+
+### Fixed
+
+- **dead-local** now preserves import aliases emitted by other TSTL plugins. Previously such
+  aliases were incorrectly treated as unread and removed.
+
 ## [0.10.0] - 2026-06-03
 
 ### Added
@@ -119,7 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - AST cloning and traversal now preserve call metadata, honor Lua key-before-value table
-  evaluation, and treat indexed reads as side-effectful.
+  evaluation, and treat indexed reads as side-effecting.
 - Plugin target inference now refreshes correctly when a plugin instance is reused across different
   Lua targets.
 - **conditional-compilation** now handles loose equality and `switch` edge cases, respects shadowed

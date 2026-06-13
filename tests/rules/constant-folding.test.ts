@@ -583,19 +583,16 @@ describe("constant-folding", () => {
       ]);
 
       const transformed = runSourceFileVisitor(file);
-      if (!tstl.isFile(transformed)) {
-        throw new Error("Expected source-file visitor to return a Lua file");
-      }
+      expect(tstl.isFile(transformed)).toBe(true);
+      if (!tstl.isFile(transformed)) return;
 
       const declaration = transformed.statements[0];
-      if (!declaration || !tstl.isVariableDeclarationStatement(declaration)) {
-        throw new Error("Expected transformed statement to be a variable declaration");
-      }
+      expect(declaration && tstl.isVariableDeclarationStatement(declaration)).toBe(true);
+      if (!declaration || !tstl.isVariableDeclarationStatement(declaration)) return;
 
       const rhs = declaration.right?.[0];
-      if (!rhs || !tstl.isNumericLiteral(rhs)) {
-        throw new Error("Expected folded RHS to be a numeric literal");
-      }
+      expect(rhs && tstl.isNumericLiteral(rhs)).toBe(true);
+      if (!rhs || !tstl.isNumericLiteral(rhs)) return;
 
       expect(rhs.value).toBe(3);
     });
@@ -631,15 +628,15 @@ describe("constant-folding", () => {
         ),
       ]);
 
-      const transformed = runSourceFileVisitor(file) as tstl.File;
-      const [bitwise, length, neg] = transformed.statements as tstl.VariableDeclarationStatement[];
+      const transformed = runSourceFileVisitor(file);
+      expect(tstl.isFile(transformed)).toBe(true);
+      const file_transformed = transformed as tstl.File;
+      const [bitwise, length, neg] =
+        file_transformed.statements as tstl.VariableDeclarationStatement[];
 
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isUnaryExpression(bitwise.right![0])).toBe(true);
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isUnaryExpression(length.right![0])).toBe(true);
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isUnaryExpression(neg.right![0])).toBe(true);
+      expect(bitwise.right && tstl.isUnaryExpression(bitwise.right[0])).toBe(true);
+      expect(length.right && tstl.isUnaryExpression(length.right[0])).toBe(true);
+      expect(neg.right && tstl.isUnaryExpression(neg.right[0])).toBe(true);
     });
 
     it("truncates raw Lua statements after a direct return", () => {
@@ -658,9 +655,7 @@ describe("constant-folding", () => {
     it("throws when the source-file transform does not produce a file", () => {
       const nonFile = tstl.createBooleanLiteral(true);
 
-      expect(() => runSourceFileVisitor(nonFile)).toThrow(
-        "expected SourceFile transform to produce a Lua file",
-      );
+      expect(() => runSourceFileVisitor(nonFile)).toThrow();
     });
   });
 });

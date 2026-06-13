@@ -130,8 +130,14 @@ describe("hoistCrossModuleAccesses", () => {
       const result = hoistCrossModuleAccesses(source);
       expect(result.source).toStrictEqual(source);
       expect(result.localizedSymbols.size).toBe(2);
-      expect(result.localizedSymbols.get("bar")).toBeDefined();
-      expect(result.localizedSymbols.get("foo")).toBeDefined();
+      expect(result.localizedSymbols.get("bar")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "bar",
+      });
+      expect(result.localizedSymbols.get("foo")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "foo",
+      });
     });
 
     it("stops recognizing pre-existing hoists at first non-matching local", () => {
@@ -139,8 +145,14 @@ describe("hoistCrossModuleAccesses", () => {
         'local ____mod = require("my/mod")\nlocal foo = ____mod.foo\nlocal unrelated = 5\nprint(____mod.bar)';
       const result = hoistCrossModuleAccesses(source);
       expect(result.localizedSymbols.size).toBe(2);
-      expect(result.localizedSymbols.get("foo")).toBeDefined();
-      expect(result.localizedSymbols.get("bar")).toBeDefined();
+      expect(result.localizedSymbols.get("foo")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "foo",
+      });
+      expect(result.localizedSymbols.get("bar")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "bar",
+      });
     });
   });
 
@@ -170,8 +182,14 @@ describe("hoistCrossModuleAccesses", () => {
         'local ____mod = require("my/mod")\nlocal foo = ____mod.foo\nprint(____mod.bar)';
       const result = hoistCrossModuleAccesses(source);
       expect(result.localizedSymbols.size).toBe(2);
-      expect(result.localizedSymbols.get("foo")).toBeDefined();
-      expect(result.localizedSymbols.get("bar")).toBeDefined();
+      expect(result.localizedSymbols.get("foo")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "foo",
+      });
+      expect(result.localizedSymbols.get("bar")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "bar",
+      });
     });
   });
 
@@ -269,21 +287,30 @@ describe("hoistCrossModuleAccesses", () => {
       const source = 'local ____mod = require("my/mod")\nlocal x = { a = ____mod.foo, b = 2 }';
       const result = hoistCrossModuleAccesses(source);
       expect(result.localizedSymbols.size).toBe(1);
-      expect(result.localizedSymbols.get("foo")).toBeDefined();
+      expect(result.localizedSymbols.get("foo")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "foo",
+      });
     });
 
     it("hoists member accesses within conditional blocks", () => {
       const source = 'local ____mod = require("my/mod")\nif ____mod.flag then\n  print("yes")\nend';
       const result = hoistCrossModuleAccesses(source);
       expect(result.localizedSymbols.size).toBe(1);
-      expect(result.localizedSymbols.get("flag")).toBeDefined();
+      expect(result.localizedSymbols.get("flag")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "flag",
+      });
     });
 
     it("stops at non-pattern locals in pre-existing hoist block (multiple vars)", () => {
       const source = 'local ____mod = require("my/mod")\nlocal a, b = 1, 2\nprint(____mod.foo)';
       const result = hoistCrossModuleAccesses(source);
       expect(result.localizedSymbols.size).toBe(1);
-      expect(result.localizedSymbols.get("foo")).toBeDefined();
+      expect(result.localizedSymbols.get("foo")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "foo",
+      });
     });
 
     it("stops at non-pattern locals in pre-existing hoist block (single init)", () => {
@@ -291,7 +318,10 @@ describe("hoistCrossModuleAccesses", () => {
         'local ____mod = require("my/mod")\nlocal a, b = someFunc()\nprint(____mod.foo)';
       const result = hoistCrossModuleAccesses(source);
       expect(result.localizedSymbols.size).toBe(1);
-      expect(result.localizedSymbols.get("foo")).toBeDefined();
+      expect(result.localizedSymbols.get("foo")).toStrictEqual({
+        moduleVar: "____mod",
+        memberName: "foo",
+      });
     });
 
     it("stops at locals with multiple inits", () => {

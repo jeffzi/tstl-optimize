@@ -20,8 +20,13 @@ function parseExpressionStatement(source: string): ts.ExpressionStatement {
   return statement;
 }
 
-function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
-  return checker as unknown as ts.TypeChecker;
+function createMockTypeChecker(overrides: Partial<ts.TypeChecker> = {}): ts.TypeChecker {
+  return {
+    getSymbolAtLocation: () => undefined,
+    getTypeOfSymbol: () => ({}),
+    typeToString: () => "",
+    ...overrides,
+  } as ts.TypeChecker;
 }
 
 describe("debug-strip", () => {
@@ -454,7 +459,7 @@ describe("debug-strip", () => {
   describe("public visitor coverage", () => {
     it("returns no visitors when the rule is disabled", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        asTypeChecker({}),
+        createMockTypeChecker(),
         { rules: { "debug-strip": false } },
       ]);
 
@@ -463,7 +468,7 @@ describe("debug-strip", () => {
 
     it("treats missing checker symbols as configured globals", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        asTypeChecker({ getSymbolAtLocation: () => undefined }),
+        createMockTypeChecker({ getSymbolAtLocation: () => undefined }),
         { rules: { "debug-strip": { functions: ["print"] } } },
       ]);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement) as (
@@ -478,12 +483,12 @@ describe("debug-strip", () => {
         } as unknown as tstl.TransformationContext,
       ]);
 
-      expect(transformed).toStrictEqual([]);
+      expect(transformed).toEqual([]);
     });
 
     it("passes through non-call expression statements", () => {
       const visitors = Reflect.apply(createVisitors, undefined, [
-        asTypeChecker({ getSymbolAtLocation: () => undefined }),
+        createMockTypeChecker({ getSymbolAtLocation: () => undefined }),
         { rules: { "debug-strip": { functions: ["print"] } } },
       ]);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.ExpressionStatement) as (
@@ -498,7 +503,7 @@ describe("debug-strip", () => {
         } as unknown as tstl.TransformationContext,
       ]);
 
-      expect(transformed).toStrictEqual(["kept"]);
+      expect(transformed).toEqual(["kept"]);
     });
   });
 });

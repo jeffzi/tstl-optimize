@@ -169,15 +169,14 @@ describe("hasSideEffects", () => {
         throw new Error("Expected ObjectLiteralExpression");
       }
 
-      Reflect.set(expr, "properties", [
-        ts.factory.createPropertyDeclaration(
-          undefined,
-          ts.factory.createIdentifier("field"),
-          undefined,
-          undefined,
-          undefined,
-        ),
-      ]);
+      const syntheticsProperty = ts.factory.createPropertyDeclaration(
+        undefined,
+        ts.factory.createIdentifier("field"),
+        undefined,
+        undefined,
+        undefined,
+      );
+      Reflect.set(expr, "properties", [syntheticsProperty]);
 
       expect(hasSideEffects(expr)).toBe(true);
     });

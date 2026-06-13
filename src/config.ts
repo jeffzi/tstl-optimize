@@ -53,6 +53,7 @@ export interface RulesConfig {
   "merge-locals": boolean;
   localizer: LocalizerRuleConfig;
   "debug-strip": DebugStripRuleConfig;
+  "hoist-require": boolean;
 }
 
 export type InterpreterTarget = "puc" | "luajit";
@@ -90,6 +91,7 @@ const DEFAULT_RULES: RulesConfig = {
   "merge-locals": true,
   localizer: true,
   "debug-strip": false,
+  "hoist-require": true,
 };
 
 function resolveStructuredRuleConfig<T extends { enabled: boolean }>(
@@ -222,7 +224,7 @@ export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boo
 export type RuleFactory = (checker: ts.TypeChecker, config: PluginConfig) => tstl.Visitors;
 
 export function isRecord(val: unknown): val is Record<string, unknown> {
-  return typeof val === "object" && val != null && !Array.isArray(val);
+  return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
 function isLocalizerScope(val: unknown): val is LocalizerScope {

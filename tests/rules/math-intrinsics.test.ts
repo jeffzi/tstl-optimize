@@ -47,8 +47,13 @@ function collectExpressionReferences(expression: tstl.Expression): tstl.Expressi
   return refs;
 }
 
-function asTypeChecker(checker: Partial<ts.TypeChecker>): ts.TypeChecker {
-  return checker as unknown as ts.TypeChecker;
+function createMockTypeChecker(overrides: Partial<ts.TypeChecker> = {}): ts.TypeChecker {
+  return {
+    getSymbolAtLocation: () => undefined,
+    getTypeOfSymbol: () => ({}),
+    typeToString: () => "",
+    ...overrides,
+  } as ts.TypeChecker;
 }
 
 describe("math-intrinsics", () => {
@@ -185,7 +190,7 @@ describe("math-intrinsics", () => {
   });
 
   describe("visitor guard coverage", () => {
-    const checker = asTypeChecker({
+    const checker = createMockTypeChecker({
       getSymbolAtLocation: () => ({ flags: ts.SymbolFlags.Namespace }) as unknown as ts.Symbol,
       getTypeOfSymbol: () => ({ flags: ts.TypeFlags.Object }) as unknown as ts.Type,
       typeToString: () => "Math",

@@ -52,7 +52,6 @@ describe("index chaining — SourceFile visitor fallback", () => {
 
   it.each([
     {
-      name: "chains statement visitors when multiple rules handle same statement kind",
       code: `
         declare const n: number;
 
@@ -65,7 +64,6 @@ describe("index chaining — SourceFile visitor fallback", () => {
       expectedInline: "x = 1",
     },
     {
-      name: "applies chained visitors through SourceFile statement fallback with inline",
       code: `
         declare const n: number;
 
@@ -79,7 +77,10 @@ describe("index chaining — SourceFile visitor fallback", () => {
       `,
       expectedInline: "= 42",
     },
-  ])("$name", ({ code, expectedInline }) => {
+  ])("chains statement visitors when multiple rules handle same statement kind", ({
+    code,
+    expectedInline,
+  }) => {
     const options = {
       pluginOptions: {
         rules: {
@@ -192,7 +193,6 @@ describe("index chaining — SourceFile statement fallback chains through superT
 
   it.each([
     {
-      name: "chains SourceFile visitors through superTransformStatements with dead-local",
       code: `
         const unused = 42;
         const x = Math.floor(3.7);
@@ -200,7 +200,6 @@ describe("index chaining — SourceFile statement fallback chains through superT
       `,
     },
     {
-      name: "cleans up visitor entries when multiple SourceFile visitors exist",
       code: `
         const unused = Math.floor(5.5);
         const x = Math.floor(3.2);
@@ -208,7 +207,7 @@ describe("index chaining — SourceFile statement fallback chains through superT
         const z = x + y;
       `,
     },
-  ])("$name", ({ code }) => {
+  ])("chains SourceFile visitors through superTransformStatements with dead-local", ({ code }) => {
     const options = {
       pluginOptions: {
         rules: {

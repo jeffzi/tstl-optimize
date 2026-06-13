@@ -53,7 +53,7 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
     return false;
   }
 
-  // For variable and assignment statements, check RHS expressions.
+  // Variable and assignment statements capture names on their RHS.
   if (tstl.isVariableDeclarationStatement(stmt)) {
     return expressionsReferenceAnyOf(stmt.right, names);
   }
@@ -64,7 +64,7 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
     );
   }
 
-  // For control-flow statements, recurse into their bodies.
+  // Control-flow statements (if/while/etc.) capture names used in conditions or bodies.
   if (tstl.isReturnStatement(stmt)) {
     return expressionsReferenceAnyOf(stmt.expressions, names);
   }
@@ -76,10 +76,11 @@ function statementReferencesAnyOf(stmt: tstl.Statement, names: ReadonlySet<strin
     ) {
       return true;
     }
-    if (stmt.elseBlock) {
-      if (functionBodyReferencesAnyOf(getElseBranchStatements(stmt.elseBlock), names)) {
-        return true;
-      }
+    if (
+      stmt.elseBlock &&
+      functionBodyReferencesAnyOf(getElseBranchStatements(stmt.elseBlock), names)
+    ) {
+      return true;
     }
     return false;
   }

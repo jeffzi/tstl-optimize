@@ -24,6 +24,11 @@
       "types": "./dist/lua-transforms/index.d.ts",
       "require": "./dist/lua-transforms/index.js",
       "default": "./dist/lua-transforms/index.js"
+    },
+    "./compose": {
+      "types": "./dist/compose.d.ts",
+      "require": "./dist/compose.js",
+      "default": "./dist/compose.js"
     }
   },
   "scripts": {

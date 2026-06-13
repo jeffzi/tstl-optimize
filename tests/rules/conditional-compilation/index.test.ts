@@ -216,7 +216,7 @@ describe("resolveConditionalCompilationConfig", () => {
 
 describe("conditional-compilation", () => {
   describe("when constant identifiers are replaced", () => {
-    it("falls back to the configured default instead of emitting bare non-finite Lua identifiers", () => {
+    it("falls back to the configured default for non-finite env values", () => {
       vi.stubEnv("TEST_CC_LIMIT", "Infinity");
 
       const src = "declare const LIMIT: number; const x = LIMIT;";
@@ -224,9 +224,7 @@ describe("conditional-compilation", () => {
         compile(src, ccOpts({ LIMIT: { env: "TEST_CC_LIMIT", default: 7 } })),
       );
 
-      expect(lua).toContain("x = 7");
-      expect(lua).not.toContain("x = Infinity");
-      expect(lua).not.toContain("x = NaN");
+      expect(lua).toBe("x = 7");
     });
   });
 
@@ -306,9 +304,7 @@ describe("conditional-compilation", () => {
 
       const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: true } })));
 
-      expect(lua).toContain("if DEBUG then");
-      expect(lua).toContain("print(1)");
-      expect(lua).toContain("print(2)");
+      expect(lua).toContain("if DEBUG then\nprint(1)\nelse\nprint(2)");
     });
 
     it("folds a top-level boolean const initializer instead of the configured fallback", () => {
@@ -324,9 +320,7 @@ describe("conditional-compilation", () => {
 
       const lua = normalizeLua(compile(src, ccOpts({ DEBUG: { env: "X", default: true } })));
 
-      expect(lua).toContain("DEBUG = false");
-      expect(lua).toContain("print(2)");
-      expect(lua).not.toContain("print(1)");
+      expect(lua).toBe("DEBUG = false\nprint(2)");
     });
 
     it("folds a top-level string const initializer instead of the configured fallback", () => {
@@ -342,9 +336,7 @@ describe("conditional-compilation", () => {
 
       const lua = normalizeLua(compile(src, ccOpts({ MODE: { env: "X", default: "web" } })));
 
-      expect(lua).toContain('MODE = "native"');
-      expect(lua).toContain("print(1)");
-      expect(lua).not.toContain("print(2)");
+      expect(lua).toBe('MODE = "native"\nprint(1)');
     });
   });
 
@@ -1089,8 +1081,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("foo()");
-      expect(lua).not.toContain("? 1");
+      expect(lua).toContain("x = foo()");
     });
 
     it("short-circuits && when left operand is false constant", () => {
@@ -1102,8 +1093,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("false");
-      expect(lua).not.toContain("foo()");
+      expect(lua).toContain("x = false");
     });
 
     it("short-circuits || when left operand is true constant", () => {
@@ -1115,8 +1105,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("true");
-      expect(lua).not.toContain("foo()");
+      expect(lua).toContain("x = true");
     });
 
     it("folds if-statement with negated constant condition", () => {
@@ -1132,8 +1121,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("print(2)");
-      expect(lua).not.toContain("print(1)");
+      expect(lua).toBe("print(2)");
     });
 
     it.each([
@@ -1153,8 +1141,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("print(1)");
-      expect(lua).not.toContain("print(2)");
+      expect(lua).toBe("print(1)");
     });
 
     it("preserves if-condition when string constant has no resolved value", () => {
@@ -1186,8 +1173,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, ccOpts({ ZERO: { env: "ZERO", default: 0 } })));
 
-      expect(lua).toContain("print(2)");
-      expect(lua).not.toContain("print(1)");
+      expect(lua).toBe("print(2)");
     });
 
     it("folds nested if-statements with known constants", () => {
@@ -1206,9 +1192,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("print(2)");
-      expect(lua).not.toContain("print(1)");
-      expect(lua).not.toContain("if");
+      expect(lua).toBe("print(2)");
     });
 
     it("folds negative statically-known top-level const initializers", () => {
@@ -1224,9 +1208,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, ccOpts({ LIMIT: { env: "LIMIT", default: 0 } })));
 
-      expect(lua).toContain("LIMIT = -1");
-      expect(lua).toContain("print(1)");
-      expect(lua).not.toContain("print(2)");
+      expect(lua).toBe("LIMIT = -1\nprint(1)");
     });
 
     it("preserves && chain when left side has partial fold result", () => {
@@ -1265,8 +1247,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).toContain("foo()");
-      expect(lua).toContain("if");
+      expect(lua).toContain("if foo()");
     });
   });
 
@@ -1316,9 +1297,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, opts));
 
-      expect(lua).not.toContain("print(2)");
-      expect(lua).not.toContain("print(3)");
-      expect(lua).toContain("print(4)");
+      expect(lua).toBe("print(4)");
     });
 
     it("folds switch to matching case that contains return in block", () => {

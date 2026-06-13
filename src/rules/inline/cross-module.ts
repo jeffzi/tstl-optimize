@@ -1,8 +1,10 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 import {
+  type ImportBinding,
   type LiteralKind,
   resolveConstLiteral,
+  resolveRequireChain,
   unwrapTransparentExpression,
 } from "./const-literal";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
@@ -32,6 +34,7 @@ export function hasCrossModuleFreeVariable(
 interface CrossModuleFreeVariableClassification {
   blocking: ts.Identifier[];
   substitutions: Map<ts.Symbol, LiteralKind>;
+  imports: Map<ts.Symbol, ImportBinding>;
   ambients: Set<ts.Symbol>;
 }
 
@@ -69,9 +72,16 @@ function classifyAliasedIdentifier(
   const literal = resolveConstLiteral(aliasedSymbol, checker);
   if (literal !== undefined && allowSubstitution) {
     classification.substitutions.set(aliasedSymbol, literal);
-  } else {
-    classification.blocking.push(node);
+    return true;
   }
+
+  const importBinding = resolveRequireChain(aliasedSymbol, checker);
+  if (importBinding !== undefined) {
+    classification.imports.set(aliasedSymbol, importBinding);
+    return true;
+  }
+
+  classification.blocking.push(node);
   return true;
 }
 
@@ -94,9 +104,16 @@ function classifySameFileIdentifier(
     const literal = resolveConstLiteral(symbol, checker);
     if (allowSubstitution && literal !== undefined && ts.isVariableDeclaration(declaration)) {
       classification.substitutions.set(symbol, literal);
-    } else {
-      classification.blocking.push(node);
+      return true;
     }
+
+    const importBinding = resolveRequireChain(symbol, checker);
+    if (importBinding !== undefined) {
+      classification.imports.set(symbol, importBinding);
+      return true;
+    }
+
+    classification.blocking.push(node);
     return true;
   }
 
@@ -180,6 +197,7 @@ export function classifyCrossModuleFreeVariables(
   const classification: CrossModuleFreeVariableClassification = {
     blocking: [],
     substitutions: new Map<ts.Symbol, LiteralKind>(),
+    imports: new Map<ts.Symbol, ImportBinding>(),
     ambients: new Set<ts.Symbol>(),
   };
 
@@ -306,6 +324,48 @@ function createCrossModuleRejection(
   return { reject: true };
 }
 
+/**
+ * For each entry in `imports` (keyed by underlying target-module symbol → ImportBinding),
+ * check whether the consumer has an in-scope alias at `callNode` that resolves to the
+ * same underlying symbol (i.e. both import the same export from the same module).
+ *
+ * Returns a map from target alias symbol → consumer alias symbol for every matched pair.
+ * Unmatched imports are absent from the result (they will still be synthesized as
+ * `require("path").member` chains by the rewrite step).
+ */
+export function resolveConsumerBindings(
+  imports: ReadonlyMap<ts.Symbol, ImportBinding>,
+  callNode: ts.Node,
+  checker: ts.TypeChecker,
+): Map<ts.Symbol, ts.Symbol> {
+  const result = new Map<ts.Symbol, ts.Symbol>();
+  if (imports.size === 0) return result;
+
+  const consumerSymbols = checker.getSymbolsInScope(
+    callNode,
+    ts.SymbolFlags.Value | ts.SymbolFlags.Alias,
+  );
+
+  for (const [targetSymbol] of imports) {
+    for (const consumerSymbol of consumerSymbols) {
+      if ((consumerSymbol.flags & ts.SymbolFlags.Alias) === 0) continue;
+      if (!isValueSpaceSymbol(consumerSymbol, checker)) continue;
+      if (!hasRuntimeDeclaration(consumerSymbol)) continue;
+
+      // Both the target symbol (stored as aliased symbol in `imports`) and the consumer
+      // symbol (an import alias in the consumer module) must resolve to the same underlying
+      // export.  `targetSymbol` is already the aliased (underlying) symbol; unwrap the
+      // consumer alias to compare.
+      if (checker.getAliasedSymbol(consumerSymbol) === targetSymbol) {
+        result.set(targetSymbol, consumerSymbol);
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
 export function classifyCrossModuleInline(
   callNode: ts.CallExpression,
   target: InlineTarget,
@@ -314,15 +374,21 @@ export function classifyCrossModuleInline(
   context: tstl.TransformationContext,
   strict: boolean,
   warnCrossModule: boolean,
-): { reject: true } | { reject: false; substitutions: Map<ts.Symbol, LiteralKind> } {
+):
+  | { reject: true }
+  | {
+      reject: false;
+      substitutions: Map<ts.Symbol, LiteralKind>;
+      imports: Map<ts.Symbol, ImportBinding>;
+    } {
   const isCrossModule =
     callNode.getSourceFile().fileName !== target.declaration.getSourceFile().fileName;
 
   if (!isCrossModule) {
-    return { reject: false, substitutions: new Map() };
+    return { reject: false, substitutions: new Map(), imports: new Map() };
   }
 
-  const { blocking, substitutions, ambients } = classifyCrossModuleFreeVariables(
+  const { blocking, substitutions, imports, ambients } = classifyCrossModuleFreeVariables(
     nodes,
     target.params,
     target.declaration,
@@ -339,5 +405,5 @@ export function classifyCrossModuleInline(
     }
   }
 
-  return { reject: false, substitutions };
+  return { reject: false, substitutions, imports };
 }

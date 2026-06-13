@@ -155,8 +155,7 @@ function negateCondition(expr: tstl.Expression): tstl.Expression {
       ? withPositionFrom(tstl.createParenthesizedExpression(expr), expr)
       : expr;
   const unaryExpr = tstl.createUnaryExpression(operand, tstl.SyntaxKind.NotOperator);
-  withPositionFrom(unaryExpr, expr);
-  return unaryExpr;
+  return withPositionFrom(unaryExpr, expr);
 }
 
 function promoteElseBlock(statements: tstl.Statement[], i: number): void {
