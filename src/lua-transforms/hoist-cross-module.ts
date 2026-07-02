@@ -194,12 +194,13 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
 
   // Process each require binding
   for (const [moduleVar, info] of requireInfos) {
+    const preExisting = preExistingHoists.get(moduleVar);
+
     // Collect new hoists (accesses not already hoisted), sorted by first access order
     const toInsertUnsorted: Array<{ name: string; order: number }> = [];
 
     for (const [name, { moduleVar: originModule, order }] of accessesToHoist) {
       if (originModule === moduleVar) {
-        const preExisting = preExistingHoists.get(moduleVar);
         if (!preExisting?.some((h) => h.name === name)) {
           toInsertUnsorted.push({ name, order });
           localizedSymbols.set(name, { moduleVar, memberName: name });
@@ -213,7 +214,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     if (toInsert.length > 0) {
       // Compute insertion point: after the last pre-existing hoist or after the require
       let insertAfterNode = info.statement;
-      const preExisting = preExistingHoists.get(moduleVar);
       if (preExisting && preExisting.length > 0) {
         insertAfterNode = preExisting[preExisting.length - 1].node;
       }
@@ -232,7 +232,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
   }
 
   // Collect access references to rewrite
-  const references = collectAccessReferences(ast, requireInfos, accessesToHoist);
+  const references = collectAccessReferences(ast, requireInfos, accessesToHoist, declarationLhses);
 
   for (const ref of references) {
     edits.push({
@@ -281,9 +281,9 @@ function collectAccessReferences(
   node: luaparse.Node,
   requireInfos: Map<string, RequireInfo>,
   accessesToHoist: Map<string, { moduleVar: string; order: number }>,
+  declarationLhses: Set<luaparse.Node>,
 ): AccessReference[] {
   const references: AccessReference[] = [];
-  const declarationLhses = collectDeclarationLhses(node);
 
   walkAstNode(node, (n) => {
     if (n.type === "MemberExpression" && !declarationLhses.has(n as luaparse.Node)) {

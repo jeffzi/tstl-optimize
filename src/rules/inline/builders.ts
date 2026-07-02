@@ -65,7 +65,7 @@ function registerConsumerBindings(
   };
 }
 
-export interface ParamMapResult {
+interface ParamMapResult {
   tempDecls: tstl.VariableDeclarationStatement[];
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }

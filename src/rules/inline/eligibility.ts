@@ -10,7 +10,7 @@ import type {
 } from "./target";
 import { getInlineTarget, isDeclarationNameReference, resolveSymbol } from "./target";
 
-export interface InlineRejection {
+interface InlineRejection {
   reason: string;
   code: number;
 }
