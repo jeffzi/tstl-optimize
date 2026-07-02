@@ -106,11 +106,11 @@ const FORBIDDEN_LUA_PATTERNS: ReadonlyArray<{ label: string; pattern: RegExp }> 
 ];
 
 /**
- * Scans committed Lua content for structural patterns that indicate an
- * optimization rule left broken output. Reports each violation to stderr
- * as "file:line: forbidden pattern: <label>" and returns true if any found.
+ * Scans Lua content for structural patterns that indicate an optimization
+ * rule left broken output. Reports each violation to stderr as
+ * "file:line: forbidden pattern: <label>" and returns true if any found.
  */
-function lintCommittedLua(luaName: string, content: string): boolean {
+function lintLua(luaName: string, content: string): boolean {
   let failed = false;
   for (const { label, pattern } of FORBIDDEN_LUA_PATTERNS) {
     for (const match of content.matchAll(pattern)) {
@@ -193,13 +193,16 @@ async function main(): Promise<void> {
         console.error(`Out of date: ${luaName}`);
         stale = true;
       }
-      if (existing && lintCommittedLua(luaName, existing)) {
+      if (existing && lintLua(luaName, existing)) {
         lintFailed = true;
       }
     } else {
       writeFileSync(luaPath, lua);
       writeFileSync(mapPath, luaSourceMap);
       console.log(`${name} -> ${luaName}, ${mapName}`);
+      if (lintLua(luaName, lua)) {
+        lintFailed = true;
+      }
     }
   }
 
@@ -216,7 +219,7 @@ async function main(): Promise<void> {
   if (check && stale) {
     console.error('Example .lua files are out of date. Run "npm run examples" to regenerate.');
   }
-  if (check && (stale || lintFailed || orphans.length > 0)) {
+  if ((check && stale) || lintFailed || orphans.length > 0) {
     exit(1);
   }
 }
