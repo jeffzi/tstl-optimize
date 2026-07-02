@@ -37,7 +37,7 @@ export function nodeRange(node: luaparse.Node): [start: number, end: number] {
 
 export function nextLineOffset(source: string, rangeEnd: number): number {
   const nl = source.indexOf("\n", rangeEnd);
-  return nl === -1 ? source.length : nl + 1;
+  return nl === -1 ? rangeEnd : nl + 1;
 }
 
 export function applyEdits(source: string, edits: Edit[]): string {

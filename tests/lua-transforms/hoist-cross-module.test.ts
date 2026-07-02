@@ -270,15 +270,22 @@ describe("hoistCrossModuleAccesses", () => {
   });
 
   describe("source with no newline after require statement", () => {
-    it("inserts hoist at end of source when no newline follows require", () => {
+    it("inserts hoist after require (before first use) when no newline follows require", () => {
       const source = 'local ____mod = require("my/mod")print(____mod.foo)';
       const result = hoistCrossModuleAccesses(source);
-      expect(result.source).toContain("local foo = ____mod.foo");
-      expect(result.source).toContain("print(foo)");
+      const expected = 'local ____mod = require("my/mod")\nlocal foo = ____mod.foo\nprint(foo)';
+      expect(result.source).toStrictEqual(expected);
       expect(result.localizedSymbols.get("foo")).toStrictEqual({
         moduleVar: "____mod",
         memberName: "foo",
       });
+    });
+
+    it("multi-line sources preserve byte-identical behavior", () => {
+      const source = 'local ____mod = require("my/mod")\nprint(____mod.foo)';
+      const result = hoistCrossModuleAccesses(source);
+      const expected = 'local ____mod = require("my/mod")\nlocal foo = ____mod.foo\nprint(foo)';
+      expect(result.source).toStrictEqual(expected);
     });
   });
 

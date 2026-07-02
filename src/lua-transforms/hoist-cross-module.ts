@@ -223,10 +223,13 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
 
       // Combine all insertions into a single replacement to maintain order
       const hoistCode = toInsert.map((name) => `local ${name} = ${moduleVar}.${name}`).join("\n");
+      // If inserting mid-line (no newline before insertion point), prepend newline
+      const needsLeadingNewline = insertPoint > 0 && luaSource[insertPoint - 1] !== "\n";
+      const replacement = needsLeadingNewline ? `\n${hoistCode}\n` : `${hoistCode}\n`;
       edits.push({
         offset: insertPoint,
         length: 0,
-        replacement: `${hoistCode}\n`,
+        replacement,
       });
     }
   }
