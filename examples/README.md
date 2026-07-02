@@ -28,6 +28,7 @@ npm run examples
 | [math-intrinsics](math-intrinsics.ts)                 | `math-intrinsics`         | Replaces `Math.*` calls with inline Lua expressions                                |
 | [merge-locals](merge-locals.ts)                       | `merge-locals`            | Merges consecutive `local` declarations into a single statement                    |
 | [remove-empty-branch](remove-empty-branch.ts)         | `remove-empty-branch`     | Removes empty `if`/`do` branches and promotes `else` when `if`-block is empty      |
+| [hoist-require](hoist-require.ts)                     | `hoist-require`           | Deduplicates repeated inline `require` calls into shared top-level locals          |
 | [unspill](unspill.ts)                                 | `unspill`                 | Folds redundant base/key temps from compound assignment on element/index access    |
 
 Each example includes a **Limitations** section showing cases where the rule skips the optimization, with comments

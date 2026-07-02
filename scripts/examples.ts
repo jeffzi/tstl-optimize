@@ -39,6 +39,7 @@ function compile(
   fileName: string,
   source: string,
   pluginOptions?: Record<string, unknown>,
+  noResolvePaths?: string[],
 ): { lua: string; luaSourceMap: string; warnings: ts.Diagnostic[] } {
   const luaName = fileName.replace(/\.ts$/, ".lua");
   const result = tstl.transpileVirtualProject(
@@ -59,6 +60,7 @@ function compile(
       target: ts.ScriptTarget.ESNext,
       lib: ["lib.esnext.d.ts"],
       types: ["@typescript-to-lua/language-extensions"],
+      ...(noResolvePaths ? { noResolvePaths } : {}),
     },
   );
 
@@ -146,17 +148,32 @@ async function main(): Promise<void> {
 
     const optsPath = resolve(examplesDir, name.replace(/\.ts$/, ".opts.json"));
     let pluginOptions: Record<string, unknown> | undefined;
+    let noResolvePaths: string[] | undefined;
     const optsJson = readOptionalUtf8(optsPath);
     if (optsJson !== undefined) {
       try {
         const raw: unknown = JSON.parse(optsJson);
-        if (isRecord(raw)) pluginOptions = raw;
+        if (isRecord(raw)) {
+          if (Array.isArray(raw.noResolvePaths)) {
+            noResolvePaths = raw.noResolvePaths as string[];
+            const { noResolvePaths: _, ...rest } = raw;
+            pluginOptions = Object.keys(rest).length > 0 ? rest : undefined;
+          } else {
+            pluginOptions = raw;
+          }
+        }
       } catch {
         // sidecar opts file is optional
       }
     }
 
-    const { lua, luaSourceMap, warnings } = compile(OptimizePlugin, name, source, pluginOptions);
+    const { lua, luaSourceMap, warnings } = compile(
+      OptimizePlugin,
+      name,
+      source,
+      pluginOptions,
+      noResolvePaths,
+    );
 
     for (const w of warnings) {
       const line =
