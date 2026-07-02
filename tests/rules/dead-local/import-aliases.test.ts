@@ -324,5 +324,83 @@ describe("dead-local — import alias elimination", () => {
       expect(statements).toContain(ReactStmt);
       expect(statements).toContain(useReactStmt);
     });
+
+    it("preserves require binding with no aliases read only by an undefined-symbolId identifier", () => {
+      // A require binding with NO import aliases, read only by a symbolId-less identifier,
+      // should be preserved. The test constructs a live-alias scaffolding to bypass the early
+      // return (importAliases.length === 0), then adds the subject binding with a direct read.
+
+      // First require: local ____live = require("live")
+      const liveId = tstl.createIdentifier("____live");
+      liveId.symbolId = 100 as tstl.SymbolId; // Real TSTL-assigned symbolId
+
+      const liveRequireStmt = tstl.createVariableDeclarationStatement(
+        [liveId],
+        [
+          tstl.createCallExpression(tstl.createIdentifier("require"), [
+            tstl.createStringLiteral("live"),
+          ]),
+        ],
+      );
+
+      // Alias for live: local aliasName = ____live.member
+      const aliasId = tstl.createIdentifier("aliasName");
+      aliasId.symbolId = 200 as tstl.SymbolId; // Real TSTL-assigned symbolId
+
+      const liveAliasStmt = tstl.createVariableDeclarationStatement(
+        [aliasId],
+        [tstl.createTableIndexExpression(liveId, tstl.createStringLiteral("member"))],
+      );
+
+      // Read of the alias: aliasName
+      const aliasReadId = tstl.createIdentifier("aliasName");
+      aliasReadId.symbolId = 200 as tstl.SymbolId;
+      const aliasReadStmt = tstl.createExpressionStatement(aliasReadId);
+
+      // Second require: local ____mod2 = require("mod2")
+      const mod2Id = tstl.createIdentifier("____mod2");
+      mod2Id.symbolId = undefined; // Plugin-emitted (no symbolId)
+
+      const mod2RequireStmt = tstl.createVariableDeclarationStatement(
+        [mod2Id],
+        [
+          tstl.createCallExpression(tstl.createIdentifier("require"), [
+            tstl.createStringLiteral("mod2"),
+          ]),
+        ],
+      );
+
+      // Direct read of mod2 via symbolId-less identifier: ____mod2.foo()
+      const mod2ReadId = tstl.createIdentifier("____mod2");
+      mod2ReadId.symbolId = undefined; // Plugin-emitted (no symbolId)
+
+      const mod2ReadStmt = tstl.createExpressionStatement(
+        tstl.createCallExpression(
+          tstl.createTableIndexExpression(mod2ReadId, tstl.createStringLiteral("foo")),
+          [],
+        ),
+      );
+
+      const statements: tstl.Statement[] = [
+        liveRequireStmt,
+        liveAliasStmt,
+        aliasReadStmt,
+        mod2RequireStmt,
+        mod2ReadStmt,
+      ];
+
+      eliminateDeadImportAliases(statements);
+
+      // Assert: mod2RequireStmt (binding with no aliases, read only by undefined-symbolId)
+      // should be preserved
+      expect(statements).toContain(mod2RequireStmt);
+      // Assert: scaffolding (live require and alias) also survives
+      expect(statements).toContain(liveRequireStmt);
+      expect(statements).toContain(liveAliasStmt);
+      expect(statements).toContain(aliasReadStmt);
+      expect(statements).toContain(mod2ReadStmt);
+      // Assert: final length (all 5 statements preserved)
+      expect(statements.length).toBe(5);
+    });
   });
 });
