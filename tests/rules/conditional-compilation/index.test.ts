@@ -860,6 +860,25 @@ ${body}
       expect(lua).toBe("print(1)");
     });
 
+    it("emits parenthesized negative constant in exponentiation expression", () => {
+      const src = "declare const K: number; const x = K ** 2;";
+
+      const lua = normalizeLua(compile(src, ccOpts({ K: { env: "X", default: -2 } })));
+
+      // -2 ^ 2 parses as -(2 ^ 2) = -4 in Lua, but (-2) ^ 2 = 4 in TypeScript
+      // Should emit (-2) ^ 2 to preserve operator precedence
+      expect(lua).toContain("(-2) ^ 2");
+    });
+
+    it("emits parenthesized negative constant in plain expression position", () => {
+      const src = "declare const K: number; const x = K;";
+
+      const lua = normalizeLua(compile(src, ccOpts({ K: { env: "X", default: -2 } })));
+
+      // Negative constant should be parenthesized for consistency
+      expect(lua).toContain("(-2)");
+    });
+
     it("negates numeric constant with minus operator", () => {
       const src = `${PRINT_DECL} declare const FOO: number; if (-FOO === 5) { print(1); } else { print(2); }`;
 
