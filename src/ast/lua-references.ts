@@ -225,7 +225,8 @@ export function forEachAccess(
     }
 
     if (tstl.isForStatement(stmt)) {
-      // controlVariable is a binding (not walked); only initializer/limit/step are reads
+      // controlVariable is a single binding (ForInStatement has multiple); not walked as a
+      // read — only initializer/limit/step are reads
       if (walkExpression(stmt.controlVariableInitializer, inFunctionBody)) {
         return true;
       }
