@@ -7,8 +7,9 @@ through TSTL with the plugin active, and runs them under
 [`luamark`](https://github.com/jeffzi/luamark) for paired timing.
 
 Rules that transform code at build time without runtime impact (`constant-folding`, `dead-local`,
-`merge-locals`, `remove-empty-branch`, `conditional-compilation`, `debug-strip`) are not
-benchmarked here — their win is smaller/cleaner Lua, measured by inspecting the generated output.
+`merge-locals`, `remove-empty-branch`, `conditional-compilation`, `debug-strip`, `hoist-require`)
+are not benchmarked here — their win is smaller/cleaner Lua, measured by inspecting the generated
+output.
 
 ## Running
 
