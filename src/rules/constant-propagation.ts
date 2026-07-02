@@ -66,11 +66,37 @@ function propagateScope(statements: tstl.Statement[]): void {
     }
   }
 
+  // Build a name→symbolId index so symbolId-less writes can conservatively
+  // disqualify candidates that share the same declared name. No TS input
+  // currently produces symbolId-less writes, but plugin-emitted code can
+  // (see dead-local commit 53482b1 for the same bug class).
+  /* v8 ignore start -- defensive: no TS-reachable path produces symbolId-less writes */
+  const candidatesByName = new Map<string, number[]>();
+  for (const [symbolId, candidate] of candidates) {
+    const name = candidate.declStmt.left[0].text;
+    const ids = candidatesByName.get(name);
+    if (ids !== undefined) {
+      ids.push(symbolId);
+    } else {
+      candidatesByName.set(name, [symbolId]);
+    }
+  }
+  /* v8 ignore stop */
+
   // Step 2: filter — disqualify writes after declaration and reads in nested functions
   for (const stmt of statements) {
     forEachAccess(stmt, ({ identifier, kind, inFunctionBody }) => {
       const symbolId = identifier.symbolId;
-      if (symbolId === undefined) return;
+      if (symbolId === undefined) {
+        /* v8 ignore next 5 -- defensive: see candidatesByName comment above */
+        if (kind === "write") {
+          const ids = candidatesByName.get(identifier.text);
+          if (ids !== undefined) {
+            for (const id of ids) candidates.delete(id);
+          }
+        }
+        return;
+      }
 
       const candidate = candidates.get(symbolId);
       if (candidate === undefined) return;

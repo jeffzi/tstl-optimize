@@ -522,3 +522,50 @@ function f() {
     expect(pos.column).toBe(tsXCol);
   });
 });
+
+// ---------------------------------------------------------------------------
+// unspill: folded compound assignment preserves sourcemap positions
+//
+// Unspill folds TSTL temp pairs back into direct element access:
+//   local ____temp_0 = obj; local ____temp_1 = k
+//   ____temp_0[____temp_1] = ____temp_0[____temp_1] + other[j]
+// →
+//   obj[k] = obj[k] + other[j]
+//
+// Verifies both the matched v1[v2] positions and non-matching nested
+// TableIndexExpressions (other[j]) carry sourcemap coverage.
+// ---------------------------------------------------------------------------
+
+describe("unspill sourcemap: folded compound assignment maps to original position", () => {
+  const source = `\
+declare const obj: Record<string, number>;
+declare const k: string;
+declare const other: Record<string, number>;
+declare const j: string;
+obj[k] += other[j];`;
+
+  it("folded obj[k] maps to TS compound assignment line", async () => {
+    const { lua, externalMap } = compileWithSourceMap(source, {
+      pluginOptions: {
+        rules: {
+          unspill: true,
+          "constant-propagation": false,
+          "dead-local": false,
+          "merge-locals": false,
+        },
+      },
+    });
+
+    const luaLine = findLuaLine(lua, "obj[k] = obj[k] + other[j]");
+    const luaLineText = lua.split("\n")[luaLine - 1];
+
+    // Matched substitution: obj[k] on LHS maps to TS line 5
+    const lhsPos = await assertMapped(externalMap, luaLine, luaColOf(luaLineText, "obj[k]"));
+    expect(lhsPos.line).toBe(5);
+
+    // Non-matching nested expression: other[j] on RHS maps to TS line 5
+    const rhsPos = await assertMapped(externalMap, luaLine, luaColOf(luaLineText, "other[j]"));
+    expect(rhsPos.line).toBe(5);
+    expect(rhsPos.column).toBe(tsColOf(source, 4, "other[j]"));
+  });
+});

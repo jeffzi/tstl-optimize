@@ -4,6 +4,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../../src/rules/dead-local";
+import { collectUndefinedSymbolIdNames } from "../../../src/rules/dead-local/access";
 import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../../helpers";
 
 function expectLuaSnippets(
@@ -883,6 +884,47 @@ ${pureDecls}
         { pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(lua).toContain("sideEffect()");
+    });
+  });
+
+  describe("collectUndefinedSymbolIdNames", () => {
+    it("collects names from identifiers with undefined symbolId via forEachAccess", () => {
+      const withId = tstl.createIdentifier("tracked", undefined, toSymbolId(1));
+      const withoutId = tstl.createIdentifier("untracked");
+
+      const stmts: tstl.Statement[] = [
+        tstl.createExpressionStatement(withId),
+        tstl.createExpressionStatement(withoutId),
+      ];
+
+      const names = new Set<string>();
+      collectUndefinedSymbolIdNames(stmts, names);
+
+      expect(names.has("untracked")).toBe(true);
+      expect(names.has("tracked")).toBe(true);
+    });
+
+    it("collects names from symbolId-less reads in assignment RHS", () => {
+      const lhs = tstl.createIdentifier("target", undefined, toSymbolId(10));
+      const rhs = tstl.createIdentifier("noSymbol");
+      const stmt = tstl.createAssignmentStatement(lhs, rhs);
+
+      const names = new Set<string>();
+      collectUndefinedSymbolIdNames([stmt], names);
+
+      expect(names.has("noSymbol")).toBe(true);
+      expect(names.has("target")).toBe(false);
+    });
+
+    it("returns empty set when all identifiers have symbolIds", () => {
+      const lhs = tstl.createIdentifier("a", undefined, toSymbolId(1));
+      const rhs = tstl.createIdentifier("b", undefined, toSymbolId(2));
+      const stmts: tstl.Statement[] = [tstl.createAssignmentStatement(lhs, rhs)];
+
+      const names = new Set<string>();
+      collectUndefinedSymbolIdNames(stmts, names);
+
+      expect(names.size).toBe(0);
     });
   });
 });

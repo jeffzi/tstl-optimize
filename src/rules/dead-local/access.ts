@@ -23,6 +23,35 @@ export function collectReadSymbols(
 }
 
 /**
+ * Collects names of all identifiers with symbolId === undefined.
+ * These are plugin-emitted identifiers lacking normal symbolId tracking.
+ * When collecting, we check both explicit undefined-symbolId accesses found by
+ * forEachAccess, and also bare identifier expressions which may have dynamically
+ * assigned symbolIds.
+ */
+export function collectUndefinedSymbolIdNames(
+  statements: readonly tstl.Statement[],
+  names: Set<string>,
+): void {
+  // First pass: collect bare identifier expression statements
+  // These commonly result from plugin transformations
+  for (const stmt of statements) {
+    if (tstl.isExpressionStatement(stmt) && tstl.isIdentifier(stmt.expression)) {
+      names.add(stmt.expression.text);
+    }
+  }
+
+  // Second pass: collect identifiers with explicitly undefined symbolId
+  for (const stmt of statements) {
+    forEachAccess(stmt, ({ identifier }) => {
+      if (identifier.symbolId === undefined) {
+        names.add(identifier.text);
+      }
+    });
+  }
+}
+
+/**
  * Finds the first access to a symbol among statements that execute in source order.
  *
  * **Return value**: Returns "write" if the first unconditional access is a write; "read" if the

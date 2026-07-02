@@ -13,7 +13,6 @@ import {
 import {
   clearExpressionPositions,
   clearNodePositions,
-  needsParentheses,
   substituteParams,
   substituteParamsInStatements,
   walkLuaExpression,
@@ -65,7 +64,7 @@ function registerConsumerBindings(
   };
 }
 
-export interface ParamMapResult {
+interface ParamMapResult {
   tempDecls: tstl.VariableDeclarationStatement[];
   paramMap: Map<tstl.SymbolId, tstl.Expression>;
 }
@@ -481,6 +480,14 @@ export function inlineExpressionBody(
     : substituted;
   stampCallSiteExpression(result, callNode);
   return result;
+}
+
+function needsParentheses(node: tstl.Expression): boolean {
+  return (
+    tstl.isBinaryExpression(node) ||
+    tstl.isUnaryExpression(node) ||
+    tstl.isConditionalExpression(node)
+  );
 }
 
 function getStatementBody(stmt: ts.Statement): readonly ts.Statement[] {

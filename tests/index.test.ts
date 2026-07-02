@@ -3,11 +3,12 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { LuaLibImportKind, LuaTarget, transpileVirtualProject } from "typescript-to-lua";
 import { describe, expect, it, vi } from "vitest";
+import { mergeVisitorMaps } from "../src/compose";
 import type { DebugStripConfig, LocalizerConfig } from "../src/config";
 import { isRuleEnabled, parseConfig, resolveLocalizerConfig } from "../src/config";
 import pluginFactory, { OptimizePlugin } from "../src/index";
 import { getTransformedFile } from "../src/rules/source-file";
-import { compile, normalizeLua } from "./helpers";
+import { BASE_TSTL_OPTIONS, compile, normalizeLua } from "./helpers";
 
 function assertLocalizerConfig(config: LocalizerConfig | false): asserts config is LocalizerConfig {
   expect(config).not.toBe(false);
@@ -72,14 +73,8 @@ function transpileWithPlugin(plugin: tstl.Plugin, source = "const x = 1;"): stri
   const result = transpileVirtualProject(
     { "main.ts": source },
     {
-      noHeader: true,
+      ...BASE_TSTL_OPTIONS,
       luaPlugins: [{ plugin }],
-      noImplicitSelf: true,
-      luaTarget: LuaTarget.Lua51,
-      luaLibImport: LuaLibImportKind.None,
-      target: ts.ScriptTarget.ESNext,
-      lib: ["lib.esnext.d.ts"],
-      types: ["@typescript-to-lua/language-extensions"],
     },
   );
   const errors = result.diagnostics.filter(
@@ -329,6 +324,59 @@ describe("target auto-detection", () => {
 });
 
 describe("SourceFile visitor fallback", () => {
+  it("merges fallback visitor when undefined SourceFile result falls through to superTransformNode", () => {
+    // Create a fallback visitor that returns undefined from SourceFile
+    // This tests the specific bug: undefined results should fall through to superTransformNode
+    const fallbackVisitors: tstl.Visitors = {
+      [ts.SyntaxKind.SourceFile]: {
+        transform: (_node: ts.Node) => undefined,
+        // biome-ignore lint/suspicious/noExplicitAny: tstl.Visitors expects a specific shape but we need to return undefined
+      } as any,
+    };
+
+    const primaryVisitors: tstl.Visitors = {
+      [ts.SyntaxKind.SourceFile]: {
+        transform: (_node: ts.Node, context: tstl.TransformationContext) => {
+          return context.superTransformNode(_node);
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: tstl.Visitors expects a specific shape but we need to return undefined
+      } as any,
+    };
+
+    // Merge primary with fallback (primary as primary)
+    // This should not throw or produce [undefined] when the fallback returns undefined
+    const mergedVisitors = mergeVisitorMaps(primaryVisitors, fallbackVisitors);
+
+    // Verify the merge succeeded
+    expect(Object.keys(mergedVisitors).length).toBeGreaterThan(0);
+    expect(mergedVisitors[ts.SyntaxKind.SourceFile]).toBeDefined();
+
+    // Create a test plugin with the merged visitors
+    const testPlugin: tstl.Plugin = {
+      visitors: mergedVisitors,
+    };
+
+    // Transpile with the merged visitors to ensure the fallback works in context
+    const result = transpileVirtualProject(
+      {
+        "main.ts": "const x = 1 + 2; const y = x;",
+      },
+      {
+        ...BASE_TSTL_OPTIONS,
+        luaPlugins: [{ plugin: testPlugin }],
+      },
+    );
+
+    // Should succeed without throwing "expected SourceFile transform to produce a Lua file"
+    const errors = result.diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Error);
+    const errorMessages = errors.map((d) => String(d.messageText)).join("\n");
+    expect(errorMessages).not.toContain("expected SourceFile transform to produce a Lua file");
+
+    // Verify Lua output was generated
+    const luaFile = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
+    expect(luaFile?.lua).toBeDefined();
+  });
+
   it("emits statements when multiple SourceFile rules are enabled", () => {
     const lua = normalizeLua(
       compile("const x = 1; const y = x + 1;", {

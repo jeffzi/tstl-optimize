@@ -174,12 +174,17 @@ export function eliminateDeadImportAliases(statements: tstl.Statement[]): void {
   const updatedReads = new Set<number>();
   collectReadSymbols(statements, updatedReads);
 
+  // Recompute undefined-symbolId reads after alias removal to catch bindings read only by
+  // plugin-emitted identifiers (e.g., JSX code without symbolId tracking).
+  const updatedUndefinedSymbolIdReads = collectUndefinedSymbolIdReads(statements);
+
   const requiresToRemove = new Set<tstl.Statement>();
   for (const binding of requireBindings.values()) {
     const hasLiveAlias = aliveRequireIds.has(binding.id);
     const hasOtherRead = binding.id.symbolId !== undefined && updatedReads.has(binding.id.symbolId);
+    const hasUndefinedRead = updatedUndefinedSymbolIdReads.has(binding.id.text);
 
-    if (!hasLiveAlias && !hasOtherRead) {
+    if (!hasLiveAlias && !hasOtherRead && !hasUndefinedRead) {
       requiresToRemove.add(binding.stmt);
     }
   }

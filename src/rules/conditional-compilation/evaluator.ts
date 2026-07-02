@@ -4,7 +4,9 @@ import { createLiteral } from "../../ast/lua-literal";
 import type { ConstantValue } from "../../config";
 
 export function isTruthy(value: ConstantValue): boolean {
-  return value !== false && value !== 0 && value !== "";
+  // In Lua, only `false` and `nil` are falsy. Among ConstantValue (boolean | number | string),
+  // only `false` is falsy. Zero and empty strings are truthy in Lua.
+  return value !== false;
 }
 
 export type IdentifierResolver = (node: ts.Identifier) => ConstantValue | undefined;
@@ -123,8 +125,6 @@ export function evaluateCondition(
   return evaluateResolvedExpression(expr, (node) => constants.get(node.text));
 }
 
-// Delegates to the shared literal factory; no wrapNegativeNumber needed here because
-// the resolved-constant path never lands a folded negative in a negation-sensitive context.
 export function constantToLuaLiteral(value: ConstantValue): tstl.Expression {
-  return createLiteral(value);
+  return createLiteral(value, { wrapNegativeNumber: true });
 }

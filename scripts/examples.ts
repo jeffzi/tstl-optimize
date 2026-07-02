@@ -39,6 +39,7 @@ function compile(
   fileName: string,
   source: string,
   pluginOptions?: Record<string, unknown>,
+  noResolvePaths?: string[],
 ): { lua: string; luaSourceMap: string; warnings: ts.Diagnostic[] } {
   const luaName = fileName.replace(/\.ts$/, ".lua");
   const result = tstl.transpileVirtualProject(
@@ -59,6 +60,7 @@ function compile(
       target: ts.ScriptTarget.ESNext,
       lib: ["lib.esnext.d.ts"],
       types: ["@typescript-to-lua/language-extensions"],
+      ...(noResolvePaths ? { noResolvePaths } : {}),
     },
   );
 
@@ -104,11 +106,11 @@ const FORBIDDEN_LUA_PATTERNS: ReadonlyArray<{ label: string; pattern: RegExp }> 
 ];
 
 /**
- * Scans committed Lua content for structural patterns that indicate an
- * optimization rule left broken output. Reports each violation to stderr
- * as "file:line: forbidden pattern: <label>" and returns true if any found.
+ * Scans Lua content for structural patterns that indicate an optimization
+ * rule left broken output. Reports each violation to stderr as
+ * "file:line: forbidden pattern: <label>" and returns true if any found.
  */
-function lintCommittedLua(luaName: string, content: string): boolean {
+function lintLua(luaName: string, content: string): boolean {
   let failed = false;
   for (const { label, pattern } of FORBIDDEN_LUA_PATTERNS) {
     for (const match of content.matchAll(pattern)) {
@@ -146,17 +148,32 @@ async function main(): Promise<void> {
 
     const optsPath = resolve(examplesDir, name.replace(/\.ts$/, ".opts.json"));
     let pluginOptions: Record<string, unknown> | undefined;
+    let noResolvePaths: string[] | undefined;
     const optsJson = readOptionalUtf8(optsPath);
     if (optsJson !== undefined) {
       try {
         const raw: unknown = JSON.parse(optsJson);
-        if (isRecord(raw)) pluginOptions = raw;
+        if (isRecord(raw)) {
+          if (Array.isArray(raw.noResolvePaths)) {
+            noResolvePaths = raw.noResolvePaths as string[];
+            const { noResolvePaths: _, ...rest } = raw;
+            pluginOptions = Object.keys(rest).length > 0 ? rest : undefined;
+          } else {
+            pluginOptions = raw;
+          }
+        }
       } catch {
         // sidecar opts file is optional
       }
     }
 
-    const { lua, luaSourceMap, warnings } = compile(OptimizePlugin, name, source, pluginOptions);
+    const { lua, luaSourceMap, warnings } = compile(
+      OptimizePlugin,
+      name,
+      source,
+      pluginOptions,
+      noResolvePaths,
+    );
 
     for (const w of warnings) {
       const line =
@@ -176,20 +193,33 @@ async function main(): Promise<void> {
         console.error(`Out of date: ${luaName}`);
         stale = true;
       }
-      if (existing && lintCommittedLua(luaName, existing)) {
+      if (existing && lintLua(luaName, existing)) {
         lintFailed = true;
       }
     } else {
       writeFileSync(luaPath, lua);
       writeFileSync(mapPath, luaSourceMap);
       console.log(`${name} -> ${luaName}, ${mapName}`);
+      if (lintLua(luaName, lua)) {
+        lintFailed = true;
+      }
     }
+  }
+
+  const tsBasenames = new Set(tsFiles.map((f) => f.replace(/\.ts$/, "")));
+  const luaFiles = readdirSync(examplesDir).filter(
+    (f) => f.endsWith(".lua") && !f.endsWith(".lua.map"),
+  );
+  const orphans = luaFiles.filter((f) => !tsBasenames.has(f.replace(/\.lua$/, "")));
+
+  for (const orphan of orphans) {
+    console.error(`Orphaned output (no matching .ts source): ${orphan}`);
   }
 
   if (check && stale) {
     console.error('Example .lua files are out of date. Run "npm run examples" to regenerate.');
   }
-  if (check && (stale || lintFailed)) {
+  if ((check && stale) || lintFailed || orphans.length > 0) {
     exit(1);
   }
 }

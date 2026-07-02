@@ -41,6 +41,59 @@ function countNameAccesses(
 }
 
 /**
+ * Counts bare identifier references to `v1Name` or `v2Name` inside an expression,
+ * excluding those that are the table or index component of a matching `v1[v2]`
+ * TableIndexExpression.
+ *
+ * A "bare" access is any Identifier that would be orphaned if the `local v1, v2 = base, key`
+ * declaration is dropped during the unspill fold. These must be detected and cause the fold
+ * to be declined.
+ */
+function countBareAccesses(expr: tstl.Expression, v1Name: string, v2Name: string): number {
+  let count = 0;
+
+  function walk(node: tstl.Expression): void {
+    if (tstl.isIdentifier(node)) {
+      if (node.text === v1Name || node.text === v2Name) {
+        count++;
+      }
+      return;
+    }
+
+    if (tstl.isTableIndexExpression(node)) {
+      // Check if this is exactly our v1[v2] pattern
+      if (
+        tstl.isIdentifier(node.table) &&
+        tstl.isIdentifier(node.index) &&
+        node.table.text === v1Name &&
+        node.index.text === v2Name
+      ) {
+        // This is a v1[v2] pattern — don't count the table and index as bare accesses.
+        // These will be substituted away, so they don't represent bare references that
+        // would be orphaned if the decl is dropped.
+        return;
+      }
+
+      // Not a matching v1[v2] pattern — recurse into table and index separately
+      walk(node.table);
+      walk(node.index);
+      return;
+    }
+
+    if (tstl.isBinaryExpression(node)) {
+      walk(node.left);
+      walk(node.right);
+      return;
+    }
+
+    // Other expression types: no further recursion needed
+  }
+
+  walk(expr);
+  return count;
+}
+
+/**
  * Replaces all occurrences of `v1[v2]` (matched by name) in `expr` with
  * fresh clones of `base[key]`. Returns a new expression tree.
  *
@@ -75,9 +128,12 @@ function substituteTemps(
     }
 
     // Recurse into table/index sub-expressions
-    return tstl.createTableIndexExpression(
-      substituteTemps(expr.table, v1Name, v2Name, base, key),
-      substituteTemps(expr.index, v1Name, v2Name, base, key),
+    return withPositionFrom(
+      tstl.createTableIndexExpression(
+        substituteTemps(expr.table, v1Name, v2Name, base, key),
+        substituteTemps(expr.index, v1Name, v2Name, base, key),
+      ),
+      expr,
     );
   }
 
@@ -97,6 +153,22 @@ function substituteTemps(
 }
 
 /**
+ * Rebuilds the assignment LHS `v1[v2]` as `base[key]`, cloning base/key and
+ * carrying source positions from the original temp identifiers so sourcemaps
+ * stay anchored. Shared by the 2-temp and 3-temp collapse paths.
+ */
+function rebuildLhs(
+  assignStmt: tstl.AssignmentStatement,
+  base: tstl.Expression,
+  key: tstl.Expression,
+): tstl.TableIndexExpression {
+  const origLhs = assignStmt.left[0] as tstl.TableIndexExpression;
+  const newBase = withPositionFrom(deepCloneExpression(base), origLhs.table);
+  const newKey = withPositionFrom(deepCloneExpression(key), origLhs.index);
+  return withPositionFrom(tstl.createTableIndexExpression(newBase, newKey), origLhs);
+}
+
+/**
  * Applies a single unspill substitution given a confirmed match descriptor.
  *
  * Produces an `AssignmentStatement` of the form `base[key] = <rhs substituted>`,
@@ -106,10 +178,7 @@ function applyUnspill(match: UnspillMatch): tstl.AssignmentStatement {
   const { assignStmt, base, key, v1Name, v2Name } = match;
 
   // Build the new LHS: base[key]
-  const origLhs = assignStmt.left[0] as tstl.TableIndexExpression;
-  const newBase = withPositionFrom(deepCloneExpression(base), origLhs.table);
-  const newKey = withPositionFrom(deepCloneExpression(key), origLhs.index);
-  const newLhs = withPositionFrom(tstl.createTableIndexExpression(newBase, newKey), origLhs);
+  const newLhs = rebuildLhs(assignStmt, base, key);
 
   // Build the new RHS: substitute all v1[v2] → base[key] in the original RHS
   const newRhs = substituteTemps(assignStmt.right[0], v1Name, v2Name, base, key);
@@ -139,10 +208,7 @@ function applyUnspillValueTemp(
   );
 
   // Rewrite the assignment LHS: v1[v2] → E1[E2]; RHS is untouched (references v3)
-  const origLhs = assignStmt.left[0] as tstl.TableIndexExpression;
-  const newBase = withPositionFrom(deepCloneExpression(base), origLhs.table);
-  const newKey = withPositionFrom(deepCloneExpression(key), origLhs.index);
-  const newLhs = withPositionFrom(tstl.createTableIndexExpression(newBase, newKey), origLhs);
+  const newLhs = rebuildLhs(assignStmt, base, key);
   const newAssign = withPositionFrom(
     tstl.createAssignmentStatement([newLhs], assignStmt.right),
     match.declStmt,
@@ -180,13 +246,18 @@ function unspillFlat(
     const vtMatch = matchUnspillValueTemp(stmts, i, isPure);
 
     if (vtMatch !== undefined) {
-      const { v1Name, v2Name } = vtMatch;
+      const { v1Name, v2Name, valueInit } = vtMatch;
 
       // Safety: v1 and v2 must not appear beyond the 3-statement window (i, i+1, i+2).
       const v1CountBeyond = countNameAccesses(stmts, v1Name, i + 3, stmts.length - 1);
       const v2CountBeyond = countNameAccesses(stmts, v2Name, i + 3, stmts.length - 1);
 
-      if (v1CountBeyond === 0 && v2CountBeyond === 0) {
+      // Also check for bare v1/v2 reads in the value-temp init and assignment RHS,
+      // which would be orphaned if the `local v1, v2 = base, key` decl is dropped.
+      const bareInInit = countBareAccesses(valueInit, v1Name, v2Name);
+      const bareInRhs = countBareAccesses(vtMatch.assignStmt.right[0], v1Name, v2Name);
+
+      if (v1CountBeyond === 0 && v2CountBeyond === 0 && bareInInit === 0 && bareInRhs === 0) {
         const [newValueDecl, newAssign] = applyUnspillValueTemp(vtMatch);
         result.push(newValueDecl, newAssign);
         i += 3; // skip decl, value-temp decl, and original assign
@@ -210,8 +281,12 @@ function unspillFlat(
     const v1CountBeyond = countNameAccesses(stmts, v1Name, i + 2, stmts.length - 1);
     const v2CountBeyond = countNameAccesses(stmts, v2Name, i + 2, stmts.length - 1);
 
+    // Also check for bare v1/v2 reads in the assignment RHS, which would be orphaned
+    // if the `local v1, v2 = base, key` decl is dropped.
+    const bareInRhs = countBareAccesses(match.assignStmt.right[0], v1Name, v2Name);
+
     /* v8 ignore next -- TSTL's 2-temp statement form never references temps beyond the assignment */
-    if (v1CountBeyond > 0 || v2CountBeyond > 0) {
+    if (v1CountBeyond > 0 || v2CountBeyond > 0 || bareInRhs > 0) {
       result.push(stmts[i]);
       i++;
       continue;
@@ -250,6 +325,16 @@ export function unspillStatements(
   return processed;
 }
 
+/**
+ * Recursively unspills `stmts` and replaces its contents in place. Keeps the
+ * parent node's identity (block, loop body, if/else branch) while rewriting its
+ * statement list.
+ */
+function cleanInPlace(stmts: tstl.Statement[], isPure: (e: tstl.Expression) => boolean): void {
+  const cleaned = unspillStatements(stmts, { isPure });
+  stmts.splice(0, stmts.length, ...cleaned);
+}
+
 function recurseIntoNestedScopes(
   stmt: tstl.Statement,
   isPure: (e: tstl.Expression) => boolean,
@@ -263,8 +348,7 @@ function recurseIntoNestedScopes(
     shallow: true,
     expr: (expr) => {
       if (tstl.isFunctionExpression(expr)) {
-        const cleaned = unspillStatements(expr.body.statements, { isPure });
-        expr.body.statements.splice(0, expr.body.statements.length, ...cleaned);
+        cleanInPlace(expr.body.statements, isPure);
         return Walk.skip;
       }
       return Walk.keep;
@@ -272,8 +356,7 @@ function recurseIntoNestedScopes(
   });
 
   if (tstl.isDoStatement(stmt)) {
-    const cleaned = unspillStatements(stmt.statements, { isPure });
-    stmt.statements.splice(0, stmt.statements.length, ...cleaned);
+    cleanInPlace(stmt.statements, isPure);
     return;
   }
 
@@ -283,22 +366,18 @@ function recurseIntoNestedScopes(
     tstl.isForStatement(stmt) ||
     tstl.isForInStatement(stmt)
   ) {
-    const bodyStmts = stmt.body.statements;
-    const cleaned = unspillStatements(bodyStmts, { isPure });
-    bodyStmts.splice(0, bodyStmts.length, ...cleaned);
+    cleanInPlace(stmt.body.statements, isPure);
     return;
   }
 
   if (tstl.isIfStatement(stmt)) {
-    const ifCleaned = unspillStatements(stmt.ifBlock.statements, { isPure });
-    stmt.ifBlock.statements.splice(0, stmt.ifBlock.statements.length, ...ifCleaned);
+    cleanInPlace(stmt.ifBlock.statements, isPure);
 
     if (stmt.elseBlock) {
       if (tstl.isIfStatement(stmt.elseBlock)) {
         recurseIntoNestedScopes(stmt.elseBlock, isPure);
       } else {
-        const elseCleaned = unspillStatements(stmt.elseBlock.statements, { isPure });
-        stmt.elseBlock.statements.splice(0, stmt.elseBlock.statements.length, ...elseCleaned);
+        cleanInPlace(stmt.elseBlock.statements, isPure);
       }
     }
   }

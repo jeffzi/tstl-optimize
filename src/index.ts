@@ -150,6 +150,9 @@ function createSourceFileFallbackContext(
     }
 
     const existingResult = existing.transform(node, context);
+    if (existingResult === undefined) {
+      return context.superTransformNode(node);
+    }
     return Array.isArray(existingResult) ? existingResult : [existingResult];
   };
   return sourceFileContext;

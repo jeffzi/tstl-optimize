@@ -121,7 +121,7 @@ describe("evaluateCondition", () => {
     { name: "logical and with truthy lhs", source: "FLAG && COUNT", expected: 2 },
     { name: "logical and with falsy lhs", source: "false && COUNT", expected: false },
     { name: "logical or with truthy lhs", source: "FLAG || UNKNOWN", expected: true },
-    { name: "logical or with falsy lhs", source: '"" || NAME', expected: "web" },
+    { name: "logical or with truthy empty string lhs", source: '"" || NAME', expected: "" },
     { name: "strict equality", source: 'NAME === "web"', expected: true },
     { name: "strict inequality", source: 'NAME !== "native"', expected: true },
     { name: "loose equality with same types", source: "COUNT == 2", expected: true },
@@ -860,6 +860,26 @@ ${body}
       expect(lua).toBe("print(1)");
     });
 
+    it("emits parenthesized negative constant in exponentiation expression", () => {
+      const src =
+        "function getExp(): number { return 2; } declare const K: number; const x = K ** getExp();";
+
+      const lua = normalizeLua(compile(src, ccOpts({ K: { env: "X", default: -2 } })));
+
+      // -2 ^ getExp() parses as -(2 ^ getExp()) in Lua, but we want (-2) ^ getExp()
+      // Should emit (-2) to preserve operator precedence when parenthesized
+      expect(lua).toContain("(-2)");
+    });
+
+    it("emits parenthesized negative constant in plain expression position", () => {
+      const src = "declare const K: number; const x = K;";
+
+      const lua = normalizeLua(compile(src, ccOpts({ K: { env: "X", default: -2 } })));
+
+      // Negative constant should be parenthesized for consistency
+      expect(lua).toContain("(-2)");
+    });
+
     it("negates numeric constant with minus operator", () => {
       const src = `${PRINT_DECL} declare const FOO: number; if (-FOO === 5) { print(1); } else { print(2); }`;
 
@@ -1160,7 +1180,7 @@ ${body}
       expect(lua).toContain("STR_VAL");
     });
 
-    it("folds if-condition to false when constant is zero", () => {
+    it("folds if-condition to true when constant is zero (Lua truthiness)", () => {
       const code = `
         ${PRINT_DECL}
         declare const ZERO: number;
@@ -1173,7 +1193,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, ccOpts({ ZERO: { env: "ZERO", default: 0 } })));
 
-      expect(lua).toBe("print(2)");
+      expect(lua).toBe("print(1)");
     });
 
     it("folds nested if-statements with known constants", () => {
@@ -1208,7 +1228,20 @@ ${body}
 
       const lua = normalizeLua(compile(code, ccOpts({ LIMIT: { env: "LIMIT", default: 0 } })));
 
-      expect(lua).toBe("LIMIT = -1\nprint(1)");
+      expect(lua).toBe("LIMIT = (-1)\nprint(1)");
+    });
+
+    it("emits parenthesized negative top-level const initializer in exponentiation expression", () => {
+      const code = `
+        function getExp(): number { return 2; }
+        const LIMIT = -2;
+        const x = LIMIT ** getExp();
+      `;
+
+      const lua = normalizeLua(compile(code, ccOpts({ LIMIT: { env: "LIMIT", default: 0 } })));
+
+      // -2 ^ getExp() parses as -(2 ^ getExp()) in Lua, but we want (-2) ^ getExp()
+      expect(lua).toContain("(-2)");
     });
 
     it("preserves && chain when left side has partial fold result", () => {
@@ -1799,5 +1832,91 @@ describe("conditional-compilation — interaction with other rules", () => {
     expect(lua).not.toContain("doubled(");
     // The inline rule substitutes the call; constant-folding may further reduce 21 * 2 → 42.
     expect(lua).toMatch(/21 \* 2|42/);
+  });
+});
+
+describe("conditional-compilation — Lua truthiness (fix for numeric/string zero)", () => {
+  describe("when zero constant is truthy", () => {
+    it("folds if (ZERO) to then-branch when ZERO=0", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const ZERO: number;
+        if (ZERO) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it.each([
+      { expr: "ZERO && 42", expected: "result = 42" },
+      { expr: "ZERO || 99", expected: "result = 0" },
+      { expr: "!ZERO", expected: "result = false" },
+    ])("folds $expr when ZERO=0", ({ expr, expected }) => {
+      const src = `
+        declare const ZERO: number;
+        export const result = ${expr};
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
+
+      expect(lua).toContain(expected);
+    });
+  });
+
+  describe("when empty string is truthy", () => {
+    it('folds if (EMPTY) to then-branch when EMPTY=""', () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const EMPTY: string;
+        if (EMPTY) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it.each([
+      { expr: 'EMPTY && "yes"', expected: 'result = "yes"' },
+      { expr: 'EMPTY || "fallback"', expected: 'result = ""' },
+      { expr: "!EMPTY", expected: "result = false" },
+    ])('folds $expr when EMPTY=""', ({ expr, expected }) => {
+      const src = `
+        declare const EMPTY: string;
+        export const result = ${expr};
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
+
+      expect(lua).toContain(expected);
+    });
+  });
+
+  describe("when evaluateCondition handles Lua truthiness", () => {
+    const constants = new Map<string, boolean | number | string>([
+      ["ZERO", 0],
+      ["EMPTY", ""],
+    ]);
+
+    it.each([
+      { expr: "ZERO && 99", expected: 99, name: "ZERO as truthy in logical and" },
+      { expr: "ZERO || 99", expected: 0, name: "ZERO as truthy in logical or" },
+      { expr: 'EMPTY && "yes"', expected: "yes", name: "EMPTY as truthy in logical and" },
+      { expr: 'EMPTY || "fallback"', expected: "", name: "EMPTY as truthy in logical or" },
+      { expr: "!ZERO", expected: false, name: "!ZERO as false" },
+      { expr: "!EMPTY", expected: false, name: "!EMPTY as false" },
+    ])("evaluates $name", ({ expr, expected }) => {
+      expect(evaluateCondition(parseExpression(expr), constants)).toBe(expected);
+    });
   });
 });

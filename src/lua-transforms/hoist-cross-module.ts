@@ -194,12 +194,13 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
 
   // Process each require binding
   for (const [moduleVar, info] of requireInfos) {
+    const preExisting = preExistingHoists.get(moduleVar);
+
     // Collect new hoists (accesses not already hoisted), sorted by first access order
     const toInsertUnsorted: Array<{ name: string; order: number }> = [];
 
     for (const [name, { moduleVar: originModule, order }] of accessesToHoist) {
       if (originModule === moduleVar) {
-        const preExisting = preExistingHoists.get(moduleVar);
         if (!preExisting?.some((h) => h.name === name)) {
           toInsertUnsorted.push({ name, order });
           localizedSymbols.set(name, { moduleVar, memberName: name });
@@ -213,7 +214,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     if (toInsert.length > 0) {
       // Compute insertion point: after the last pre-existing hoist or after the require
       let insertAfterNode = info.statement;
-      const preExisting = preExistingHoists.get(moduleVar);
       if (preExisting && preExisting.length > 0) {
         insertAfterNode = preExisting[preExisting.length - 1].node;
       }
@@ -223,16 +223,19 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
 
       // Combine all insertions into a single replacement to maintain order
       const hoistCode = toInsert.map((name) => `local ${name} = ${moduleVar}.${name}`).join("\n");
+      // If inserting mid-line (no newline before insertion point), prepend newline
+      const needsLeadingNewline = insertPoint > 0 && luaSource[insertPoint - 1] !== "\n";
+      const replacement = needsLeadingNewline ? `\n${hoistCode}\n` : `${hoistCode}\n`;
       edits.push({
         offset: insertPoint,
         length: 0,
-        replacement: `${hoistCode}\n`,
+        replacement,
       });
     }
   }
 
   // Collect access references to rewrite
-  const references = collectAccessReferences(ast, requireInfos, accessesToHoist);
+  const references = collectAccessReferences(ast, requireInfos, accessesToHoist, declarationLhses);
 
   for (const ref of references) {
     edits.push({
@@ -281,9 +284,9 @@ function collectAccessReferences(
   node: luaparse.Node,
   requireInfos: Map<string, RequireInfo>,
   accessesToHoist: Map<string, { moduleVar: string; order: number }>,
+  declarationLhses: Set<luaparse.Node>,
 ): AccessReference[] {
   const references: AccessReference[] = [];
-  const declarationLhses = collectDeclarationLhses(node);
 
   walkAstNode(node, (n) => {
     if (n.type === "MemberExpression" && !declarationLhses.has(n as luaparse.Node)) {
