@@ -41,6 +41,59 @@ function countNameAccesses(
 }
 
 /**
+ * Counts bare identifier references to `v1Name` or `v2Name` inside an expression,
+ * excluding those that are the table or index component of a matching `v1[v2]`
+ * TableIndexExpression.
+ *
+ * A "bare" access is any Identifier that would be orphaned if the `local v1, v2 = base, key`
+ * declaration is dropped during the unspill fold. These must be detected and cause the fold
+ * to be declined.
+ */
+function countBareAccesses(expr: tstl.Expression, v1Name: string, v2Name: string): number {
+  let count = 0;
+
+  function walk(node: tstl.Expression): void {
+    if (tstl.isIdentifier(node)) {
+      if (node.text === v1Name || node.text === v2Name) {
+        count++;
+      }
+      return;
+    }
+
+    if (tstl.isTableIndexExpression(node)) {
+      // Check if this is exactly our v1[v2] pattern
+      if (
+        tstl.isIdentifier(node.table) &&
+        tstl.isIdentifier(node.index) &&
+        node.table.text === v1Name &&
+        node.index.text === v2Name
+      ) {
+        // This is a v1[v2] pattern — don't count the table and index as bare accesses.
+        // These will be substituted away, so they don't represent bare references that
+        // would be orphaned if the decl is dropped.
+        return;
+      }
+
+      // Not a matching v1[v2] pattern — recurse into table and index separately
+      walk(node.table);
+      walk(node.index);
+      return;
+    }
+
+    if (tstl.isBinaryExpression(node)) {
+      walk(node.left);
+      walk(node.right);
+      return;
+    }
+
+    // Other expression types: no further recursion needed
+  }
+
+  walk(expr);
+  return count;
+}
+
+/**
  * Replaces all occurrences of `v1[v2]` (matched by name) in `expr` with
  * fresh clones of `base[key]`. Returns a new expression tree.
  *
@@ -183,13 +236,18 @@ function unspillFlat(
     const vtMatch = matchUnspillValueTemp(stmts, i, isPure);
 
     if (vtMatch !== undefined) {
-      const { v1Name, v2Name } = vtMatch;
+      const { v1Name, v2Name, valueInit } = vtMatch;
 
       // Safety: v1 and v2 must not appear beyond the 3-statement window (i, i+1, i+2).
       const v1CountBeyond = countNameAccesses(stmts, v1Name, i + 3, stmts.length - 1);
       const v2CountBeyond = countNameAccesses(stmts, v2Name, i + 3, stmts.length - 1);
 
-      if (v1CountBeyond === 0 && v2CountBeyond === 0) {
+      // Also check for bare v1/v2 reads in the value-temp init and assignment RHS,
+      // which would be orphaned if the `local v1, v2 = base, key` decl is dropped.
+      const bareInInit = countBareAccesses(valueInit, v1Name, v2Name);
+      const bareInRhs = countBareAccesses(vtMatch.assignStmt.right[0], v1Name, v2Name);
+
+      if (v1CountBeyond === 0 && v2CountBeyond === 0 && bareInInit === 0 && bareInRhs === 0) {
         const [newValueDecl, newAssign] = applyUnspillValueTemp(vtMatch);
         result.push(newValueDecl, newAssign);
         i += 3; // skip decl, value-temp decl, and original assign
@@ -213,8 +271,12 @@ function unspillFlat(
     const v1CountBeyond = countNameAccesses(stmts, v1Name, i + 2, stmts.length - 1);
     const v2CountBeyond = countNameAccesses(stmts, v2Name, i + 2, stmts.length - 1);
 
+    // Also check for bare v1/v2 reads in the assignment RHS, which would be orphaned
+    // if the `local v1, v2 = base, key` decl is dropped.
+    const bareInRhs = countBareAccesses(match.assignStmt.right[0], v1Name, v2Name);
+
     /* v8 ignore next -- TSTL's 2-temp statement form never references temps beyond the assignment */
-    if (v1CountBeyond > 0 || v2CountBeyond > 0) {
+    if (v1CountBeyond > 0 || v2CountBeyond > 0 || bareInRhs > 0) {
       result.push(stmts[i]);
       i++;
       continue;

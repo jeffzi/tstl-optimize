@@ -261,4 +261,45 @@ for (const i of $range(0, 999)) {
       expect(lua).toContain("____temp_1");
     });
   });
+
+  describe("safety: declined when temps appear bare in RHS", () => {
+    // After merge-locals, user locals can form a 2-local decl that matches
+    // the unspill pattern. If the RHS of the assignment contains bare reads
+    // of v1/v2 (not inside v1[v2]), the fold must be declined — otherwise
+    // dropping the decl orphans those references (reads nil at runtime).
+    it("bare v1 in RHS declines fold (preserves local decl)", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = t[key] + t;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // Inside function scope, merge-locals combines into: local t, key = obj, k
+      // The bare `t` in `t[key] + t` must prevent unspill from folding.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("t[key] = t[key] + t");
+    });
+
+    it("genuine TSTL temps (no bare reads) still fold", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+const arr: number[] = [];
+const brr: number[] = [];
+for (const i of $range(0, 999)) {
+  arr[i] += brr[i] * 0.016;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("arr[i] = arr[i] + brr[i] * 0.016");
+      expect(lua).not.toContain("____arr_0");
+      expect(lua).not.toContain("____temp_1");
+    });
+  });
 });
