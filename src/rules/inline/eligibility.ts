@@ -8,7 +8,7 @@ import type {
   ReturnValueInlineTarget,
   StatementInlineTarget,
 } from "./target";
-import { getInlineTarget, isDeclarationNameReference, resolveSymbol } from "./target";
+import { getInlineTarget, resolveSymbol } from "./target";
 
 interface InlineRejection {
   reason: string;
@@ -131,7 +131,7 @@ export function canEraseInlineDeclaration(
     if (ts.isIdentifier(node)) {
       const refSymbol = checker.getSymbolAtLocation(node);
       if (refSymbol && resolveSymbol(refSymbol, checker) === resolvedSym) {
-        if (isDeclarationNameReference(node, declaration)) return;
+        if (declaration.name === node) return;
         if (ts.isCallExpression(node.parent) && node.parent.expression === node) {
           if (isCallSiteFullyInlined(node.parent, checker)) return;
         }

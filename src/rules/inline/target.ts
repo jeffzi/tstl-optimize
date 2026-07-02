@@ -189,13 +189,6 @@ export function resolveSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Sy
   return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
-export function isDeclarationNameReference(
-  node: ts.Identifier,
-  declaration: ts.FunctionDeclaration | ts.VariableDeclaration,
-): boolean {
-  return declaration.name === node;
-}
-
 export function returnsLuaMultiReturn(
   declaration: ts.Node,
   callNode: ts.CallExpression,
