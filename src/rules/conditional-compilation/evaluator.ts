@@ -4,7 +4,9 @@ import { createLiteral } from "../../ast/lua-literal";
 import type { ConstantValue } from "../../config";
 
 export function isTruthy(value: ConstantValue): boolean {
-  return value !== false && value !== 0 && value !== "";
+  // In Lua, only `false` and `nil` are falsy. Among ConstantValue (boolean | number | string),
+  // only `false` is falsy. Zero and empty strings are truthy in Lua.
+  return value !== false;
 }
 
 export type IdentifierResolver = (node: ts.Identifier) => ConstantValue | undefined;

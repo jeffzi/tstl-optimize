@@ -647,17 +647,19 @@ describe("resolveConstantFromOptions", () => {
 });
 
 describe("isTruthy", () => {
-  it.each<ConstantValue>([false, 0, ""])("returns false for falsy value %s", (value) => {
-    expect(isTruthy(value)).toBe(false);
+  it("returns false for false (only falsy value in Lua)", () => {
+    expect(isTruthy(false)).toBe(false);
   });
 
   it.each<ConstantValue>([
     true,
+    0,
+    "",
     1,
     -1,
     42,
     "hello",
-  ])("returns true for truthy value %s", (value) => {
+  ])("returns true for truthy value %s (Lua semantics)", (value) => {
     expect(isTruthy(value)).toBe(true);
   });
 });
