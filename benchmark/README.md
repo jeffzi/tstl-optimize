@@ -1,9 +1,10 @@
 # Benchmarks
 
-Microbenchmarks for the four rules that produce a measurable runtime impact:
-`math-intrinsics`, `localizer`, `loop-rebase`, and `inline`. Each `.ts` file pairs a baseline
-version of the workload with the optimized version, compiles both through TSTL with the plugin
-active, and runs them under [`luamark`](https://github.com/jeffzi/luamark) for paired timing.
+Microbenchmarks for the six rules that produce a measurable runtime impact:
+`math-intrinsics`, `localizer`, `loop-rebase`, `inline`, `constant-propagation`, and `unspill`.
+Each `.ts` file pairs a baseline version of the workload with the optimized version, compiles both
+through TSTL with the plugin active, and runs them under
+[`luamark`](https://github.com/jeffzi/luamark) for paired timing.
 
 Rules that transform code at build time without runtime impact (`constant-folding`, `dead-local`,
 `merge-locals`, `remove-empty-branch`, `conditional-compilation`, `debug-strip`) are not
@@ -35,6 +36,10 @@ Apple Silicon:
   negligible on LuaJIT.
 - **`inline`** eliminates call overhead (stack frame + argument copy). Biggest wins are on small
   hot functions in PUC; LuaJIT already inlines most trace-compiled callees.
+- **`constant-propagation`** replaces reads of single-assignment locals with their literal values,
+  eliminating the local load. Small but consistent improvement on PUC; negligible on LuaJIT.
+- **`unspill`** folds redundant base/key temporaries from compound assignments (`a[i] += v`),
+  removing the intermediate local loads per iteration. Consistent win on PUC; smaller on LuaJIT.
 
 Treat any speedup < 5% on a single benchmark as noise. The point of these benchmarks is to catch
 regressions in the rewrites, not to ship marketing numbers.

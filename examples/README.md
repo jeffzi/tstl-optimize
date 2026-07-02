@@ -19,6 +19,7 @@ npm run examples
 | ----------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------- |
 | [conditional-compilation](conditional-compilation.ts) | `conditional-compilation` | Strips dead `if`/ternary/`switch` branches based on compile-time constants         |
 | [constant-folding](constant-folding.ts)               | `constant-folding`        | Evaluates constant arithmetic, comparison, logical, and string expressions         |
+| [constant-propagation](constant-propagation.ts)       | `constant-propagation`    | Substitutes literal values for single-assignment locals                            |
 | [dead-local](dead-local.ts)                           | `dead-local`              | Removes unused local variable declarations inside function bodies                  |
 | [debug-strip](debug-strip.ts)                         | `debug-strip`             | Strips statement-position debug calls (`print`, `assert`, `debug.*`)               |
 | [inline](inline.ts)                                   | `inline`                  | Inlines `@inline`-tagged functions at call sites, including multi-statement bodies |
@@ -27,6 +28,7 @@ npm run examples
 | [math-intrinsics](math-intrinsics.ts)                 | `math-intrinsics`         | Replaces `Math.*` calls with inline Lua expressions                                |
 | [merge-locals](merge-locals.ts)                       | `merge-locals`            | Merges consecutive `local` declarations into a single statement                    |
 | [remove-empty-branch](remove-empty-branch.ts)         | `remove-empty-branch`     | Removes empty `if`/`do` branches and promotes `else` when `if`-block is empty      |
+| [unspill](unspill.ts)                                 | `unspill`                 | Folds redundant base/key temps from compound assignment on element/index access    |
 
 Each example includes a **Limitations** section showing cases where the rule skips the optimization, with comments
 explaining why.
