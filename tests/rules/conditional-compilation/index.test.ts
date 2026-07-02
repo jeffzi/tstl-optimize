@@ -1231,6 +1231,19 @@ ${body}
       expect(lua).toBe("LIMIT = (-1)\nprint(1)");
     });
 
+    it("emits parenthesized negative top-level const initializer in exponentiation expression", () => {
+      const code = `
+        function getExp(): number { return 2; }
+        const LIMIT = -2;
+        const x = LIMIT ** getExp();
+      `;
+
+      const lua = normalizeLua(compile(code, ccOpts({ LIMIT: { env: "LIMIT", default: 0 } })));
+
+      // -2 ^ getExp() parses as -(2 ^ getExp()) in Lua, but we want (-2) ^ getExp()
+      expect(lua).toContain("(-2)");
+    });
+
     it("preserves && chain when left side has partial fold result", () => {
       const code = `
         declare function foo(): boolean;
