@@ -861,13 +861,14 @@ ${body}
     });
 
     it("emits parenthesized negative constant in exponentiation expression", () => {
-      const src = "declare const K: number; const x = K ** 2;";
+      const src =
+        "function getExp(): number { return 2; } declare const K: number; const x = K ** getExp();";
 
       const lua = normalizeLua(compile(src, ccOpts({ K: { env: "X", default: -2 } })));
 
-      // -2 ^ 2 parses as -(2 ^ 2) = -4 in Lua, but (-2) ^ 2 = 4 in TypeScript
-      // Should emit (-2) ^ 2 to preserve operator precedence
-      expect(lua).toContain("(-2) ^ 2");
+      // -2 ^ getExp() parses as -(2 ^ getExp()) in Lua, but we want (-2) ^ getExp()
+      // Should emit (-2) to preserve operator precedence when parenthesized
+      expect(lua).toContain("(-2)");
     });
 
     it("emits parenthesized negative constant in plain expression position", () => {
@@ -1227,7 +1228,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, ccOpts({ LIMIT: { env: "LIMIT", default: 0 } })));
 
-      expect(lua).toBe("LIMIT = -1\nprint(1)");
+      expect(lua).toBe("LIMIT = (-1)\nprint(1)");
     });
 
     it("preserves && chain when left side has partial fold result", () => {

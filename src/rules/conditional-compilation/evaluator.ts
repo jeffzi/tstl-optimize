@@ -123,8 +123,6 @@ export function evaluateCondition(
   return evaluateResolvedExpression(expr, (node) => constants.get(node.text));
 }
 
-// Delegates to the shared literal factory; no wrapNegativeNumber needed here because
-// the resolved-constant path never lands a folded negative in a negation-sensitive context.
 export function constantToLuaLiteral(value: ConstantValue): tstl.Expression {
-  return createLiteral(value);
+  return createLiteral(value, { wrapNegativeNumber: true });
 }
