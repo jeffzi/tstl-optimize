@@ -328,14 +328,6 @@ export function walkLuaExpression(node: tstl.Expression, visit: (n: tstl.Node) =
   walkExpr(node, visit);
 }
 
-export function needsParentheses(node: tstl.Expression): boolean {
-  return (
-    tstl.isBinaryExpression(node) ||
-    tstl.isUnaryExpression(node) ||
-    tstl.isConditionalExpression(node)
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Require-chain pattern recognition
 //

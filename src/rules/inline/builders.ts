@@ -13,7 +13,6 @@ import {
 import {
   clearExpressionPositions,
   clearNodePositions,
-  needsParentheses,
   substituteParams,
   substituteParamsInStatements,
   walkLuaExpression,
@@ -481,6 +480,14 @@ export function inlineExpressionBody(
     : substituted;
   stampCallSiteExpression(result, callNode);
   return result;
+}
+
+function needsParentheses(node: tstl.Expression): boolean {
+  return (
+    tstl.isBinaryExpression(node) ||
+    tstl.isUnaryExpression(node) ||
+    tstl.isConditionalExpression(node)
+  );
 }
 
 function getStatementBody(stmt: ts.Statement): readonly ts.Statement[] {

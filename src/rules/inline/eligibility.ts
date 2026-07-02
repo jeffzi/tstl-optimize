@@ -15,7 +15,7 @@ interface InlineRejection {
   code: number;
 }
 
-export function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {
+function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {
   if (ts.isIdentifier(name)) return true;
 
   if (ts.isObjectBindingPattern(name)) {
