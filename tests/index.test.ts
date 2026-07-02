@@ -328,20 +328,18 @@ describe("SourceFile visitor fallback", () => {
     // Create a fallback visitor that returns undefined from SourceFile
     // This tests the specific bug: undefined results should fall through to superTransformNode
     const fallbackVisitors: tstl.Visitors = {
-      // biome-ignore lint/suspicious/noExplicitAny: Test uses any to allow undefined SourceFile return
       [ts.SyntaxKind.SourceFile]: {
         transform: (_node: ts.Node) => undefined,
+        // biome-ignore lint/suspicious/noExplicitAny: tstl.Visitors expects a specific shape but we need to return undefined
       } as any,
     };
 
-    // Create a primary visitor that delegates to fallback when it returns undefined
     const primaryVisitors: tstl.Visitors = {
-      // biome-ignore lint/suspicious/noExplicitAny: Test uses any to allow undefined fallback handling
       [ts.SyntaxKind.SourceFile]: {
         transform: (_node: ts.Node, context: tstl.TransformationContext) => {
-          // Simulate a visitor that doesn't handle the node and uses the fallback
           return context.superTransformNode(_node);
         },
+        // biome-ignore lint/suspicious/noExplicitAny: tstl.Visitors expects a specific shape but we need to return undefined
       } as any,
     };
 

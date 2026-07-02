@@ -5,7 +5,7 @@ import { isLuaRhsPure } from "../../ast/lua-ast";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import type { RuleFactory } from "../../config";
 import { getTransformedFile } from "../source-file";
-import { collectReadSymbols, findFirstAccessKind } from "./access";
+import { collectReadSymbols, collectUndefinedSymbolIdNames, findFirstAccessKind } from "./access";
 import { eliminateDeadImportAliases } from "./import-aliases";
 
 /**
@@ -79,11 +79,20 @@ function eliminateDeadLocals(
     const reads = new Set<number>();
     collectReadSymbols(statements, reads);
 
+    const undefinedSymbolIdNames = new Set<string>();
+    collectUndefinedSymbolIdNames(statements, undefinedSymbolIdNames);
+
     const toRemove = new Set<tstl.Statement>();
     for (const [symbolId, { index, stmt, rhs }] of declsBySymbol) {
       // Skip impure RHS early: the initializer must execute for its side effects
       // even when the variable is never read, so nothing can be dropped or erased.
       if (!canDropInitializer(rhs, preserveFunctionExpressionDecls)) {
+        continue;
+      }
+
+      // Keep initializer if the name is accessed by a symbolId-less identifier
+      const declName = stmt.left[0].text;
+      if (undefinedSymbolIdNames.has(declName)) {
         continue;
       }
 
@@ -93,9 +102,12 @@ function eliminateDeadLocals(
         continue;
       }
 
-      if (!reads.has(symbolId)) {
-        toRemove.add(stmt);
+      // Keep the declaration if the name is read by a symbolId identifier
+      if (reads.has(symbolId)) {
+        continue;
       }
+
+      toRemove.add(stmt);
     }
 
     if (toRemove.size > 0) {
