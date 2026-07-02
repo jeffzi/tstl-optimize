@@ -75,9 +75,12 @@ function substituteTemps(
     }
 
     // Recurse into table/index sub-expressions
-    return tstl.createTableIndexExpression(
-      substituteTemps(expr.table, v1Name, v2Name, base, key),
-      substituteTemps(expr.index, v1Name, v2Name, base, key),
+    return withPositionFrom(
+      tstl.createTableIndexExpression(
+        substituteTemps(expr.table, v1Name, v2Name, base, key),
+        substituteTemps(expr.index, v1Name, v2Name, base, key),
+      ),
+      expr,
     );
   }
 
