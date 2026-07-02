@@ -186,10 +186,20 @@ async function main(): Promise<void> {
     }
   }
 
+  const tsBasenames = new Set(tsFiles.map((f) => f.replace(/\.ts$/, "")));
+  const luaFiles = readdirSync(examplesDir).filter(
+    (f) => f.endsWith(".lua") && !f.endsWith(".lua.map"),
+  );
+  const orphans = luaFiles.filter((f) => !tsBasenames.has(f.replace(/\.lua$/, "")));
+
+  for (const orphan of orphans) {
+    console.error(`Orphaned output (no matching .ts source): ${orphan}`);
+  }
+
   if (check && stale) {
     console.error('Example .lua files are out of date. Run "npm run examples" to regenerate.');
   }
-  if (check && (stale || lintFailed)) {
+  if (check && (stale || lintFailed || orphans.length > 0)) {
     exit(1);
   }
 }
