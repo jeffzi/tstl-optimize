@@ -121,7 +121,7 @@ describe("evaluateCondition", () => {
     { name: "logical and with truthy lhs", source: "FLAG && COUNT", expected: 2 },
     { name: "logical and with falsy lhs", source: "false && COUNT", expected: false },
     { name: "logical or with truthy lhs", source: "FLAG || UNKNOWN", expected: true },
-    { name: "logical or with falsy lhs", source: '"" || NAME', expected: "web" },
+    { name: "logical or with truthy empty string lhs", source: '"" || NAME', expected: "" },
     { name: "strict equality", source: 'NAME === "web"', expected: true },
     { name: "strict inequality", source: 'NAME !== "native"', expected: true },
     { name: "loose equality with same types", source: "COUNT == 2", expected: true },
@@ -1180,7 +1180,7 @@ ${body}
       expect(lua).toContain("STR_VAL");
     });
 
-    it("folds if-condition to false when constant is zero", () => {
+    it("folds if-condition to true when constant is zero (Lua truthiness)", () => {
       const code = `
         ${PRINT_DECL}
         declare const ZERO: number;
@@ -1193,7 +1193,7 @@ ${body}
 
       const lua = normalizeLua(compile(code, ccOpts({ ZERO: { env: "ZERO", default: 0 } })));
 
-      expect(lua).toBe("print(2)");
+      expect(lua).toBe("print(1)");
     });
 
     it("folds nested if-statements with known constants", () => {
@@ -1819,5 +1819,140 @@ describe("conditional-compilation — interaction with other rules", () => {
     expect(lua).not.toContain("doubled(");
     // The inline rule substitutes the call; constant-folding may further reduce 21 * 2 → 42.
     expect(lua).toMatch(/21 \* 2|42/);
+  });
+});
+
+describe("conditional-compilation — Lua truthiness (fix for numeric/string zero)", () => {
+  describe("when zero constant is truthy", () => {
+    it("folds if (ZERO) to then-branch when ZERO=0", () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const ZERO: number;
+        if (ZERO) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it("folds ZERO && x to x when ZERO=0", () => {
+      const src = `
+        declare const ZERO: number;
+        export const result = ZERO && 42;
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
+
+      expect(lua).toContain("result = 42");
+    });
+
+    it("folds ZERO || 99 to ZERO when ZERO=0", () => {
+      const src = `
+        declare const ZERO: number;
+        export const result = ZERO || 99;
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
+
+      expect(lua).toContain("result = 0");
+    });
+
+    it("folds !ZERO to false when ZERO=0", () => {
+      const src = `
+        declare const ZERO: number;
+        export const result = !ZERO;
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
+
+      expect(lua).toContain("result = false");
+    });
+  });
+
+  describe("when empty string is truthy", () => {
+    it('folds if (EMPTY) to then-branch when EMPTY=""', () => {
+      const src = `
+        ${PRINT_DECL}
+        declare const EMPTY: string;
+        if (EMPTY) {
+          print(1);
+        } else {
+          print(2);
+        }
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
+
+      expect(lua).toBe("print(1)");
+    });
+
+    it('folds EMPTY && x to x when EMPTY=""', () => {
+      const src = `
+        declare const EMPTY: string;
+        export const result = EMPTY && "yes";
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
+
+      expect(lua).toContain('result = "yes"');
+    });
+
+    it('folds EMPTY || "fallback" to EMPTY when EMPTY=""', () => {
+      const src = `
+        declare const EMPTY: string;
+        export const result = EMPTY || "fallback";
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
+
+      expect(lua).toContain('result = ""');
+    });
+
+    it('folds !EMPTY to false when EMPTY=""', () => {
+      const src = `
+        declare const EMPTY: string;
+        export const result = !EMPTY;
+      `;
+
+      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
+
+      expect(lua).toContain("result = false");
+    });
+  });
+
+  describe("when evaluateCondition handles Lua truthiness", () => {
+    const constants = new Map<string, boolean | number | string>([
+      ["ZERO", 0],
+      ["EMPTY", ""],
+    ]);
+
+    it("evaluates ZERO as truthy in logical and", () => {
+      expect(evaluateCondition(parseExpression("ZERO && 99"), constants)).toBe(99);
+    });
+
+    it("evaluates ZERO as truthy in logical or", () => {
+      expect(evaluateCondition(parseExpression("ZERO || 99"), constants)).toBe(0);
+    });
+
+    it("evaluates EMPTY as truthy in logical and", () => {
+      expect(evaluateCondition(parseExpression('EMPTY && "yes"'), constants)).toBe("yes");
+    });
+
+    it("evaluates EMPTY as truthy in logical or", () => {
+      expect(evaluateCondition(parseExpression('EMPTY || "fallback"'), constants)).toBe("");
+    });
+
+    it("evaluates !ZERO as false", () => {
+      expect(evaluateCondition(parseExpression("!ZERO"), constants)).toBe(false);
+    });
+
+    it("evaluates !EMPTY as false", () => {
+      expect(evaluateCondition(parseExpression("!EMPTY"), constants)).toBe(false);
+    });
   });
 });
