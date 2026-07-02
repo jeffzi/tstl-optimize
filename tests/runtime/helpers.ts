@@ -12,7 +12,7 @@ import ts from "typescript";
 import * as tstl from "typescript-to-lua";
 import { expect } from "vitest";
 import { OptimizePlugin } from "../../src/index";
-import type { CompileOptions } from "../helpers";
+import { BASE_TSTL_OPTIONS, type CompileOptions } from "../helpers";
 
 // ---------------------------------------------------------------------------
 // Runtime detection
@@ -146,15 +146,10 @@ function makeTranspileOptions(options?: CompileOptions): tstl.CompilerOptions {
   const { luaTarget = tstl.LuaTarget.Lua51, luaLibImport = tstl.LuaLibImportKind.None } =
     options ?? {};
   return {
-    noHeader: true,
-    noImplicitSelf: true,
+    ...BASE_TSTL_OPTIONS,
     luaTarget,
     luaLibImport,
     strict: true,
-    // ESNext + lib needed for $range / Iterable<number> resolution.
-    target: ts.ScriptTarget.ESNext,
-    lib: ["lib.esnext.d.ts"],
-    types: ["@typescript-to-lua/language-extensions"],
   };
 }
 

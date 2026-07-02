@@ -7,7 +7,7 @@ import type { DebugStripConfig, LocalizerConfig } from "../src/config";
 import { isRuleEnabled, parseConfig, resolveLocalizerConfig } from "../src/config";
 import pluginFactory, { OptimizePlugin } from "../src/index";
 import { getTransformedFile } from "../src/rules/source-file";
-import { compile, normalizeLua } from "./helpers";
+import { BASE_TSTL_OPTIONS, compile, normalizeLua } from "./helpers";
 
 function assertLocalizerConfig(config: LocalizerConfig | false): asserts config is LocalizerConfig {
   expect(config).not.toBe(false);
@@ -72,14 +72,8 @@ function transpileWithPlugin(plugin: tstl.Plugin, source = "const x = 1;"): stri
   const result = transpileVirtualProject(
     { "main.ts": source },
     {
-      noHeader: true,
+      ...BASE_TSTL_OPTIONS,
       luaPlugins: [{ plugin }],
-      noImplicitSelf: true,
-      luaTarget: LuaTarget.Lua51,
-      luaLibImport: LuaLibImportKind.None,
-      target: ts.ScriptTarget.ESNext,
-      lib: ["lib.esnext.d.ts"],
-      types: ["@typescript-to-lua/language-extensions"],
     },
   );
   const errors = result.diagnostics.filter(
