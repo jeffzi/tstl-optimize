@@ -44,7 +44,7 @@
     "validate": "npm run check && npm run typecheck && npm run check:unused",
     "examples": "npm run build && tsx scripts/examples.ts",
     "examples:check": "npm run build && tsx scripts/examples.ts --check",
-    "bench": "npm run build && npx tstl -p tsconfig.benchmark.json && npx tstl -p tsconfig.benchmark-jit.json && tsx scripts/bench.ts",
+    "bench": "npm run build && rm -rf benchmark/lua benchmark/lua-jit && npx tstl -p tsconfig.benchmark.json && npx tstl -p tsconfig.benchmark-jit.json && tsx scripts/bench.ts",
     "prepack": "tsc -p tsconfig.plugin.json",
     "prepare": "npm run build && (test -d .git && lefthook install || true)"
   },
