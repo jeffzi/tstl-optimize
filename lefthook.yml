@@ -14,7 +14,7 @@ pre-commit:
       stage_fixed: true
     typecheck:
       glob: "**/*.ts"
-      run: npx tsc --noEmit
+      run: npm run typecheck
     unused:
       glob: "**/*.{ts,js,json}"
       run: npx knip --no-progress

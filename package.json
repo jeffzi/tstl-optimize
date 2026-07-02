@@ -40,7 +40,7 @@
     "check": "biome check --fix .",
     "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#.research' '#research' '#plans' '#CLAUDE.md'",
     "check:unused": "knip",
-    "typecheck": "tsc -p tsconfig.plugin.json --noEmit && tsc -p tsconfig.scripts.json --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p examples/tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.plugin.json --noEmit && tsc -p tsconfig.scripts.json --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p examples/tsconfig.json --noEmit && tsc -p tsconfig.benchmark.json --noEmit && tsc -p tsconfig.benchmark-jit.json --noEmit",
     "validate": "npm run check && npm run typecheck && npm run check:unused",
     "examples": "npm run build && tsx scripts/examples.ts",
     "examples:check": "npm run build && tsx scripts/examples.ts --check",
