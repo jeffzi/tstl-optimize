@@ -49,6 +49,45 @@ export type UnspillValueTempMatch = {
 };
 
 /**
+ * Validates and extracts the first statement shared by both unspill patterns:
+ *   local v1, v2 = E1, E2
+ * requiring exactly two temp bindings whose two RHS expressions are both pure
+ * under `isPure`. Returns the base/key expressions and the temp names, or
+ * `undefined` if the statement is not this shape.
+ */
+function matchUnspillDecl(
+  stmt: tstl.Statement | undefined,
+  isPure: typeof isLuaRhsPure,
+):
+  | {
+      declStmt: tstl.VariableDeclarationStatement;
+      base: tstl.Expression;
+      key: tstl.Expression;
+      v1Name: string;
+      v2Name: string;
+    }
+  | undefined {
+  if (
+    stmt === undefined ||
+    !tstl.isVariableDeclarationStatement(stmt) ||
+    stmt.left.length !== 2 ||
+    stmt.right === undefined ||
+    stmt.right.length !== 2
+  ) {
+    return undefined;
+  }
+
+  const base = stmt.right[0];
+  const key = stmt.right[1];
+
+  if (!isPure(base) || !isPure(key)) {
+    return undefined;
+  }
+
+  return { declStmt: stmt, base, key, v1Name: stmt.left[0].text, v2Name: stmt.left[1].text };
+}
+
+/**
  * Attempts to match the TSTL compound-assignment 3-temp value-temp pattern at position `index`.
  *
  * The pattern is:
@@ -66,31 +105,14 @@ export function matchUnspillValueTemp(
   index: number,
   isPure: typeof isLuaRhsPure,
 ): UnspillValueTempMatch | undefined {
-  const declStmt = stmts[index];
+  const decl = matchUnspillDecl(stmts[index], isPure);
+  if (decl === undefined) {
+    return undefined;
+  }
+  const { declStmt, base, key, v1Name, v2Name } = decl;
+
   const valueDeclStmt = stmts[index + 1];
   const assignStmt = stmts[index + 2];
-
-  // First stmt: local v1, v2 = E1, E2
-  if (
-    !tstl.isVariableDeclarationStatement(declStmt) ||
-    declStmt.left.length !== 2 ||
-    declStmt.right === undefined ||
-    declStmt.right.length !== 2
-  ) {
-    return undefined;
-  }
-
-  const v1 = declStmt.left[0];
-  const v2 = declStmt.left[1];
-  const base = declStmt.right[0];
-  const key = declStmt.right[1];
-
-  if (!isPure(base) || !isPure(key)) {
-    return undefined;
-  }
-
-  const v1Name = v1.text;
-  const v2Name = v2.text;
 
   // Second stmt: local v3 = <expr containing v1[v2]>
   if (
@@ -154,28 +176,13 @@ export function matchUnspillPair(
   index: number,
   isPure: typeof isLuaRhsPure,
 ): UnspillMatch | undefined {
-  const declStmt = stmts[index];
+  const decl = matchUnspillDecl(stmts[index], isPure);
+  if (decl === undefined) {
+    return undefined;
+  }
+  const { declStmt, base, key, v1Name, v2Name } = decl;
+
   const assignStmt = stmts[index + 1];
-
-  // First stmt: local v1, v2 = E1, E2
-  if (
-    !tstl.isVariableDeclarationStatement(declStmt) ||
-    declStmt.left.length !== 2 ||
-    declStmt.right === undefined ||
-    declStmt.right.length !== 2
-  ) {
-    return undefined;
-  }
-
-  const v1 = declStmt.left[0];
-  const v2 = declStmt.left[1];
-  const base = declStmt.right[0];
-  const key = declStmt.right[1];
-
-  // Both RHS expressions must be pure (identifier or literal only)
-  if (!isPure(base) || !isPure(key)) {
-    return undefined;
-  }
 
   // Second stmt: v1[v2] = <rhs>
   if (assignStmt === undefined || !tstl.isAssignmentStatement(assignStmt)) {
@@ -197,9 +204,6 @@ export function matchUnspillPair(
   ) {
     return undefined;
   }
-
-  const v1Name = v1.text;
-  const v2Name = v2.text;
 
   // LHS index must reference our exact temp identifiers by name
   /* v8 ignore next -- TSTL always emits matching temp names in the following assignment */

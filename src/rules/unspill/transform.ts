@@ -153,6 +153,22 @@ function substituteTemps(
 }
 
 /**
+ * Rebuilds the assignment LHS `v1[v2]` as `base[key]`, cloning base/key and
+ * carrying source positions from the original temp identifiers so sourcemaps
+ * stay anchored. Shared by the 2-temp and 3-temp collapse paths.
+ */
+function rebuildLhs(
+  assignStmt: tstl.AssignmentStatement,
+  base: tstl.Expression,
+  key: tstl.Expression,
+): tstl.TableIndexExpression {
+  const origLhs = assignStmt.left[0] as tstl.TableIndexExpression;
+  const newBase = withPositionFrom(deepCloneExpression(base), origLhs.table);
+  const newKey = withPositionFrom(deepCloneExpression(key), origLhs.index);
+  return withPositionFrom(tstl.createTableIndexExpression(newBase, newKey), origLhs);
+}
+
+/**
  * Applies a single unspill substitution given a confirmed match descriptor.
  *
  * Produces an `AssignmentStatement` of the form `base[key] = <rhs substituted>`,
@@ -162,10 +178,7 @@ function applyUnspill(match: UnspillMatch): tstl.AssignmentStatement {
   const { assignStmt, base, key, v1Name, v2Name } = match;
 
   // Build the new LHS: base[key]
-  const origLhs = assignStmt.left[0] as tstl.TableIndexExpression;
-  const newBase = withPositionFrom(deepCloneExpression(base), origLhs.table);
-  const newKey = withPositionFrom(deepCloneExpression(key), origLhs.index);
-  const newLhs = withPositionFrom(tstl.createTableIndexExpression(newBase, newKey), origLhs);
+  const newLhs = rebuildLhs(assignStmt, base, key);
 
   // Build the new RHS: substitute all v1[v2] → base[key] in the original RHS
   const newRhs = substituteTemps(assignStmt.right[0], v1Name, v2Name, base, key);
@@ -195,10 +208,7 @@ function applyUnspillValueTemp(
   );
 
   // Rewrite the assignment LHS: v1[v2] → E1[E2]; RHS is untouched (references v3)
-  const origLhs = assignStmt.left[0] as tstl.TableIndexExpression;
-  const newBase = withPositionFrom(deepCloneExpression(base), origLhs.table);
-  const newKey = withPositionFrom(deepCloneExpression(key), origLhs.index);
-  const newLhs = withPositionFrom(tstl.createTableIndexExpression(newBase, newKey), origLhs);
+  const newLhs = rebuildLhs(assignStmt, base, key);
   const newAssign = withPositionFrom(
     tstl.createAssignmentStatement([newLhs], assignStmt.right),
     match.declStmt,
@@ -315,6 +325,16 @@ export function unspillStatements(
   return processed;
 }
 
+/**
+ * Recursively unspills `stmts` and replaces its contents in place. Keeps the
+ * parent node's identity (block, loop body, if/else branch) while rewriting its
+ * statement list.
+ */
+function cleanInPlace(stmts: tstl.Statement[], isPure: (e: tstl.Expression) => boolean): void {
+  const cleaned = unspillStatements(stmts, { isPure });
+  stmts.splice(0, stmts.length, ...cleaned);
+}
+
 function recurseIntoNestedScopes(
   stmt: tstl.Statement,
   isPure: (e: tstl.Expression) => boolean,
@@ -328,8 +348,7 @@ function recurseIntoNestedScopes(
     shallow: true,
     expr: (expr) => {
       if (tstl.isFunctionExpression(expr)) {
-        const cleaned = unspillStatements(expr.body.statements, { isPure });
-        expr.body.statements.splice(0, expr.body.statements.length, ...cleaned);
+        cleanInPlace(expr.body.statements, isPure);
         return Walk.skip;
       }
       return Walk.keep;
@@ -337,8 +356,7 @@ function recurseIntoNestedScopes(
   });
 
   if (tstl.isDoStatement(stmt)) {
-    const cleaned = unspillStatements(stmt.statements, { isPure });
-    stmt.statements.splice(0, stmt.statements.length, ...cleaned);
+    cleanInPlace(stmt.statements, isPure);
     return;
   }
 
@@ -348,22 +366,18 @@ function recurseIntoNestedScopes(
     tstl.isForStatement(stmt) ||
     tstl.isForInStatement(stmt)
   ) {
-    const bodyStmts = stmt.body.statements;
-    const cleaned = unspillStatements(bodyStmts, { isPure });
-    bodyStmts.splice(0, bodyStmts.length, ...cleaned);
+    cleanInPlace(stmt.body.statements, isPure);
     return;
   }
 
   if (tstl.isIfStatement(stmt)) {
-    const ifCleaned = unspillStatements(stmt.ifBlock.statements, { isPure });
-    stmt.ifBlock.statements.splice(0, stmt.ifBlock.statements.length, ...ifCleaned);
+    cleanInPlace(stmt.ifBlock.statements, isPure);
 
     if (stmt.elseBlock) {
       if (tstl.isIfStatement(stmt.elseBlock)) {
         recurseIntoNestedScopes(stmt.elseBlock, isPure);
       } else {
-        const elseCleaned = unspillStatements(stmt.elseBlock.statements, { isPure });
-        stmt.elseBlock.statements.splice(0, stmt.elseBlock.statements.length, ...elseCleaned);
+        cleanInPlace(stmt.elseBlock.statements, isPure);
       }
     }
   }
