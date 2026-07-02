@@ -1840,37 +1840,19 @@ describe("conditional-compilation — Lua truthiness (fix for numeric/string zer
       expect(lua).toBe("print(1)");
     });
 
-    it("folds ZERO && x to x when ZERO=0", () => {
+    it.each([
+      { expr: "ZERO && 42", expected: "result = 42" },
+      { expr: "ZERO || 99", expected: "result = 0" },
+      { expr: "!ZERO", expected: "result = false" },
+    ])("folds $expr when ZERO=0", ({ expr, expected }) => {
       const src = `
         declare const ZERO: number;
-        export const result = ZERO && 42;
+        export const result = ${expr};
       `;
 
       const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
 
-      expect(lua).toContain("result = 42");
-    });
-
-    it("folds ZERO || 99 to ZERO when ZERO=0", () => {
-      const src = `
-        declare const ZERO: number;
-        export const result = ZERO || 99;
-      `;
-
-      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
-
-      expect(lua).toContain("result = 0");
-    });
-
-    it("folds !ZERO to false when ZERO=0", () => {
-      const src = `
-        declare const ZERO: number;
-        export const result = !ZERO;
-      `;
-
-      const lua = normalizeLua(compile(src, ccOpts({ ZERO: { env: "X", default: 0 } })));
-
-      expect(lua).toContain("result = false");
+      expect(lua).toContain(expected);
     });
   });
 
@@ -1891,37 +1873,19 @@ describe("conditional-compilation — Lua truthiness (fix for numeric/string zer
       expect(lua).toBe("print(1)");
     });
 
-    it('folds EMPTY && x to x when EMPTY=""', () => {
+    it.each([
+      { expr: 'EMPTY && "yes"', expected: 'result = "yes"' },
+      { expr: 'EMPTY || "fallback"', expected: 'result = ""' },
+      { expr: "!EMPTY", expected: "result = false" },
+    ])('folds $expr when EMPTY=""', ({ expr, expected }) => {
       const src = `
         declare const EMPTY: string;
-        export const result = EMPTY && "yes";
+        export const result = ${expr};
       `;
 
       const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
 
-      expect(lua).toContain('result = "yes"');
-    });
-
-    it('folds EMPTY || "fallback" to EMPTY when EMPTY=""', () => {
-      const src = `
-        declare const EMPTY: string;
-        export const result = EMPTY || "fallback";
-      `;
-
-      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
-
-      expect(lua).toContain('result = ""');
-    });
-
-    it('folds !EMPTY to false when EMPTY=""', () => {
-      const src = `
-        declare const EMPTY: string;
-        export const result = !EMPTY;
-      `;
-
-      const lua = normalizeLua(compile(src, ccOpts({ EMPTY: { env: "X", default: "" } })));
-
-      expect(lua).toContain("result = false");
+      expect(lua).toContain(expected);
     });
   });
 
@@ -1931,28 +1895,15 @@ describe("conditional-compilation — Lua truthiness (fix for numeric/string zer
       ["EMPTY", ""],
     ]);
 
-    it("evaluates ZERO as truthy in logical and", () => {
-      expect(evaluateCondition(parseExpression("ZERO && 99"), constants)).toBe(99);
-    });
-
-    it("evaluates ZERO as truthy in logical or", () => {
-      expect(evaluateCondition(parseExpression("ZERO || 99"), constants)).toBe(0);
-    });
-
-    it("evaluates EMPTY as truthy in logical and", () => {
-      expect(evaluateCondition(parseExpression('EMPTY && "yes"'), constants)).toBe("yes");
-    });
-
-    it("evaluates EMPTY as truthy in logical or", () => {
-      expect(evaluateCondition(parseExpression('EMPTY || "fallback"'), constants)).toBe("");
-    });
-
-    it("evaluates !ZERO as false", () => {
-      expect(evaluateCondition(parseExpression("!ZERO"), constants)).toBe(false);
-    });
-
-    it("evaluates !EMPTY as false", () => {
-      expect(evaluateCondition(parseExpression("!EMPTY"), constants)).toBe(false);
+    it.each([
+      { expr: "ZERO && 99", expected: 99, name: "ZERO as truthy in logical and" },
+      { expr: "ZERO || 99", expected: 0, name: "ZERO as truthy in logical or" },
+      { expr: 'EMPTY && "yes"', expected: "yes", name: "EMPTY as truthy in logical and" },
+      { expr: 'EMPTY || "fallback"', expected: "", name: "EMPTY as truthy in logical or" },
+      { expr: "!ZERO", expected: false, name: "!ZERO as false" },
+      { expr: "!EMPTY", expected: false, name: "!EMPTY as false" },
+    ])("evaluates $name", ({ expr, expected }) => {
+      expect(evaluateCondition(parseExpression(expr), constants)).toBe(expected);
     });
   });
 });
