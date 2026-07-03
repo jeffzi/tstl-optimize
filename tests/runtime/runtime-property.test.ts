@@ -9,7 +9,23 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { arbIdent, arbSmallArray, arbSmallInt, PRINT_DECL } from "./arbitraries";
-import { compileOptimized, type RuntimeEqualOptions, runtimeEqual } from "./helpers";
+import {
+  assertExpectedRuntimes,
+  compileOptimized,
+  detectRuntimes,
+  type RuntimeEqualOptions,
+  runtimeEqual,
+} from "./helpers";
+
+// ---------------------------------------------------------------------------
+// Harness sanity: at least one runtime reachable when tests run via test:runtime
+// ---------------------------------------------------------------------------
+
+describe("harness sanity", () => {
+  it("has expected Lua runtimes available", () => {
+    assertExpectedRuntimes(detectRuntimes());
+  });
+});
 
 const FC_OPTS: Parameters<typeof fc.assert>[1] = { numRuns: 10 };
 
