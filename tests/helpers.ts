@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { expect } from "vitest";
 import { OptimizePlugin } from "../src/index";
 
 // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
@@ -220,6 +221,19 @@ export function compileWithSourceMap(
 // A reusable empty source file stub for tests that need a ts.SourceFile context
 // but never inspect its content (e.g. visitor tests that assert on Lua output, not AST).
 export const EMPTY_SOURCE_FILE = ts.createSourceFile("empty.ts", "", ts.ScriptTarget.Latest, true);
+
+export function expectLuaSnippets(
+  lua: string,
+  { contains, excludes = [] }: { contains: readonly string[]; excludes?: readonly string[] },
+): void {
+  for (const snippet of contains) {
+    expect(lua, `expected Lua to contain snippet: ${snippet}`).toContain(snippet);
+  }
+
+  for (const snippet of excludes) {
+    expect(lua, `expected Lua to exclude snippet: ${snippet}`).not.toContain(snippet);
+  }
+}
 
 export function normalizeLua(lua: string): string {
   return lua

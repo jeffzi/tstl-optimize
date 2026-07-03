@@ -5,20 +5,7 @@ import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { createVisitors } from "../../../src/rules/dead-local";
 import { collectUndefinedSymbolIdNames } from "../../../src/rules/dead-local/access";
-import { compile, EMPTY_SOURCE_FILE, normalizeLua } from "../../helpers";
-
-function expectLuaSnippets(
-  lua: string,
-  { present, missing = [] }: { present: readonly string[]; missing?: readonly string[] },
-): void {
-  for (const snippet of present) {
-    expect(lua, `expected Lua to contain snippet: ${snippet}`).toContain(snippet);
-  }
-
-  for (const snippet of missing) {
-    expect(lua, `expected Lua to exclude snippet: ${snippet}`).not.toContain(snippet);
-  }
-}
+import { compile, EMPTY_SOURCE_FILE, expectLuaSnippets, normalizeLua } from "../../helpers";
 
 describe("dead-local", () => {
   function createLuaFile(statements: tstl.Statement[]): tstl.File {
@@ -539,7 +526,7 @@ describe("dead-local", () => {
       },
     ])("removes unused locals inside $name", ({ expectedMissing, expectedPresent, source }) => {
       const lua = compile(source, { pluginOptions: { rules: { "constant-propagation": false } } });
-      expectLuaSnippets(lua, { present: expectedPresent, missing: expectedMissing });
+      expectLuaSnippets(lua, { contains: expectedPresent, excludes: expectedMissing });
     });
   });
 
