@@ -133,8 +133,9 @@ To customize rules:
 Use the rules in two groups:
 
 - **Build specialization:** `conditional-compilation`, `debug-strip`
-- **Performance optimization:** `constant-folding`, `dead-local`, `merge-locals`, `localizer`,
-  `hoist-require`, `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`, `unspill`
+- **Performance optimization:** `constant-folding`, `constant-propagation`, `dead-local`,
+  `merge-locals`, `localizer`, `hoist-require`, `loop-rebase`, `inline`, `math-intrinsics`,
+  `remove-empty-branch`, `unspill`
 
 `conditional-compilation` and `debug-strip` are useful even when raw speed is not the main goal.
 Lua has no native preprocessor, so these rules let you remove platform-specific branches, debug
