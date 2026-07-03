@@ -4,18 +4,10 @@ import * as tstl from "typescript-to-lua";
 import { describe, expect, it } from "vitest";
 import { Walk, walkStatements } from "../../src/ast/lua-walker";
 import { createVisitors } from "../../src/rules/math-intrinsics";
-import { compile, normalizeLua } from "../helpers";
+import { compile, expectLuaSnippets, normalizeLua } from "../helpers";
 
 function countOccurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
-}
-
-function expectLuaSnippets(
-  lua: string,
-  { contains, excludes = [] }: { contains: readonly string[]; excludes?: readonly string[] },
-): void {
-  expect(contains.filter((snippet) => !lua.includes(snippet))).toStrictEqual([]);
-  expect(excludes.filter((snippet) => lua.includes(snippet))).toStrictEqual([]);
 }
 
 function parseCallExpression(source: string): ts.CallExpression {

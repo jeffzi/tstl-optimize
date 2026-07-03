@@ -4,6 +4,10 @@ import { getElseBranchStatements } from "../../ast/lua-ast";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import { luaPropertyChain } from "../../ast/scope";
 
+// ---------------------------------------------------------------------------
+// Unsafe-call detection
+// ---------------------------------------------------------------------------
+
 /** Lua stdlib globals that are safe to hoist (flat function tables, no metatables). */
 export const STDLIB_ROOTS: ReadonlySet<string> = new Set([
   "math",
@@ -230,6 +234,10 @@ function walkChainWithUnsafeCalls(
   visitStatement(statement);
 }
 
+// ---------------------------------------------------------------------------
+// Call classification
+// ---------------------------------------------------------------------------
+
 /**
  * Check if a call expression is to a non-stdlib function.
  * Returns false if the callee is provably a stdlib root (e.g., math.ceil).
@@ -299,6 +307,10 @@ export function statementHasUnsafeCallAfterFirstChainAccess(
 
   return { afterFirst: sawCallAfterFirst, betweenAccesses: sawAccessAfterCall };
 }
+
+// ---------------------------------------------------------------------------
+// Chain assignment and intervening calls
+// ---------------------------------------------------------------------------
 
 /**
  * Check if a statement is an assignment where the LHS includes the given chain or a prefix of it.
@@ -457,12 +469,10 @@ export function hasInterveningCallForChain(
       continue;
     }
 
-    // Check for unsafe call before first chain access in this statement
     if (statementHasUnsafeCallBeforeFirstChainAccess(statement, chain, shallow)) {
       return true;
     }
 
-    // Check for unsafe call after first chain access in this statement
     const afterFirstFlags = statementHasUnsafeCallAfterFirstChainAccess(statement, chain);
     if (afterFirstFlags.betweenAccesses) {
       // Call after first access, then another access in same statement — unsafe
@@ -474,17 +484,17 @@ export function hasInterveningCallForChain(
     }
   }
 
-  // Check for non-stdlib calls before the first access — hoisting via unshift() would place
-  // the hoisted local above any pre-access call, capturing a potentially stale snapshot if
-  // the call mutates the root. Calls to stdlib functions are known to be safe. Runs regardless
-  // of whether reads are single- or multi-statement, since a pre-access call can still mutate
-  // a chain read later in the first-access statement.
+  // Hoisting via unshift() would place the hoisted local above any pre-access call,
+  // capturing a potentially stale snapshot if the call mutates the root. Calls to stdlib
+  // functions are known to be safe. Runs regardless of whether reads are single- or
+  // multi-statement, since a pre-access call can still mutate a chain read later in the
+  // first-access statement.
   if (hasNonStdlibCall(statements.slice(0, firstAccessIndex))) {
     return true;
   }
 
-  // Check for chain mutations before the first read — if the chain is assigned before any
-  // read, hoisting would snapshot the pre-mutation value and produce incorrect results.
+  // If the chain is assigned before any read, hoisting would snapshot the pre-mutation
+  // value and produce incorrect results.
   for (let index = 0; index < firstAccessIndex; index += 1) {
     if (statementAssignsToChain(statements[index], chain)) {
       return true;
@@ -496,12 +506,11 @@ export function hasInterveningCallForChain(
     return false;
   }
 
-  // Check if the first-access statement itself writes the chain. If so, any later read is stale.
+  // If the first-access statement itself writes the chain, any later read is stale.
   if (statementAssignsToChain(statements[firstAccessIndex], chain)) {
     return true;
   }
 
-  // Check for intervening calls and mutations between first and last access.
   // Calls: start at firstAccessIndex + 1 (first-access statement's calls already vetted).
   // Assignments: start at firstAccessIndex + 1 (already checked above).
   for (let index = firstAccessIndex + 1; index < lastAccessIndex; index += 1) {
@@ -515,6 +524,10 @@ export function hasInterveningCallForChain(
 
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Scope and early exit
+// ---------------------------------------------------------------------------
 
 /**
  * Detect control-flow exits that escape the current scope. Nested loops only propagate

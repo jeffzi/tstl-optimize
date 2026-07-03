@@ -1,6 +1,10 @@
 import type ts from "typescript";
 import type * as tstl from "typescript-to-lua";
 
+// ---------------------------------------------------------------------------
+// Config types
+// ---------------------------------------------------------------------------
+
 export interface DebugStripConfig {
   enabled: boolean;
   functions: string[];
@@ -64,6 +68,10 @@ export interface PluginConfig {
   strict?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Defaults
+// ---------------------------------------------------------------------------
+
 const DEFAULT_DEBUG_STRIP: DebugStripConfig = {
   enabled: true,
   functions: ["print", "assert"],
@@ -93,6 +101,10 @@ const DEFAULT_RULES: RulesConfig = {
   "debug-strip": false,
   "hoist-require": true,
 };
+
+// ---------------------------------------------------------------------------
+// Resolvers
+// ---------------------------------------------------------------------------
 
 function resolveStructuredRuleConfig<T extends { enabled: boolean }>(
   value: boolean | Partial<T> | undefined,
@@ -222,6 +234,10 @@ export function isRuleEnabled(config: RulesConfig, rule: keyof RulesConfig): boo
 }
 
 export type RuleFactory = (checker: ts.TypeChecker, config: PluginConfig) => tstl.Visitors;
+
+// ---------------------------------------------------------------------------
+// Parsing and validation
+// ---------------------------------------------------------------------------
 
 export function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);

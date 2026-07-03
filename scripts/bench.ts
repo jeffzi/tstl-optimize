@@ -113,9 +113,10 @@ function runBenchmarks(
   if (files.length === 0) return { attempted: 0, succeeded: 0 };
 
   const existingLuaPath = env.LUA_PATH ?? "";
+  const luaSearchRoot = luaRoot.replace(/\\/g, "/");
   const luaPath = existingLuaPath
-    ? `${luaRoot.replace(/\\/g, "/")}/?.lua;${existingLuaPath}`
-    : `${luaRoot.replace(/\\/g, "/")}/?.lua;;`;
+    ? `${luaSearchRoot}/?.lua;${existingLuaPath}`
+    : `${luaSearchRoot}/?.lua;;`;
   let succeeded = 0;
   for (const f of files) {
     const result = spawnSync(cmd, [...args, join(benchDir, f)], {

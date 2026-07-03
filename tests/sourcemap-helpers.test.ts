@@ -177,9 +177,24 @@ describe("assertEveryLineMapped", () => {
 
   it("skips lines matching the skip predicate", async () => {
     const { lua, externalMap } = compileWithSourceMap(SIMPLE_SOURCE);
-    // Use skip to ignore everything — should always pass.
+    const headerLine = 1;
+    const headerText = lua.split("\n")[headerLine - 1] ?? "";
+
+    // Line 1 (__TS__SourceMapTraceBack call) is unmapped — without skip it rejects.
     await expect(
-      assertEveryLineMapped(externalMap, lua, { start: 1, end: 100 }, { skip: () => true }),
+      assertEveryLineMapped(externalMap, lua, { start: headerLine, end: headerLine }),
+    ).rejects.toThrow("have no mapping");
+
+    // With a skip that exempts only the header line, it resolves.
+    await expect(
+      assertEveryLineMapped(
+        externalMap,
+        lua,
+        { start: headerLine, end: headerLine },
+        {
+          skip: (line) => line === headerText,
+        },
+      ),
     ).resolves.toBeUndefined();
   });
 });

@@ -68,7 +68,7 @@ Rule reference:
 npm install --save-dev typescript-to-lua tstl-optimize
 ```
 
-Requires `typescript-to-lua >= 1.22.0`; tested against `1.36.0`.
+Requires `typescript-to-lua >= 1.22.0`; tested against `1.37.0`.
 
 The package also exports additional subpaths for library consumers:
 
@@ -133,8 +133,9 @@ To customize rules:
 Use the rules in two groups:
 
 - **Build specialization:** `conditional-compilation`, `debug-strip`
-- **Performance optimization:** `constant-folding`, `dead-local`, `merge-locals`, `localizer`,
-  `hoist-require`, `loop-rebase`, `inline`, `math-intrinsics`, `remove-empty-branch`, `unspill`
+- **Performance optimization:** `constant-folding`, `constant-propagation`, `dead-local`,
+  `merge-locals`, `localizer`, `hoist-require`, `loop-rebase`, `inline`, `math-intrinsics`,
+  `remove-empty-branch`, `unspill`
 
 `conditional-compilation` and `debug-strip` are useful even when raw speed is not the main goal.
 Lua has no native preprocessor, so these rules let you remove platform-specific branches, debug
@@ -400,7 +401,7 @@ non-literal arguments fall through to `math.max` / `math.min`.
 
 ### `dead-local`
 
-Removes unused single-name local declarations inside function bodies when the initializer is pure.
+Removes unused single-name local declarations inside function and block scopes (do/while/repeat/for bodies, if/else blocks) when the initializer is pure.
 If code overwrites the variable before any read, the rule keeps the local and removes only the
 initializer. On by default.
 
@@ -448,8 +449,9 @@ local a, b, c = 1, 2, 3
 
 ### `remove-empty-branch`
 
-Removes empty `if`/`elseif`/`else` branches and promotes a non-empty `else` block when the empty
-`if` branch can be inverted safely. The rule also removes fully empty `if` chains whose conditions are side-effect-free. On by default.
+Removes empty `if`/`elseif`/`else` branches and empty `do` blocks, and promotes a non-empty `else`
+block when the empty `if` branch can be inverted safely. The rule also removes fully empty `if`
+chains whose conditions are side-effect-free. On by default.
 
 ```lua
 -- Before
@@ -1061,9 +1063,9 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 | `rules.constant-propagation`    | `boolean`                                            | `true`        | Substitute literal values for single-assignment locals whose initializer is a `boolean`, `number`, or `string` literal, including imported constants.                                                     |
 | `rules.constant-folding`        | `boolean`                                            | `true`        | Evaluate side-effect-free constant arithmetic, comparison, logical, unary, and string expressions.                                                                                                        |
 | `rules.math-intrinsics`         | `boolean`                                            | `true`        | Inline math calls as Lua expressions.                                                                                                                                                                     |
-| `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function bodies when the initializer is pure.                                                                                                                     |
+| `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function and block scopes when the initializer is pure.                                                                                                           |
 | `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
-| `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
+| `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and empty `do` blocks, and promote invertible `else` blocks.                                                                                                   |
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
 | `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Pass `{ enabled: false }` to disable. See [`inline`](#inline) and [Strict mode](#strict-mode). |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
@@ -1160,7 +1162,7 @@ details.
 
 ## Benchmarks
 
-Microbenchmarks for `math-intrinsics`, `localizer`, `loop-rebase`, and `inline` live in the
+Microbenchmarks for `constant-propagation`, `math-intrinsics`, `localizer`, `loop-rebase`, `inline`, and `unspill` live in the
 [`benchmark/`](benchmark/) directory and run via `npm run bench`. See
 [`benchmark/README.md`](benchmark/README.md) for measured speedups on PUC-Rio Lua 5.1 and LuaJIT.
 
@@ -1212,7 +1214,7 @@ See [root filtering](#root-filtering) for the full resolution formula and engine
 
 ### `npm install` warns about peer dep version
 
-`typescript-to-lua >= 1.22.0` is the documented floor; CI tests against `1.36.0`. Older TSTL
+`typescript-to-lua >= 1.22.0` is the documented floor; CI tests against `1.37.0`. Older TSTL
 versions may work but are not verified — if you see plugin behavior that contradicts this README,
 upgrade TSTL first.
 

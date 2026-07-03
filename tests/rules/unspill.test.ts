@@ -301,5 +301,46 @@ for (const i of $range(0, 999)) {
       expect(lua).not.toContain("____arr_0");
       expect(lua).not.toContain("____temp_1");
     });
+
+    it("bare temp inside a call argument declines fold", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function f(x: any): number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = t[key] + f(t);
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // Bare t inside f(t) is unreachable by the substituter.
+      // The fold must be declined to preserve the local decl.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("f(t)");
+    });
+
+    it("v1[v2] pattern inside a call argument declines fold", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function g(x: any): number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = t[key] + g(t[key]);
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // t[key] inside g(...) is unreachable by the substituter
+      // (the substituter only walks into TableIndexExpression and BinaryExpression).
+      // The fold must be declined to preserve the local decl.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("g(t[key])");
+    });
   });
 });

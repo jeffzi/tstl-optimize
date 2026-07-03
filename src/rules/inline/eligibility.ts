@@ -10,6 +10,10 @@ import type {
 } from "./target";
 import { getInlineTarget, resolveSymbol } from "./target";
 
+// ---------------------------------------------------------------------------
+// Binding and scope checks
+// ---------------------------------------------------------------------------
+
 interface InlineRejection {
   reason: string;
   code: number;
@@ -146,6 +150,10 @@ export function canEraseInlineDeclaration(
   visit(declaration.getSourceFile());
   return canErase;
 }
+
+// ---------------------------------------------------------------------------
+// Parameter usage analysis
+// ---------------------------------------------------------------------------
 
 function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeChecker): number {
   let count = 0;
@@ -323,6 +331,10 @@ function checkSideEffectArgument(usageCount: number): InlineRejection {
       };
 }
 
+// ---------------------------------------------------------------------------
+// Inline eligibility
+// ---------------------------------------------------------------------------
+
 export function canInline(
   target: ExpressionInlineTarget,
   callNode: ts.CallExpression,
@@ -476,6 +488,10 @@ export function canInlineStatements(
 
   return undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Side-effect ordering
+// ---------------------------------------------------------------------------
 
 /**
  * Returns true if a side-effectful sub-expression appears before the parameter's
@@ -779,6 +795,10 @@ function hasSideEffectBeforeParamUse(
 
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Eager arguments and purity
+// ---------------------------------------------------------------------------
 
 export function needsEagerArgumentTemps(
   target: ExpressionInlineTarget,

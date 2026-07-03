@@ -84,17 +84,14 @@ export function unwrapTransparent(
 export function isNilExpression(node: ts.Expression): boolean {
   const unwrapped = unwrapTransparent(node);
 
-  // Check for null keyword
   if (unwrapped.kind === ts.SyntaxKind.NullKeyword) {
     return true;
   }
 
-  // Check for void expression
   if (unwrapped.kind === ts.SyntaxKind.VoidExpression) {
     return true;
   }
 
-  // Check for undefined identifier
   if (ts.isIdentifier(unwrapped) && unwrapped.text === "undefined") {
     return true;
   }

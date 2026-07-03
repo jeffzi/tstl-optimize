@@ -7,6 +7,10 @@ import { Walk, walkStatements } from "../ast/lua-walker";
 import type { ConstantValue, RuleFactory } from "../config";
 import { getTransformedFile } from "./source-file";
 
+// ---------------------------------------------------------------------------
+// Constant evaluation
+// ---------------------------------------------------------------------------
+
 const UTF8_ENCODER = new TextEncoder();
 
 function finiteOrUndefined(n: number): number | undefined {
@@ -123,6 +127,10 @@ function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Control-flow folding
+// ---------------------------------------------------------------------------
+
 /** Returns true only if every condition in the if/elseif chain is side-effect-free. */
 function allConditionsPure(stmt: tstl.IfStatement): boolean {
   if (!isLuaExprPure(stmt.condition)) return false;
@@ -206,6 +214,10 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Visitor
+// ---------------------------------------------------------------------------
 
 export const createVisitors: RuleFactory = (): tstl.Visitors => {
   return {

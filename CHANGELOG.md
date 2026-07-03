@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Upgraded to typescript-to-lua 1.37; conformance now tests against `v1.37.0`.
+
+### Fixed
+
+- **conditional-compilation** now folds conditions using Lua truthiness (only `nil`/`false` are
+  falsy) instead of JavaScript truthiness, so constants like `0` and `""` no longer select the
+  wrong branch. Negative compile-time constants are also parenthesized when substituted, preventing
+  operator-precedence errors in the emitted Lua.
+- **constant-propagation** no longer substitutes a local when it is written through an identifier
+  that lacks a `symbolId`, which could miss a reassignment and propagate a stale value.
+- **dead-local** now preserves `require()` bindings and aliases that are read only through
+  identifiers without a `symbolId` (e.g. some plugin- or JSX-transpiled references), instead of
+  removing them as unused.
+- **unspill** declines folds that would orphan temporaries in unreachable positions or leave a
+  temporary referenced outside the recognized `base[key]` pattern, and preserves source-map
+  positions on rebuilt index expressions.
+- **inline** cross-module hoists are now inserted before the first use when the source module lacks
+  a trailing newline, instead of being appended after it.
+- **compose** `mergeVisitorMaps` guards against null visitor entries, and the composed visitor falls
+  through to the host transform when a `SourceFile` fallback returns `undefined`.
+
 ## [0.11.0] - 2026-06-13
 
 ### Added

@@ -1,14 +1,18 @@
 import ts from "typescript";
 import type * as tstl from "typescript-to-lua";
+import { unwrapTransparent } from "../../ast/ts-ast";
 import {
   type ImportBinding,
   type LiteralKind,
   resolveConstLiteral,
   resolveRequireChain,
-  unwrapTransparentExpression,
 } from "./const-literal";
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import type { InlineTarget } from "./target";
+
+// ---------------------------------------------------------------------------
+// Free-variable detection
+// ---------------------------------------------------------------------------
 
 const CROSS_MODULE_WARNING_MESSAGE = "cross-module function references non-parameter identifiers";
 
@@ -30,6 +34,10 @@ export function hasCrossModuleFreeVariable(
   const { blocking } = classifyCrossModuleFreeVariables(nodes, params, sourceDeclaration, checker);
   return blocking.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Identifier classification
+// ---------------------------------------------------------------------------
 
 interface CrossModuleFreeVariableClassification {
   blocking: ts.Identifier[];
@@ -227,7 +235,7 @@ export function classifyCrossModuleFreeVariables(
     if (ts.isTypeNode(node)) return;
 
     if (ts.isPropertyAccessExpression(node)) {
-      const receiver = unwrapTransparentExpression(node.expression);
+      const receiver = unwrapTransparent(node.expression);
       if (ts.isIdentifier(receiver)) {
         classifyResolvedIdentifier(checker.getSymbolAtLocation(receiver), receiver, false);
         return;
@@ -323,6 +331,10 @@ function createCrossModuleRejection(
   }
   return { reject: true };
 }
+
+// ---------------------------------------------------------------------------
+// Cross-module inline resolution
+// ---------------------------------------------------------------------------
 
 /**
  * For each entry in `imports` (keyed by underlying target-module symbol → ImportBinding),

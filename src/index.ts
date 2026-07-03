@@ -16,6 +16,10 @@ import { createVisitors as mergeLocalsVisitors } from "./rules/merge-locals";
 import { createVisitors as removeEmptyBranchVisitors } from "./rules/remove-empty-branch";
 import { createVisitors as unspillVisitors } from "./rules/unspill";
 
+// ---------------------------------------------------------------------------
+// Phase and kind tables
+// ---------------------------------------------------------------------------
+
 // Phase-based rule ordering. Phases execute in order; within each phase,
 // rules execute in the order listed. This ensures critical dependencies:
 // - fold runs first to collapse constants and strip dead branches from conditionals
@@ -110,6 +114,10 @@ const STATEMENT_KINDS_WITH_FALLBACK: ReadonlySet<number> = new Set([
   ts.SyntaxKind.ReturnStatement,
   ts.SyntaxKind.FunctionDeclaration,
 ]);
+
+// ---------------------------------------------------------------------------
+// Visitor merging
+// ---------------------------------------------------------------------------
 
 type VisitorTransform = (node: ts.Node, context: tstl.TransformationContext) => unknown;
 type NormalizedVisitor = { priority?: number; transform: VisitorTransform };
@@ -284,6 +292,10 @@ export function buildOptimizeVisitors(
 
   return mergedVisitors;
 }
+
+// ---------------------------------------------------------------------------
+// Plugin
+// ---------------------------------------------------------------------------
 
 class OptimizePlugin implements tstl.Plugin {
   private checker!: ts.TypeChecker;

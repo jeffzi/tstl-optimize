@@ -7,12 +7,11 @@
  */
 
 import { spawnSync } from "node:child_process";
-import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 import { expect } from "vitest";
 import { OptimizePlugin } from "../../src/index";
-import { BASE_TSTL_OPTIONS, type CompileOptions } from "../helpers";
+import { BASE_TSTL_OPTIONS, type CompileOptions, extractTranspiledLua } from "../helpers";
 
 // ---------------------------------------------------------------------------
 // Runtime detection
@@ -154,18 +153,7 @@ function makeTranspileOptions(options?: CompileOptions): tstl.CompilerOptions {
 }
 
 function extractMainLua(result: tstl.TranspileVirtualProjectResult, context: string): string {
-  const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
-  );
-  if (errors.length > 0) {
-    const msgs = errors
-      .map((d) => (typeof d.messageText === "string" ? d.messageText : d.messageText.messageText))
-      .join("\n");
-    throw new Error(`Compilation errors (${context}):\n${msgs}`);
-  }
-  const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
-  if (!file?.lua) throw new Error(`No Lua output (${context}).`);
-  return file.lua;
+  return extractTranspiledLua(result, { context });
 }
 
 /** Compile TypeScript source **with** the optimizer plugin. */

@@ -26,6 +26,10 @@ import type {
 } from "./target";
 import { FUNCTION_SCOPE, returnsLuaMultiReturn } from "./target";
 
+// ---------------------------------------------------------------------------
+// Call-site helpers
+// ---------------------------------------------------------------------------
+
 interface ConsumerBindingRegistration {
   skipSymbols: ReadonlySet<ts.Symbol>;
   cleanup: () => void;
@@ -127,6 +131,10 @@ function isSimpleLuaExpression(expr: tstl.Expression): boolean {
   }
 }
 /* v8 ignore stop */
+
+// ---------------------------------------------------------------------------
+// Param mapping and body transform
+// ---------------------------------------------------------------------------
 
 export function buildParamMap(
   params: readonly ts.ParameterDeclaration[],
@@ -272,6 +280,10 @@ function createInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatem
   return ts.setTextRange(syntheticReturn, returnExpr);
 }
 
+// ---------------------------------------------------------------------------
+// Return-value inlining
+// ---------------------------------------------------------------------------
+
 export function prepareReturnValueInline(
   target: ReturnValueInlineTarget,
   callNode: ts.CallExpression,
@@ -389,6 +401,10 @@ export function buildDoEndBlock(
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Expression-body inlining
+// ---------------------------------------------------------------------------
+
 /**
  * Perform expression-body inlining for an expression-kind target.
  * Returns the substituted Lua expression, or undefined if inlining fails.
@@ -424,10 +440,10 @@ export function inlineExpressionBody(
   }
   const { substitutions, imports } = classification;
 
-  // Check whether the consumer already has in-scope locals that back any of the
-  // require() bindings in `imports`.  For those symbols, skip synthesizing a fresh
-  // require chain and instead let TSTL resolve the identifier via symbolIdMaps —
-  // after we pre-register the target alias symbol → consumer's SymbolId mapping.
+  // For require() bindings in `imports` that the consumer already has in-scope locals
+  // backing, skip synthesizing a fresh require chain and instead let TSTL resolve the
+  // identifier via symbolIdMaps — after we pre-register the target alias symbol →
+  // consumer's SymbolId mapping.
   const consumerBindings = resolveConsumerBindings(imports, callNode, checker);
   const { skipSymbols, cleanup } = registerConsumerBindings(consumerBindings, context);
 
@@ -543,6 +559,10 @@ export function bodyDeclaresLocal(bodyStmts: readonly ts.Statement[], name: stri
   }
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Var-decl and return-site builders
+// ---------------------------------------------------------------------------
 
 export function buildVarDeclInline(
   nameIdent: ts.Identifier,

@@ -1,23 +1,14 @@
 import ts from "typescript";
+import { unwrapTransparent } from "../../ast/ts-ast";
+
+// ---------------------------------------------------------------------------
+// Literal extraction and synthesis
+// ---------------------------------------------------------------------------
 
 export type LiteralKind =
   | { kind: "number"; value: number }
   | { kind: "string"; value: string }
   | { kind: "boolean"; value: boolean };
-
-export function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isTypeAssertionExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isSatisfiesExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
 
 function stringifyTemplateSpanValue(literal: LiteralKind): string | undefined {
   switch (literal.kind) {
@@ -48,7 +39,7 @@ function evaluateTemplateLiteral(
 }
 
 export function extractPrimitiveLiteral(node: ts.Expression): LiteralKind | undefined {
-  const expression = unwrapTransparentExpression(node);
+  const expression = unwrapTransparent(node);
 
   if (ts.isNumericLiteral(expression)) {
     return { kind: "number", value: Number(expression.text) };
@@ -109,6 +100,10 @@ export function synthesizeLiteralExpression(literal: LiteralKind): ts.Expression
       return literal.value ? ts.factory.createTrue() : ts.factory.createFalse();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Const-initializer resolution
+// ---------------------------------------------------------------------------
 
 type ConstInitializer = {
   declaration: ts.VariableDeclaration;
@@ -186,7 +181,7 @@ function evaluateConstInitializer(
   checker: ts.TypeChecker,
   visited: Set<ts.Symbol>,
 ): LiteralKind | undefined {
-  const expression = unwrapTransparentExpression(node);
+  const expression = unwrapTransparent(node);
 
   if (ts.isIdentifier(expression)) {
     const symbol = checker.getSymbolAtLocation(expression);
@@ -287,6 +282,10 @@ export function resolveConstLiteral(
   return evaluateConstInitializer(constInitializer.initializer, checker, new Set());
 }
 
+// ---------------------------------------------------------------------------
+// Require-chain resolution
+// ---------------------------------------------------------------------------
+
 /**
  * Describes a `require()` chain resolved from a const binding.
  *
@@ -304,7 +303,7 @@ export type ImportBinding = { requirePath: string; memberName: string | undefine
  * - `const band = require("bit").band`   → `{ requirePath: "bit", memberName: "band" }`
  * - Indirect: `const lib = require("bit"); const X = lib.band`
  * - Const require arg: `const m = "bit"; const band = require(m).band`
- * - Type-assertion wrappers stripped via `unwrapTransparentExpression`
+ * - Type-assertion wrappers stripped via `unwrapTransparent`
  * - Bare require: `const lib = require("bit")` → `{ requirePath: "bit", memberName: undefined }`
  * - Non-require initializers → `undefined`
  * - Non-const bindings (`let`, `var`) → `undefined`
@@ -338,7 +337,7 @@ function resolveRequireChainFromExpression(
   checker: ts.TypeChecker,
   visited: Set<ts.Symbol>,
 ): ImportBinding | undefined {
-  const expression = unwrapTransparentExpression(node);
+  const expression = unwrapTransparent(node);
 
   // Pattern: require("path")
   // The bare require() itself — no member access — means memberName is undefined.
@@ -350,7 +349,7 @@ function resolveRequireChainFromExpression(
 
   // Pattern: require("path").member  OR  (require("path") as any).member
   if (ts.isPropertyAccessExpression(expression)) {
-    const object = unwrapTransparentExpression(expression.expression);
+    const object = unwrapTransparent(expression.expression);
     const memberName = expression.name.text;
 
     if (isRequireCall(object)) {

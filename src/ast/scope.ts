@@ -3,6 +3,10 @@ import * as tstl from "typescript-to-lua";
 import { withPositionFrom } from "./deep-clone";
 import { type TraversalControl, Walk, walkStatements } from "./lua-walker";
 
+// ---------------------------------------------------------------------------
+// Property-chain extraction
+// ---------------------------------------------------------------------------
+
 /** Extract root identifier from a table-index chain. */
 function extractRootIdentifier(expr: tstl.Expression): tstl.Identifier | undefined {
   let current: tstl.Expression = expr;
@@ -31,6 +35,10 @@ export function luaPropertyChain(node: tstl.TableIndexExpression): string | unde
   }
   return undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Scope collection
+// ---------------------------------------------------------------------------
 
 /** Collected metadata about table-index chains and variable definitions in a scope.
  *
@@ -186,6 +194,10 @@ export function collectScopeInfo(
   return { chainCounts, scopeDefs, firstChainUse, rootIdentifiers };
 }
 
+// ---------------------------------------------------------------------------
+// Array-element accesses
+// ---------------------------------------------------------------------------
+
 /** Collected metadata about array-element accesses inside a loop.
  *
  * - `counts`: Read frequency per array base name (e.g., "arr" → 4). LHS writes are not counted
@@ -287,6 +299,10 @@ export function collectArrayElementAccesses(
 
   return { counts, writes, loopVar, firstAccess };
 }
+
+// ---------------------------------------------------------------------------
+// Chain building
+// ---------------------------------------------------------------------------
 
 /**
  * Reconstruct a TableIndexExpression from a dotted chain string (e.g. "math.floor").

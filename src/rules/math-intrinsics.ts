@@ -5,6 +5,10 @@ import { deepCloneExpression } from "../ast/deep-clone";
 import { hasSideEffects, SideEffectOptions } from "../ast/ts-ast";
 import type { RuleFactory } from "../config";
 
+// ---------------------------------------------------------------------------
+// Math-call detection
+// ---------------------------------------------------------------------------
+
 interface MathMethodCallInfo {
   method: string;
   receiverKind: "builtin-direct" | "builtin-alias" | "typed-math";
@@ -79,6 +83,10 @@ function getMathMethodCallInfo(
           : "typed-math",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Intrinsic builders
+// ---------------------------------------------------------------------------
 
 /**
  * Lua has no `math.sqrt` intrinsic that compiles to a single opcode.
@@ -163,6 +171,10 @@ function buildMinMax(
 function isSafeMinMaxRewriteArg(node: ts.Expression): boolean {
   return ts.isNumericLiteral(node);
 }
+
+// ---------------------------------------------------------------------------
+// Call rewriting
+// ---------------------------------------------------------------------------
 
 function handleCallExpression(
   node: ts.CallExpression,
@@ -301,7 +313,6 @@ export const createVisitors: RuleFactory = (checker, config) => {
         !hasSideEffects(node.left, SideEffectOptions.ConsiderIdentityMutating)
       ) {
         const divisor = Number(node.right.text);
-        // Check if divisor is a positive power of 2:
         // n > 0 && Math.log2(n) % 1 === 0 guarantees exact representation
         if (divisor > 0 && Math.log2(divisor) % 1 === 0) {
           const reciprocal = 1 / divisor;

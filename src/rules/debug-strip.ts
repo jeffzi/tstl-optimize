@@ -46,12 +46,15 @@ function isConfiguredGlobalIdentifier(
   }
 
   const symbol = checker.getSymbolAtLocation(identifier);
-  // If symbol lookup fails (e.g., external or unresolved), conservatively treat as a
-  // configured global to avoid stripping calls with ambiguous origins.
+  // The name is already known to be configured for stripping. If symbol lookup fails
+  // (e.g., an ambient or otherwise unresolved global), it is the very global the user asked
+  // to strip, so treat it as a match and strip the call.
   if (symbol === undefined) {
     return true;
   }
 
+  // Symbol resolved: only strip when every declaration is a strip-safe global. A local or
+  // imported binding that shadows the configured name resolves here and is spared.
   return symbol.declarations?.every(isStripSafeGlobalDeclaration) ?? false;
 }
 

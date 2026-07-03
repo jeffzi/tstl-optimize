@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
+import { expect } from "vitest";
 import { OptimizePlugin } from "../src/index";
 
 // ESNext target + lib needed for Iterable<number> to resolve in $range loops,
@@ -84,22 +85,32 @@ function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChai
   return parts.join("\n");
 }
 
-function extractLua(result: tstl.TranspileVirtualProjectResult, options?: CompileOptions): string {
+export function extractTranspiledLua(
+  result: tstl.TranspileVirtualProjectResult,
+  { suffix = "main.lua", context }: { suffix?: string; context?: string } = {},
+): string {
   const errors = result.diagnostics.filter(
     (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
   );
   if (errors.length > 0) {
     const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
-    throw new Error(msgs);
+    const label = context ? `Compilation errors (${context}):\n` : "";
+    throw new Error(`${label}${msgs}`);
   }
-  const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
+  const file = result.transpiledFiles.find((f) => f.outPath.endsWith(suffix));
   if (file === undefined || file.lua === undefined) {
-    throw new Error("No Lua output.");
-  }
-  if (!options?.skipLuaCheck) {
-    checkLuaSyntax(file.lua);
+    const label = context ? ` (${context})` : "";
+    throw new Error(`No Lua output for ${suffix}${label}.`);
   }
   return file.lua;
+}
+
+function extractLua(result: tstl.TranspileVirtualProjectResult, options?: CompileOptions): string {
+  const lua = extractTranspiledLua(result);
+  if (!options?.skipLuaCheck) {
+    checkLuaSyntax(lua);
+  }
+  return lua;
 }
 
 export function compile(source: string, options?: CompileOptions): string {
@@ -220,6 +231,19 @@ export function compileWithSourceMap(
 // A reusable empty source file stub for tests that need a ts.SourceFile context
 // but never inspect its content (e.g. visitor tests that assert on Lua output, not AST).
 export const EMPTY_SOURCE_FILE = ts.createSourceFile("empty.ts", "", ts.ScriptTarget.Latest, true);
+
+export function expectLuaSnippets(
+  lua: string,
+  { contains, excludes = [] }: { contains: readonly string[]; excludes?: readonly string[] },
+): void {
+  for (const snippet of contains) {
+    expect(lua, `expected Lua to contain snippet: ${snippet}`).toContain(snippet);
+  }
+
+  for (const snippet of excludes) {
+    expect(lua, `expected Lua to exclude snippet: ${snippet}`).not.toContain(snippet);
+  }
+}
 
 export function normalizeLua(lua: string): string {
   return lua
