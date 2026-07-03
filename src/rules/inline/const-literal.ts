@@ -1,6 +1,10 @@
 import ts from "typescript";
 import { unwrapTransparent } from "../../ast/ts-ast";
 
+// ---------------------------------------------------------------------------
+// Literal extraction and synthesis
+// ---------------------------------------------------------------------------
+
 export type LiteralKind =
   | { kind: "number"; value: number }
   | { kind: "string"; value: string }
@@ -96,6 +100,10 @@ export function synthesizeLiteralExpression(literal: LiteralKind): ts.Expression
       return literal.value ? ts.factory.createTrue() : ts.factory.createFalse();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Const-initializer resolution
+// ---------------------------------------------------------------------------
 
 type ConstInitializer = {
   declaration: ts.VariableDeclaration;
@@ -273,6 +281,10 @@ export function resolveConstLiteral(
 
   return evaluateConstInitializer(constInitializer.initializer, checker, new Set());
 }
+
+// ---------------------------------------------------------------------------
+// Require-chain resolution
+// ---------------------------------------------------------------------------
 
 /**
  * Describes a `require()` chain resolved from a const binding.

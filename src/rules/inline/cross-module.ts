@@ -10,6 +10,10 @@ import {
 import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import type { InlineTarget } from "./target";
 
+// ---------------------------------------------------------------------------
+// Free-variable detection
+// ---------------------------------------------------------------------------
+
 const CROSS_MODULE_WARNING_MESSAGE = "cross-module function references non-parameter identifiers";
 
 export function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
@@ -30,6 +34,10 @@ export function hasCrossModuleFreeVariable(
   const { blocking } = classifyCrossModuleFreeVariables(nodes, params, sourceDeclaration, checker);
   return blocking.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Identifier classification
+// ---------------------------------------------------------------------------
 
 interface CrossModuleFreeVariableClassification {
   blocking: ts.Identifier[];
@@ -323,6 +331,10 @@ function createCrossModuleRejection(
   }
   return { reject: true };
 }
+
+// ---------------------------------------------------------------------------
+// Cross-module inline resolution
+// ---------------------------------------------------------------------------
 
 /**
  * For each entry in `imports` (keyed by underlying target-module symbol → ImportBinding),

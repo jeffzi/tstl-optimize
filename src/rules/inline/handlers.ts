@@ -21,6 +21,10 @@ import {
 import type { InlineTarget, ReturnValueInlineTarget } from "./target";
 import { getInlineTarget, hasInlineTag } from "./target";
 
+// ---------------------------------------------------------------------------
+// Inline-target resolution
+// ---------------------------------------------------------------------------
+
 function getCallInlineTarget(
   callNode: ts.CallExpression,
   checker: ts.TypeChecker,
@@ -77,6 +81,10 @@ function validateAndClassifyReturnValueInline(
     consumerBindings,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Node handlers
+// ---------------------------------------------------------------------------
 
 export function handleCallExpression(
   node: ts.CallExpression,
@@ -299,6 +307,10 @@ export function handleExpressionStatement(
     consumerBindings,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Annotation stripping and declaration handlers
+// ---------------------------------------------------------------------------
 
 const INLINE_TAG_RE = /^\s*@inline\s*$/;
 

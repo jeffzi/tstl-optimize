@@ -11,6 +11,10 @@ import {
   type UnspillValueTempMatch,
 } from "./match";
 
+// ---------------------------------------------------------------------------
+// Access counting
+// ---------------------------------------------------------------------------
+
 /**
  * Counts how many access slots reference the identifier named `name` across
  * `stmts[startIndex..endIndex]`. Used to verify that the two temp vars are
@@ -106,6 +110,10 @@ function countUnsubstitutableAccesses(
   // Any temp reference outside the reachable patterns makes this > 0 and declines.
   return totalAccesses - 2 * reachablePatterns;
 }
+
+// ---------------------------------------------------------------------------
+// Temp substitution and unspill rewrite
+// ---------------------------------------------------------------------------
 
 /**
  * Replaces all occurrences of `v1[v2]` (matched by name) in `expr` with
@@ -226,6 +234,10 @@ function applyUnspillValueTemp(
 
   return [newValueDecl, newAssign];
 }
+
+// ---------------------------------------------------------------------------
+// Statement-list driver
+// ---------------------------------------------------------------------------
 
 /**
  * Eliminates redundant TSTL compound-assignment temporaries from a flat statement

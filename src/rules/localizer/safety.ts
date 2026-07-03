@@ -4,6 +4,10 @@ import { getElseBranchStatements } from "../../ast/lua-ast";
 import { Walk, walkStatements } from "../../ast/lua-walker";
 import { luaPropertyChain } from "../../ast/scope";
 
+// ---------------------------------------------------------------------------
+// Unsafe-call detection
+// ---------------------------------------------------------------------------
+
 /** Lua stdlib globals that are safe to hoist (flat function tables, no metatables). */
 export const STDLIB_ROOTS: ReadonlySet<string> = new Set([
   "math",
@@ -230,6 +234,10 @@ function walkChainWithUnsafeCalls(
   visitStatement(statement);
 }
 
+// ---------------------------------------------------------------------------
+// Call classification
+// ---------------------------------------------------------------------------
+
 /**
  * Check if a call expression is to a non-stdlib function.
  * Returns false if the callee is provably a stdlib root (e.g., math.ceil).
@@ -299,6 +307,10 @@ export function statementHasUnsafeCallAfterFirstChainAccess(
 
   return { afterFirst: sawCallAfterFirst, betweenAccesses: sawAccessAfterCall };
 }
+
+// ---------------------------------------------------------------------------
+// Chain assignment and intervening calls
+// ---------------------------------------------------------------------------
 
 /**
  * Check if a statement is an assignment where the LHS includes the given chain or a prefix of it.
@@ -512,6 +524,10 @@ export function hasInterveningCallForChain(
 
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Scope and early exit
+// ---------------------------------------------------------------------------
 
 /**
  * Detect control-flow exits that escape the current scope. Nested loops only propagate

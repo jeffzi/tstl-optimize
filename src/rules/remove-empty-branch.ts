@@ -6,6 +6,10 @@ import { Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 import { getTransformedFile } from "./source-file";
 
+// ---------------------------------------------------------------------------
+// Condition safety
+// ---------------------------------------------------------------------------
+
 function isLoopStatement(
   stmt: tstl.Statement,
 ): stmt is tstl.WhileStatement | tstl.RepeatStatement | tstl.ForStatement | tstl.ForInStatement {
@@ -78,6 +82,10 @@ function isSafeEmptyBranchCondition(
     isSafeEmptyBranchCondition(expr.operand, safeIdentifiers)
   );
 }
+
+// ---------------------------------------------------------------------------
+// If-chain pruning and else promotion
+// ---------------------------------------------------------------------------
 
 /**
  * Returns true if all branches of an if/elseif/else chain are empty and have safe removable conditions.
@@ -192,6 +200,10 @@ function recurseIntoIfChain(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Driver and visitor
+// ---------------------------------------------------------------------------
 
 function removeEmptyBranches(
   statements: tstl.Statement[],
