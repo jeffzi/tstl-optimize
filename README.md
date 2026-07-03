@@ -449,8 +449,9 @@ local a, b, c = 1, 2, 3
 
 ### `remove-empty-branch`
 
-Removes empty `if`/`elseif`/`else` branches and promotes a non-empty `else` block when the empty
-`if` branch can be inverted safely. The rule also removes fully empty `if` chains whose conditions are side-effect-free. On by default.
+Removes empty `if`/`elseif`/`else` branches and empty `do` blocks, and promotes a non-empty `else`
+block when the empty `if` branch can be inverted safely. The rule also removes fully empty `if`
+chains whose conditions are side-effect-free. On by default.
 
 ```lua
 -- Before
@@ -1064,7 +1065,7 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 | `rules.math-intrinsics`         | `boolean`                                            | `true`        | Inline math calls as Lua expressions.                                                                                                                                                                     |
 | `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function and block scopes when the initializer is pure.                                                                                                           |
 | `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
-| `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
+| `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and empty `do` blocks, and promote invertible `else` blocks.                                                                                                   |
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
 | `rules.inline`                  | `boolean \| { enabled?: boolean; strict?: boolean; warnCrossModule?: boolean }` | `true`        | Inline `@inline` functions at call sites, including cross-module. Pass `{ enabled: false }` to disable. See [`inline`](#inline) and [Strict mode](#strict-mode). |
 | `rules.localizer`               | `boolean \| LocalizerConfig`                         | `true`        | Hoist repeated table-chain lookups into locals; hoists stdlib roots only by default. See the `localizer` section for `include` and `exclude` options.                                                     |
