@@ -12,7 +12,7 @@ import {
   resolveConstantFromOptions,
 } from "../src/compose";
 import { OptimizePlugin } from "../src/index";
-import { normalizeLua } from "./helpers";
+import { extractTranspiledLua, normalizeLua } from "./helpers";
 
 /** Loose visitor type matching the merge protocol (undefined = "not handled"). */
 type LooseVisitor = (node: ts.Node, context: tstl.TransformationContext) => unknown;
@@ -73,22 +73,8 @@ function transpileWithOwner(
   });
 }
 
-/** Extract the Lua for a specific outPath suffix from a transpile result, throwing on errors. */
 function extractLua(result: tstl.TranspileVirtualProjectResult, suffix = "main.lua"): string {
-  const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
-  );
-  if (errors.length > 0) {
-    const messages = errors.map((d) =>
-      typeof d.messageText === "string" ? d.messageText : d.messageText.messageText,
-    );
-    throw new Error(messages.join("\n"));
-  }
-  const file = result.transpiledFiles.find((f) => f.outPath.endsWith(suffix));
-  if (file === undefined || file.lua === undefined) {
-    throw new Error(`No Lua output for ${suffix}.`);
-  }
-  return file.lua;
+  return extractTranspiledLua(result, { suffix });
 }
 
 /**

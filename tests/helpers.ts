@@ -85,22 +85,32 @@ function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChai
   return parts.join("\n");
 }
 
-function extractLua(result: tstl.TranspileVirtualProjectResult, options?: CompileOptions): string {
+export function extractTranspiledLua(
+  result: tstl.TranspileVirtualProjectResult,
+  { suffix = "main.lua", context }: { suffix?: string; context?: string } = {},
+): string {
   const errors = result.diagnostics.filter(
     (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
   );
   if (errors.length > 0) {
     const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
-    throw new Error(msgs);
+    const label = context ? `Compilation errors (${context}):\n` : "";
+    throw new Error(`${label}${msgs}`);
   }
-  const file = result.transpiledFiles.find((f) => f.outPath.endsWith("main.lua"));
+  const file = result.transpiledFiles.find((f) => f.outPath.endsWith(suffix));
   if (file === undefined || file.lua === undefined) {
-    throw new Error("No Lua output.");
-  }
-  if (!options?.skipLuaCheck) {
-    checkLuaSyntax(file.lua);
+    const label = context ? ` (${context})` : "";
+    throw new Error(`No Lua output for ${suffix}${label}.`);
   }
   return file.lua;
+}
+
+function extractLua(result: tstl.TranspileVirtualProjectResult, options?: CompileOptions): string {
+  const lua = extractTranspiledLua(result);
+  if (!options?.skipLuaCheck) {
+    checkLuaSyntax(lua);
+  }
+  return lua;
 }
 
 export function compile(source: string, options?: CompileOptions): string {
