@@ -400,7 +400,7 @@ non-literal arguments fall through to `math.max` / `math.min`.
 
 ### `dead-local`
 
-Removes unused single-name local declarations inside function bodies when the initializer is pure.
+Removes unused single-name local declarations inside function and block scopes (do/while/repeat/for bodies, if/else blocks) when the initializer is pure.
 If code overwrites the variable before any read, the rule keeps the local and removes only the
 initializer. On by default.
 
@@ -1061,7 +1061,7 @@ The plugin tags all diagnostics with `source: "tstl-optimize"` and one of the co
 | `rules.constant-propagation`    | `boolean`                                            | `true`        | Substitute literal values for single-assignment locals whose initializer is a `boolean`, `number`, or `string` literal, including imported constants.                                                     |
 | `rules.constant-folding`        | `boolean`                                            | `true`        | Evaluate side-effect-free constant arithmetic, comparison, logical, unary, and string expressions.                                                                                                        |
 | `rules.math-intrinsics`         | `boolean`                                            | `true`        | Inline math calls as Lua expressions.                                                                                                                                                                     |
-| `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function bodies when the initializer is pure.                                                                                                                     |
+| `rules.dead-local`              | `boolean`                                            | `true`        | Remove unused single-name locals inside function and block scopes when the initializer is pure.                                                                                                           |
 | `rules.merge-locals`            | `boolean`                                            | `true`        | Merge consecutive pure single-name local declarations when the merged assignment preserves semantics.                                                                                                     |
 | `rules.remove-empty-branch`     | `boolean`                                            | `true`        | Remove empty `if`/`elseif`/`else` branches and promote invertible `else` blocks.                                                                                                                          |
 | `rules.loop-rebase`             | `boolean`                                            | `true`        | Convert 0-based loops to 1-based.                                                                                                                                                                         |
@@ -1160,7 +1160,7 @@ details.
 
 ## Benchmarks
 
-Microbenchmarks for `math-intrinsics`, `localizer`, `loop-rebase`, and `inline` live in the
+Microbenchmarks for `constant-propagation`, `math-intrinsics`, `localizer`, `loop-rebase`, `inline`, and `unspill` live in the
 [`benchmark/`](benchmark/) directory and run via `npm run bench`. See
 [`benchmark/README.md`](benchmark/README.md) for measured speedups on PUC-Rio Lua 5.1 and LuaJIT.
 
