@@ -41,25 +41,36 @@ function countNameAccesses(
 }
 
 /**
- * Counts bare identifier references to `v1Name` or `v2Name` inside an expression,
- * excluding those that are the table or index component of a matching `v1[v2]`
- * TableIndexExpression.
+ * Counts unsubstitutable references to `v1Name` or `v2Name` inside an expression.
  *
- * A "bare" access is any Identifier that would be orphaned if the `local v1, v2 = base, key`
- * declaration is dropped during the unspill fold. These must be detected and cause the fold
- * to be declined.
+ * Uses `forEachAccess` to count ALL accesses (fail-closed against unknown node kinds),
+ * then subtracts the number of reachable `v1[v2]` patterns that `substituteTemps`
+ * will rewrite. Any unsubstitutable accesses would be orphaned if the
+ * `local v1, v2 = base, key` declaration is dropped, so they cause the fold to decline.
+ *
+ * A genuine fold has (total accesses == 2 * reachablePatterns), so this function returns 0
+ * and the existing gates at the call sites remain satisfied.
  */
-function countBareAccesses(expr: tstl.Expression, v1Name: string, v2Name: string): number {
-  let count = 0;
-
-  function walk(node: tstl.Expression): void {
-    if (tstl.isIdentifier(node)) {
-      if (node.text === v1Name || node.text === v2Name) {
-        count++;
-      }
-      return;
+function countUnsubstitutableAccesses(
+  expr: tstl.Expression,
+  v1Name: string,
+  v2Name: string,
+): number {
+  // Count ALL accesses using the full-coverage walker forEachAccess.
+  // Wrap the expression in a synthetic return statement to walk it.
+  let totalAccesses = 0;
+  const synthStmt = tstl.createReturnStatement([expr]);
+  forEachAccess(synthStmt, ({ identifier }) => {
+    if (identifier.text === v1Name || identifier.text === v2Name) {
+      totalAccesses++;
     }
+  });
 
+  // Count only the v1[v2] patterns that substituteTemps CAN rewrite
+  // (those reachable via the TableIndexExpression + BinaryExpression recursion spine).
+  let reachablePatterns = 0;
+
+  function countReachable(node: tstl.Expression): void {
     if (tstl.isTableIndexExpression(node)) {
       // Check if this is exactly our v1[v2] pattern
       if (
@@ -68,29 +79,33 @@ function countBareAccesses(expr: tstl.Expression, v1Name: string, v2Name: string
         node.table.text === v1Name &&
         node.index.text === v2Name
       ) {
-        // This is a v1[v2] pattern — don't count the table and index as bare accesses.
-        // These will be substituted away, so they don't represent bare references that
-        // would be orphaned if the decl is dropped.
+        // This is a reachable v1[v2] pattern that substituteTemps will rewrite.
+        reachablePatterns++;
         return;
       }
 
-      // Not a matching v1[v2] pattern — recurse into table and index separately
-      walk(node.table);
-      walk(node.index);
+      // Not a matching v1[v2] pattern — recurse into table and index
+      countReachable(node.table);
+      countReachable(node.index);
       return;
     }
 
     if (tstl.isBinaryExpression(node)) {
-      walk(node.left);
-      walk(node.right);
+      countReachable(node.left);
+      countReachable(node.right);
       return;
     }
 
-    // Other expression types: no further recursion needed
+    // Other expression types: no further recursion
   }
 
-  walk(expr);
-  return count;
+  countReachable(expr);
+
+  // Return the count of accesses not covered by reachable substitutable patterns.
+  // A genuine fold has totalAccesses == 2 * reachablePatterns (every v1/v2 access
+  // is inside a substitutable v1[v2]), so this returns 0 and the fold proceeds.
+  // Any temp reference outside the reachable patterns makes this > 0 and declines.
+  return totalAccesses - 2 * reachablePatterns;
 }
 
 /**
@@ -254,8 +269,8 @@ function unspillFlat(
 
       // Also check for bare v1/v2 reads in the value-temp init and assignment RHS,
       // which would be orphaned if the `local v1, v2 = base, key` decl is dropped.
-      const bareInInit = countBareAccesses(valueInit, v1Name, v2Name);
-      const bareInRhs = countBareAccesses(vtMatch.assignStmt.right[0], v1Name, v2Name);
+      const bareInInit = countUnsubstitutableAccesses(valueInit, v1Name, v2Name);
+      const bareInRhs = countUnsubstitutableAccesses(vtMatch.assignStmt.right[0], v1Name, v2Name);
 
       if (v1CountBeyond === 0 && v2CountBeyond === 0 && bareInInit === 0 && bareInRhs === 0) {
         const [newValueDecl, newAssign] = applyUnspillValueTemp(vtMatch);
@@ -283,7 +298,7 @@ function unspillFlat(
 
     // Also check for bare v1/v2 reads in the assignment RHS, which would be orphaned
     // if the `local v1, v2 = base, key` decl is dropped.
-    const bareInRhs = countBareAccesses(match.assignStmt.right[0], v1Name, v2Name);
+    const bareInRhs = countUnsubstitutableAccesses(match.assignStmt.right[0], v1Name, v2Name);
 
     /* v8 ignore next -- TSTL's 2-temp statement form never references temps beyond the assignment */
     if (v1CountBeyond > 0 || v2CountBeyond > 0 || bareInRhs > 0) {
