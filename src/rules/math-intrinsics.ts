@@ -301,7 +301,6 @@ export const createVisitors: RuleFactory = (checker, config) => {
         !hasSideEffects(node.left, SideEffectOptions.ConsiderIdentityMutating)
       ) {
         const divisor = Number(node.right.text);
-        // Check if divisor is a positive power of 2:
         // n > 0 && Math.log2(n) % 1 === 0 guarantees exact representation
         if (divisor > 0 && Math.log2(divisor) % 1 === 0) {
           const reciprocal = 1 / divisor;

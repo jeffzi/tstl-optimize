@@ -72,7 +72,6 @@ function countUnsubstitutableAccesses(
 
   function countReachable(node: tstl.Expression): void {
     if (tstl.isTableIndexExpression(node)) {
-      // Check if this is exactly our v1[v2] pattern
       if (
         tstl.isIdentifier(node.table) &&
         tstl.isIdentifier(node.index) &&
@@ -129,7 +128,6 @@ function substituteTemps(
   }
 
   if (tstl.isTableIndexExpression(expr)) {
-    // Check if this is exactly our v1[v2] pattern
     if (
       tstl.isIdentifier(expr.table) &&
       tstl.isIdentifier(expr.index) &&
@@ -192,10 +190,7 @@ function rebuildLhs(
 function applyUnspill(match: UnspillMatch): tstl.AssignmentStatement {
   const { assignStmt, base, key, v1Name, v2Name } = match;
 
-  // Build the new LHS: base[key]
   const newLhs = rebuildLhs(assignStmt, base, key);
-
-  // Build the new RHS: substitute all v1[v2] → base[key] in the original RHS
   const newRhs = substituteTemps(assignStmt.right[0], v1Name, v2Name, base, key);
 
   return withPositionFrom(tstl.createAssignmentStatement([newLhs], [newRhs]), match.declStmt);

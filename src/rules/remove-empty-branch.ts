@@ -211,7 +211,6 @@ function removeEmptyBranches(
       // Try to promote else block when if-block is empty
       promoteElseBlock(statements, i);
 
-      // Check if entire if-chain is removable
       if (isRemovableIfChain(stmt, safeIdentifiers)) {
         statements.splice(i, 1);
         continue;

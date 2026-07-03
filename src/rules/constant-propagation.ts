@@ -66,10 +66,10 @@ function propagateScope(statements: tstl.Statement[]): void {
     }
   }
 
-  // Build a name→symbolId index so symbolId-less writes can conservatively
-  // disqualify candidates that share the same declared name. No TS input
-  // currently produces symbolId-less writes, but plugin-emitted code can
-  // (see dead-local commit 53482b1 for the same bug class).
+  // Name→symbolId index so symbolId-less writes can conservatively disqualify candidates
+  // that share the same declared name. No TS input currently produces symbolId-less
+  // writes, but plugin-emitted code can — dead-local's identifier-access check in
+  // index.ts guards against the same bug class.
   /* v8 ignore start -- defensive: no TS-reachable path produces symbolId-less writes */
   const candidatesByName = new Map<string, number[]>();
   for (const [symbolId, candidate] of candidates) {

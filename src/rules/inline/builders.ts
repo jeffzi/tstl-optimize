@@ -424,10 +424,10 @@ export function inlineExpressionBody(
   }
   const { substitutions, imports } = classification;
 
-  // Check whether the consumer already has in-scope locals that back any of the
-  // require() bindings in `imports`.  For those symbols, skip synthesizing a fresh
-  // require chain and instead let TSTL resolve the identifier via symbolIdMaps —
-  // after we pre-register the target alias symbol → consumer's SymbolId mapping.
+  // For require() bindings in `imports` that the consumer already has in-scope locals
+  // backing, skip synthesizing a fresh require chain and instead let TSTL resolve the
+  // identifier via symbolIdMaps — after we pre-register the target alias symbol →
+  // consumer's SymbolId mapping.
   const consumerBindings = resolveConsumerBindings(imports, callNode, checker);
   const { skipSymbols, cleanup } = registerConsumerBindings(consumerBindings, context);
 

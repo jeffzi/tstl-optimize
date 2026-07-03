@@ -62,7 +62,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     };
   }
 
-  // Build require info with body indices for insertion point logic
   const requireInfos = new Map<string, RequireInfo>();
   for (const [moduleVar, binding] of requireBindings) {
     const index = ast.body.indexOf(binding.node);
@@ -117,7 +116,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     }
   }
 
-  // Build map of all existing locals at chunk level for collision detection
   const existingLocals = collectExistingLocals(ast);
 
   // Scan AST for member accesses to hoist, collecting them in source order
@@ -181,7 +179,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     }
   }
 
-  // Build edits for insertions (new hoists) and replacements (access rewrites)
   const edits: Edit[] = [];
   const localizedSymbols = new Map<string, { moduleVar: string; memberName: string }>();
 
