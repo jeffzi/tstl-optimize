@@ -109,13 +109,13 @@ export function mergeVisitorMaps(primary: tstl.Visitors, fallback: tstl.Visitors
   const merged: Record<number, RegisteredVisitor> = {};
 
   // Index fallback by numeric kind for O(1) lookup during the primary sweep.
-  // Guard against explicit `undefined` values: Object.entries includes keys set to
-  // `undefined` (e.g. a caller's `{ [kind]: flag ? fn : undefined }`), so filter
+  // Guard against explicit `undefined` and `null` values: Object.entries includes keys set to
+  // `undefined` or `null` (e.g. a caller's `{ [kind]: flag ? fn : null }`), so filter
   // them out rather than propagating them into the merged map.
   const fallbackByKind = new Map<number, RegisteredVisitor>();
   for (const [kindStr, visitor] of Object.entries(fallback)) {
-    if (visitor !== undefined) {
-      // visitor is not undefined due to the guard above, so it's safely a RegisteredVisitor
+    if (visitor != null) {
+      // visitor is neither undefined nor null due to the guard above, so it's safely a RegisteredVisitor
       fallbackByKind.set(Number(kindStr), visitor as RegisteredVisitor);
     }
   }

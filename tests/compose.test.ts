@@ -356,6 +356,25 @@ describe("mergeVisitorMaps", () => {
       expect(ts.SyntaxKind.CallExpression in merged).toBe(false);
     });
   });
+
+  describe("when a visitor entry is explicit null", () => {
+    // An untyped JS caller could build a map with explicit null values, e.g.
+    // `{ [kind]: flag ? fn : null }`. The fallback-map filter must exclude null
+    // the same way it excludes undefined to avoid casting null into the merged map.
+    const withNull = {
+      [ts.SyntaxKind.CallExpression]: null as unknown as tstl.Visitors[keyof tstl.Visitors],
+    } as tstl.Visitors;
+    const empty: tstl.Visitors = {};
+
+    it.each<[label: string, primary: tstl.Visitors, fallback: tstl.Visitors]>([
+      ["primary", withNull, empty],
+      ["fallback", empty, withNull],
+    ])("omits the kind from the merged map (in %s)", (_label, primary, fallback) => {
+      const merged = mergeVisitorMaps(primary, fallback);
+
+      expect(ts.SyntaxKind.CallExpression in merged).toBe(false);
+    });
+  });
 });
 
 describe("target resolution", () => {
