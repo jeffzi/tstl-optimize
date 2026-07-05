@@ -16,6 +16,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -41,6 +43,12 @@ jobs:
       - name: Check unused
         run: npm run check:unused
 
+      - name: Spell check
+        run: npm run check:spelling
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
       - name: Install Lua
         uses: leafo/gh-actions-lua@v13
         with:
@@ -48,6 +56,19 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Fallow
+        uses: fallow-rs/fallow@v2
+        with:
+          command: audit
+          gate: new-only
+          dead-code-baseline: fallow-baselines/dead-code.json
+          health-baseline: fallow-baselines/health.json
+          dupes-baseline: fallow-baselines/dupes.json
+          fail-on-issues: true
+
+      - name: Check package
+        run: npm run check:package
 
       - name: Test
         run: npm run test:unit

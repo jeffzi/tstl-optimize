@@ -1,0 +1,22 @@
+{
+  "clone_groups": [
+    "src/ast/lua-walker.ts:132-139|src/ast/lua-walker.ts:141-148",
+    "src/ast/scope.ts:106-110|src/rules/localizer/hoist.ts:57-61",
+    "src/ast/scope.ts:268-288|src/rules/localizer/array-elements.ts:44-63",
+    "src/config.ts:287-298|src/config.ts:303-314",
+    "src/lua-transforms/hoist-cross-module.ts:135-139|src/lua-transforms/hoist-cross-module.ts:290-294",
+    "src/rules/hoist-require.ts:143-150|src/rules/localizer/index.ts:202-207",
+    "src/rules/hoist-require.ts:150-161|src/rules/localizer/index.ts:207-217",
+    "src/rules/inline/builders.ts:328-336|src/rules/inline/builders.ts:657-670",
+    "src/rules/inline/builders.ts:347-356|src/rules/inline/builders.ts:631-639",
+    "src/rules/inline/builders.ts:421-432|src/rules/inline/handlers.ts:57-68",
+    "src/rules/inline/builders.ts:589-604|src/rules/inline/destructure-builders.ts:39-58",
+    "src/rules/inline/handlers.ts:277-287|src/rules/inline/handlers.ts:57-67",
+    "src/rules/inline/handlers.ts:140-153|src/rules/inline/handlers.ts:206-219",
+    "src/rules/inline/lua-substitute.ts:187-191|src/rules/inline/lua-substitute.ts:74-78",
+    "src/rules/math-intrinsics.ts:222-227|src/rules/math-intrinsics.ts:234-239|src/rules/math-intrinsics.ts:246-253",
+    "src/rules/unspill/match.ts:136-158|src/rules/unspill/match.ts:188-212",
+    "tests/helpers.ts:159-163|tests/helpers.ts:92-96",
+    "tests/sourcemap-helpers.ts:183-188|tests/sourcemap-helpers.ts:219-224"
+  ]
+}

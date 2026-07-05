@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": ["scripts/*.ts", "examples/*.ts", "benchmark/*.ts"],
+  "ignorePatterns": ["**/*.generated.ts", "benchmark/lua/**", "benchmark/lua-jit/**"],
+  "ignoreDependencies": [
+    "@typescript-to-lua/language-extensions",
+    "@arethetypeswrong/cli",
+    "bit",
+    "cspell",
+    "dprint",
+    "fallow",
+    "lefthook",
+    "lua-types",
+    "luamark",
+    "luamark-types",
+    "markdownlint-cli2",
+    "publint"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "duplicate-exports": "off"
+  }
+}

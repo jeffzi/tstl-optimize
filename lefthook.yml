@@ -2,7 +2,7 @@ pre-commit:
   commands:
     check:
       glob: "**/*.{ts,js,json}"
-      run: npx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      run: npx biome check --write --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
       stage_fixed: true
     dprint:
       glob: "**/*.md"
@@ -18,6 +18,15 @@ pre-commit:
     unused:
       glob: "**/*.{ts,js,json}"
       run: npx knip --no-progress
+    fallow:
+      glob: "**/*.{ts,js,json}"
+      run: npx fallow audit --quiet --dead-code-baseline fallow-baselines/dead-code.json --health-baseline fallow-baselines/health.json --dupes-baseline fallow-baselines/dupes.json
+    spelling:
+      glob: "**/*.{ts,md}"
+      run: npx cspell --no-progress --no-summary {staged_files}
+    package:
+      glob: "package.json"
+      run: npx publint --level error && npx attw --pack . --ignore-rules cjs-only-exports-default no-resolution --quiet
     actionlint:
       glob: ".github/workflows/*.yml"
       run: actionlint {staged_files}
