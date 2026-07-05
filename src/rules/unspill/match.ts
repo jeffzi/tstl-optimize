@@ -133,31 +133,21 @@ export function matchUnspillValueTemp(
   }
 
   // Third stmt: v1[v2] = <rhs>
-  if (assignStmt === undefined || !tstl.isAssignmentStatement(assignStmt)) {
+  const validatedAssign = validateIndexLhs(assignStmt, v1Name, v2Name);
+  if (validatedAssign === undefined) {
     return undefined;
   }
 
-  /* v8 ignore next -- TSTL always emits exactly one LHS for indexed compound-assignment */
-  if (assignStmt.left.length !== 1) {
-    return undefined;
-  }
-
-  const lhs = assignStmt.left[0];
-  /* v8 ignore next -- TSTL always emits a TableIndexExpression with Identifier table and index */
-  if (
-    !tstl.isTableIndexExpression(lhs) ||
-    !tstl.isIdentifier(lhs.table) ||
-    !tstl.isIdentifier(lhs.index)
-  ) {
-    return undefined;
-  }
-
-  /* v8 ignore next -- TSTL always emits matching temp names in the following assignment */
-  if (lhs.table.text !== v1Name || lhs.index.text !== v2Name) {
-    return undefined;
-  }
-
-  return { declStmt, valueDeclStmt, valueInit, assignStmt, base, key, v1Name, v2Name };
+  return {
+    declStmt,
+    valueDeclStmt,
+    valueInit,
+    assignStmt: validatedAssign,
+    base,
+    key,
+    v1Name,
+    v2Name,
+  };
 }
 
 /**
@@ -185,17 +175,46 @@ export function matchUnspillPair(
   const assignStmt = stmts[index + 1];
 
   // Second stmt: v1[v2] = <rhs>
-  if (assignStmt === undefined || !tstl.isAssignmentStatement(assignStmt)) {
+  const validatedAssign = validateIndexLhs(assignStmt, v1Name, v2Name);
+  if (validatedAssign === undefined) {
     return undefined;
   }
 
-  // Exactly one LHS of the form v1[v2]
+  // RHS must contain a read of v1[v2] (the original value being modified).
+  // right.length check: TSTL always emits a single RHS expression for compound assignments.
+  /* v8 ignore next -- TSTL always emits exactly one RHS expression for compound assignments */
+  if (validatedAssign.right.length !== 1) {
+    return undefined;
+  }
+
+  /* v8 ignore next -- TSTL always emits v1[v2] as the left operand of the RHS expression */
+  if (!rhsContainsIndexRead(validatedAssign.right[0], v1Name, v2Name)) {
+    return undefined;
+  }
+
+  return { declStmt, assignStmt: validatedAssign, base, key, v1Name, v2Name };
+}
+
+/**
+ * Validates that `stmt` is an AssignmentStatement whose single LHS is a
+ * `v1[v2]` TableIndexExpression with Identifier table and index matching
+ * the given temp names. Returns the narrowed statement or `undefined`.
+ */
+function validateIndexLhs(
+  stmt: tstl.Statement | undefined,
+  v1Name: string,
+  v2Name: string,
+): tstl.AssignmentStatement | undefined {
+  if (stmt === undefined || !tstl.isAssignmentStatement(stmt)) {
+    return undefined;
+  }
+
   /* v8 ignore next -- TSTL always emits exactly one LHS for indexed compound-assignment */
-  if (assignStmt.left.length !== 1) {
+  if (stmt.left.length !== 1) {
     return undefined;
   }
 
-  const lhs = assignStmt.left[0];
+  const lhs = stmt.left[0];
   /* v8 ignore next -- TSTL always emits a TableIndexExpression with Identifier table and index */
   if (
     !tstl.isTableIndexExpression(lhs) ||
@@ -205,25 +224,12 @@ export function matchUnspillPair(
     return undefined;
   }
 
-  // LHS index must reference our exact temp identifiers by name
   /* v8 ignore next -- TSTL always emits matching temp names in the following assignment */
   if (lhs.table.text !== v1Name || lhs.index.text !== v2Name) {
     return undefined;
   }
 
-  // RHS must contain a read of v1[v2] (the original value being modified).
-  // right.length check: TSTL always emits a single RHS expression for compound assignments.
-  /* v8 ignore next -- TSTL always emits exactly one RHS expression for compound assignments */
-  if (assignStmt.right.length !== 1) {
-    return undefined;
-  }
-
-  /* v8 ignore next -- TSTL always emits v1[v2] as the left operand of the RHS expression */
-  if (!rhsContainsIndexRead(assignStmt.right[0], v1Name, v2Name)) {
-    return undefined;
-  }
-
-  return { declStmt, assignStmt, base, key, v1Name, v2Name };
+  return stmt;
 }
 
 /**

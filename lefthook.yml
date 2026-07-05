@@ -17,7 +17,7 @@ pre-commit:
       run: npm run typecheck
     fallow:
       glob: "**/*.{ts,js,json}"
-      run: npx fallow audit --quiet --dead-code-baseline fallow-baselines/dead-code.json --health-baseline fallow-baselines/health.json --dupes-baseline fallow-baselines/dupes.json
+      run: npx fallow audit --quiet
     spelling:
       glob: "**/*.{ts,md}"
       run: npx cspell --no-progress --no-summary {staged_files}

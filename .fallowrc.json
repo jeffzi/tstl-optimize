@@ -20,6 +20,10 @@
   "rules": {
     "duplicate-exports": "off"
   },
+  "audit": {
+    "healthBaseline": "fallow-baselines/health.json",
+    "dupesBaseline": "fallow-baselines/dupes.json"
+  },
   "health": {
     "thresholdOverrides": [
       {

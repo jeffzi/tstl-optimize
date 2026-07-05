@@ -5,6 +5,7 @@ import { Walk, walkStatements } from "../ast/lua-walker";
 import type { RuleFactory } from "../config";
 import { extractRequirePattern, mapLuaStatements } from "./inline/lua-substitute";
 import { allocateHoistName } from "./localizer/hoist";
+import { transformSourceFile } from "./source-file";
 
 function requirePatternKey(requirePath: string, memberName: string | undefined): string {
   return memberName !== undefined ? `${requirePath}:${memberName}` : requirePath;
@@ -142,25 +143,9 @@ export const createVisitors: RuleFactory = (_checker, config) => {
 
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context: tstl.TransformationContext) => {
-      const result = context.superTransformNode(node);
-      /* v8 ignore next -- result is always an array from superTransformNode in practice */
-      const fileNode = Array.isArray(result) ? result[0] : result;
-      /* istanbul ignore else -- fileNode is always a tstl.File in practice */
-      if (fileNode && tstl.isFile(fileNode)) {
-        processFile(fileNode, context);
-        return fileNode;
-      }
-      // Fallback: superTransformStatements still routes each statement through the
-      // full plugin visitor chain, so other rules still fire.
-      /* v8 ignore start -- defensive fallback; superTransformNode always returns a File in practice */
-      const stmts: tstl.Statement[] = [];
-      for (const s of node.statements) {
-        stmts.push(...context.superTransformStatements(s));
-      }
-      const file = tstl.createFile(stmts, context.usedLuaLibFeatures, "", node);
+      const file = transformSourceFile(node, context);
       processFile(file, context);
       return file;
-      /* v8 ignore stop */
     },
   };
 };

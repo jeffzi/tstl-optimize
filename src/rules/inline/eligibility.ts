@@ -2,7 +2,7 @@ import { AccessKind, getAccessKind } from "ts-api-utils";
 import ts from "typescript";
 import { hasSideEffects, SideEffectOptions } from "../../ast/ts-ast";
 import { hasCrossModuleFreeVariable, isDescendant } from "./cross-module";
-import { InlineDiagnosticCode } from "./diagnostics";
+import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import type {
   ExpressionInlineTarget,
   ReturnValueInlineTarget,
@@ -17,6 +17,21 @@ import { getInlineTarget, resolveSymbol } from "./target";
 interface InlineRejection {
   reason: string;
   code: number;
+}
+
+/**
+ * Checks an eligibility result and, if the inline was rejected, pushes
+ * a diagnostic and returns `false`. Returns `true` when inlining may proceed.
+ */
+export function checkInlineEligibility(
+  result: InlineRejection | undefined,
+  callNode: ts.CallExpression,
+  diagnostics: ts.Diagnostic[],
+  strict: boolean,
+): boolean {
+  if (result === undefined) return true;
+  diagnostics.push(createInlineWarning(callNode, result.reason, strict, result.code));
+  return false;
 }
 
 function isSupportedInlineBindingPattern(name: ts.BindingName): boolean {

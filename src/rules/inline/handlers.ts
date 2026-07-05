@@ -14,6 +14,7 @@ import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import {
   canEraseInlineDeclaration,
   canInlineStatements,
+  checkInlineEligibility,
   isExported,
   isModuleScopeDeclaration,
   isPureAtVoidSite,
@@ -54,11 +55,14 @@ function validateAndClassifyReturnValueInline(
       consumerBindings: Map<ts.Symbol, ts.Symbol>;
     }
   | undefined {
-  const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
+  if (
+    !checkInlineEligibility(
+      canInlineStatements(target, callNode, checker),
+      callNode,
+      context.diagnostics,
+      strict,
+    )
+  ) {
     return undefined;
   }
 
@@ -274,11 +278,14 @@ export function handleExpressionStatement(
     return undefined;
   }
 
-  const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
+  if (
+    !checkInlineEligibility(
+      canInlineStatements(target, callNode, checker),
+      callNode,
+      context.diagnostics,
+      strict,
+    )
+  ) {
     return undefined;
   }
 

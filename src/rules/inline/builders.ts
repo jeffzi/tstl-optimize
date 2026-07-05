@@ -4,9 +4,9 @@ import * as tstl from "typescript-to-lua";
 import { hasSideEffects } from "../../ast/ts-ast";
 import type { ImportBinding, LiteralKind } from "./const-literal";
 import { classifyCrossModuleInline, resolveConsumerBindings } from "./cross-module";
-import { createInlineWarning } from "./diagnostics";
 import {
   canInline,
+  checkInlineEligibility,
   computeDirectSubstitutableParams,
   needsEagerArgumentTemps,
 } from "./eligibility";
@@ -418,11 +418,14 @@ export function inlineExpressionBody(
   strict: boolean,
   warnCrossModule: boolean,
 ): tstl.Expression | undefined {
-  const canInlineResult = canInline(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
+  if (
+    !checkInlineEligibility(
+      canInline(target, callNode, checker),
+      callNode,
+      context.diagnostics,
+      strict,
+    )
+  ) {
     return undefined;
   }
 
