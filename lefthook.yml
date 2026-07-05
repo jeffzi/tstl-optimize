@@ -15,9 +15,6 @@ pre-commit:
     typecheck:
       glob: "**/*.ts"
       run: npm run typecheck
-    unused:
-      glob: "**/*.{ts,js,json}"
-      run: npx knip --no-progress
     fallow:
       glob: "**/*.{ts,js,json}"
       run: npx fallow audit --quiet --dead-code-baseline fallow-baselines/dead-code.json --health-baseline fallow-baselines/health.json --dupes-baseline fallow-baselines/dupes.json

@@ -40,8 +40,8 @@ jobs:
             npm run typecheck
           fi
 
-      - name: Check unused
-        run: npm run check:unused
+      - name: Fallow audit
+        run: npm run check:fallow
 
       - name: Spell check
         run: npm run check:spelling
