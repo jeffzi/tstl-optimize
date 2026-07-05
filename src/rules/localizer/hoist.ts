@@ -45,7 +45,7 @@ function isAnyPrefixBound(chain: string, scopeDefs: ReadonlySet<string>): boolea
 }
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
-export function replaceChains(
+function replaceChains(
   statements: readonly tstl.Statement[],
   hoisted: Map<string, tstl.Identifier>,
   shallow: boolean,
@@ -80,7 +80,7 @@ export function replaceChains(
   });
 }
 
-export interface HoistScopeOptions {
+interface HoistScopeOptions {
   reservedNames?: ReadonlySet<string>;
   isRootAllowed?: (root: string) => boolean;
   outDecls?: tstl.VariableDeclarationStatement[];

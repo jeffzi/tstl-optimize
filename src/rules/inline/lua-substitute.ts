@@ -8,7 +8,7 @@ import { deepCloneExpression } from "../../ast/deep-clone";
  * Otherwise the default recursion rebuilds the node with mapped children.
  * Recurses into nested function bodies (e.g. IIFEs from eager-argument evaluation).
  */
-export function mapLuaExpression(
+function mapLuaExpression(
   node: tstl.Expression,
   leafFn: (n: tstl.Expression) => tstl.Expression | undefined,
 ): tstl.Expression {
@@ -337,7 +337,7 @@ export function walkLuaExpression(node: tstl.Expression, visit: (n: tstl.Node) =
 // at function/module scope.
 // ---------------------------------------------------------------------------
 
-export interface RequirePattern {
+interface RequirePattern {
   requirePath: string;
   /** Undefined for a bare `require("path")` without a member access. */
   memberName: string | undefined;

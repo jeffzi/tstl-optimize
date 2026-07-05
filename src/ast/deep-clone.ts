@@ -230,7 +230,7 @@ function cloneIfStatement(ifStmt: tstl.IfStatement): tstl.IfStatement {
 }
 
 /** Deep-clone an array of TSTL Lua statements. */
-export function deepCloneStatements(stmts: tstl.Statement[]): tstl.Statement[] {
+function deepCloneStatements(stmts: tstl.Statement[]): tstl.Statement[] {
   return stmts.map(deepCloneStatement);
 }
 

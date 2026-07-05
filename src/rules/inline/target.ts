@@ -102,7 +102,7 @@ function classifyBody(
   return { kind: "statements", stmts: statements };
 }
 
-export type InlineTargetResult = { target: InlineTarget } | undefined;
+type InlineTargetResult = { target: InlineTarget } | undefined;
 
 function makeTargetResult(
   classified: ClassifiedBody | undefined,

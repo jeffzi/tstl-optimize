@@ -46,7 +46,7 @@ function checkLuaSyntax(lua: string): void {
   }
 }
 
-export interface CompileResult {
+interface CompileResult {
   lua: string;
   diagnostics: ts.Diagnostic[];
 }
@@ -137,7 +137,7 @@ export function compileWithDiagnostics(source: string, options?: CompileOptions)
  */
 export type TracebackTable = Record<number, number>;
 
-export interface SourceMapCompileResult {
+interface SourceMapCompileResult {
   lua: string;
   /** Raw JSON of the external `.lua.map` sourcemap. */
   externalMap: string;

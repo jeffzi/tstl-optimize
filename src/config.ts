@@ -11,7 +11,7 @@ export interface DebugStripConfig {
   namespaces: string[];
 }
 
-export type LocalizerScope = "module" | "function" | "all";
+type LocalizerScope = "module" | "function" | "all";
 
 export interface LocalizerConfig {
   enabled: boolean;
@@ -23,7 +23,7 @@ export interface LocalizerConfig {
 
 export type ConstantValue = boolean | number | string;
 
-export interface ConstantDef {
+interface ConstantDef {
   env: string;
   default: ConstantValue;
 }
@@ -40,9 +40,9 @@ export interface InlineConfig {
   warnCrossModule?: boolean;
 }
 
-export type ConditionalCompilationRuleConfig = boolean | Partial<ConditionalCompilationConfig>;
-export type LocalizerRuleConfig = boolean | Partial<LocalizerConfig>;
-export type DebugStripRuleConfig = boolean | Partial<DebugStripConfig>;
+type ConditionalCompilationRuleConfig = boolean | Partial<ConditionalCompilationConfig>;
+type LocalizerRuleConfig = boolean | Partial<LocalizerConfig>;
+type DebugStripRuleConfig = boolean | Partial<DebugStripConfig>;
 
 export interface RulesConfig {
   "conditional-compilation": ConditionalCompilationRuleConfig;

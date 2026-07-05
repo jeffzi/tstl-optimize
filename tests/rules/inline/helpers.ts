@@ -68,7 +68,7 @@ export function hasDiagnosticCode(diagnostics: { code?: number }[], code: number
   return diagnostics.some((d) => d.code === code);
 }
 
-export function compileMultiFile(
+function compileMultiFile(
   files: Record<string, string>,
   options?: Parameters<typeof compileMultiFileWithDiagnostics>[1],
 ): {

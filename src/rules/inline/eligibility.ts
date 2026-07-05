@@ -55,10 +55,7 @@ export function isModuleScopeDeclaration(node: ts.Node): boolean {
   return false;
 }
 
-export function isCallSiteFullyInlined(
-  callNode: ts.CallExpression,
-  checker: ts.TypeChecker,
-): boolean {
+function isCallSiteFullyInlined(callNode: ts.CallExpression, checker: ts.TypeChecker): boolean {
   const result = getInlineTarget(callNode, checker);
   if (!result) return false;
 
@@ -168,7 +165,7 @@ function countReferences(node: ts.Node, symbol: ts.Symbol, checker: ts.TypeCheck
   return count;
 }
 
-export function analyzeParamUsage(
+function analyzeParamUsage(
   body: ts.Node,
   paramSymbol: ts.Symbol,
   checker: ts.TypeChecker,
@@ -379,7 +376,7 @@ export function canInline(
   return undefined;
 }
 
-export function hasLinearControlFlow(
+function hasLinearControlFlow(
   stmts: readonly ts.Statement[],
   loopBody = false,
 ): InlineRejection | undefined {

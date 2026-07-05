@@ -36,7 +36,7 @@ export type ExprAction =
   | ReturnType<typeof Walk.replaceChildren>;
 
 /** Expression visitor that returns an ExprAction to control traversal. */
-export type ExprVisitor = (expr: tstl.Expression) => ExprAction;
+type ExprVisitor = (expr: tstl.Expression) => ExprAction;
 
 type StmtVisitor = (stmt: tstl.Statement, control: TraversalControl) => void;
 

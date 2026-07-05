@@ -167,7 +167,7 @@ export function compileOptimized(source: string, options?: CompileOptions): stri
 }
 
 /** Compile TypeScript source **without** the optimizer plugin (reference output). */
-export function compileBaseline(source: string, options?: CompileOptions): string {
+function compileBaseline(source: string, options?: CompileOptions): string {
   const result = tstl.transpileVirtualProject({ "main.ts": source }, makeTranspileOptions(options));
   return extractMainLua(result, "baseline");
 }

@@ -48,7 +48,7 @@ export function luaPropertyChain(node: tstl.TableIndexExpression): string | unde
  * - `firstChainUse`: First node (statement) observing each chain, used to position hoisted locals.
  * - `rootIdentifiers`: Original root identifiers from hoisted chains, preserving symbolId.
  */
-export interface ScopeInfo {
+interface ScopeInfo {
   chainCounts: Map<string, number>;
   scopeDefs: Set<string>;
   /** First TableIndexExpression observed for each chain string (in source order). */
@@ -208,7 +208,7 @@ export function collectScopeInfo(
  * - `firstAccess`: First `base[loopVar]` TableIndexExpression observed for each base name,
  *   used to position hoisted locals.
  */
-export interface ArrayElementInfo {
+interface ArrayElementInfo {
   /** Read-count per base name (LHS writes are NOT counted — only reads benefit from localization) */
   counts: Map<string, number>;
   /** Base names that appear as LHS of assignments */
