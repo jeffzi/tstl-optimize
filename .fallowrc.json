@@ -19,5 +19,31 @@
   "ignoreExportsUsedInFile": true,
   "rules": {
     "duplicate-exports": "off"
+  },
+  "health": {
+    "thresholdOverrides": [
+      {
+        "files": ["src/**", "tests/helpers.ts"],
+        "maxCognitive": 30,
+        "maxCyclomatic": 60,
+        "reason": "AST dispatch/walker idiom: exhaustive switch over node kinds and recursive tree walks score high on complexity metrics but stay flat and readable."
+      },
+      {
+        "files": ["src/rules/inline/eligibility.ts"],
+        "functions": ["findFirstParamWithSEOrSE"],
+        "maxCognitive": 45,
+        "maxCyclomatic": 60,
+        "maxCrap": 60,
+        "reason": "Exhaustive hazard scan over every expression node kind; already split in half, further extraction just relocates the load. CRAP tracks cyclomatic (near-full coverage), so its ceiling matches maxCyclomatic."
+      },
+      {
+        "files": ["src/rules/inline/eligibility.ts"],
+        "functions": ["hasLinearControlFlow"],
+        "maxCognitive": 65,
+        "maxCyclomatic": 60,
+        "maxCrap": 60,
+        "reason": "Exhaustive control-flow-shape scan over every statement/expression node kind; flat dispatch whose cognitive score is inherent to the node taxonomy, not nesting."
+      }
+    ]
   }
 }

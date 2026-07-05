@@ -490,6 +490,32 @@ export function canInlineStatements(
 // Side-effect ordering
 // ---------------------------------------------------------------------------
 
+type EvalHazard = { kind: "sideEffect" } | { kind: "seParam"; index: number };
+
+function containsTargetParam(
+  expr: ts.Expression,
+  targetSymbol: ts.Symbol,
+  checker: ts.TypeChecker,
+): boolean {
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (found) return;
+    if (ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isClassExpression(node)) {
+      return;
+    }
+    if (ts.isIdentifier(node)) {
+      const sym = checker.getSymbolAtLocation(node);
+      if (sym === targetSymbol) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(expr);
+  return found;
+}
+
 /**
  * Returns true if a side-effectful sub-expression appears before the parameter's
  * first use in left-to-right evaluation order within the body expression, OR if
@@ -513,33 +539,65 @@ function hasSideEffectBeforeParamUse(
     }
   }
 
-  // Walk the body and find:
-  // 1. If there's a side-effect before the target param's first use
-  // 2. If there's another param with SE arg appearing before target param in eval order
+  function findHazardInCallLike(
+    callee: ts.Expression,
+    args?: ReadonlyArray<ts.Expression>,
+  ): EvalHazard {
+    const calleeResult = findFirstParamWithSEOrSE(callee);
+    if (calleeResult !== undefined) return calleeResult;
+    if (args) {
+      for (const arg of args) {
+        const argResult = findFirstParamWithSEOrSE(arg);
+        if (argResult !== undefined) return argResult;
+      }
+    }
+    return { kind: "sideEffect" };
+  }
+
+  function findHazardInObjectLiteral(obj: ts.ObjectLiteralExpression): EvalHazard | undefined {
+    for (const prop of obj.properties) {
+      if (prop.name?.kind === ts.SyntaxKind.ComputedPropertyName) {
+        const keyResult = findFirstParamWithSEOrSE(
+          (prop.name as ts.ComputedPropertyName).expression,
+        );
+        if (keyResult !== undefined) return keyResult;
+      }
+
+      switch (prop.kind) {
+        case ts.SyntaxKind.PropertyAssignment: {
+          const valueResult = findFirstParamWithSEOrSE((prop as ts.PropertyAssignment).initializer);
+          if (valueResult !== undefined) return valueResult;
+          break;
+        }
+        case ts.SyntaxKind.SpreadAssignment:
+          return { kind: "sideEffect" };
+        case ts.SyntaxKind.ShorthandPropertyAssignment:
+        case ts.SyntaxKind.MethodDeclaration:
+        case ts.SyntaxKind.GetAccessor:
+        case ts.SyntaxKind.SetAccessor:
+          break;
+        /* v8 ignore next -- defensive fallthrough for property kinds not present in valid inline bodies */
+        default:
+          return { kind: "sideEffect" };
+      }
+    }
+    return undefined;
+  }
+
+  function findHazardInConditional(cond: ts.ConditionalExpression): EvalHazard | undefined {
+    const condResult = findFirstParamWithSEOrSE(cond.condition);
+    if (condResult !== undefined) return condResult;
+    const thenResult = findFirstParamWithSEOrSE(cond.whenTrue);
+    const elseResult = findFirstParamWithSEOrSE(cond.whenFalse);
+    if (thenResult !== undefined || elseResult !== undefined) {
+      return { kind: "sideEffect" };
+    }
+    return undefined;
+  }
+
   // TS does not narrow `ts.Expression` from `switch (expr.kind)` into the corresponding node
   // subtype. Each arm casts `expr` to the correct interface — the unavoidable pattern when
   // using the TypeScript compiler API's kind-based dispatch.
-  function containsTargetParam(expr: ts.Expression): boolean {
-    let found = false;
-    function visit(node: ts.Node): void {
-      if (found) return;
-      if (ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isClassExpression(node)) {
-        return;
-      }
-      if (ts.isIdentifier(node)) {
-        const sym = checker.getSymbolAtLocation(node);
-        if (sym === paramSymbols[targetParamIndex]) {
-          found = true;
-          return;
-        }
-      }
-      ts.forEachChild(node, visit);
-    }
-    visit(expr);
-    return found;
-  }
-
-  type EvalHazard = { kind: "sideEffect" } | { kind: "seParam"; index: number };
 
   function findFirstParamWithSEOrSE(expr: ts.Expression): EvalHazard | undefined {
     switch (expr.kind) {
@@ -605,7 +663,7 @@ function hasSideEffectBeforeParamUse(
           (bin.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
             bin.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
             bin.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) &&
-          containsTargetParam(bin.right)
+          containsTargetParam(bin.right, paramSymbols[targetParamIndex], checker)
         ) {
           return { kind: "sideEffect" };
         }
@@ -647,42 +705,23 @@ function hasSideEffectBeforeParamUse(
       // --- Call expression ---
       case ts.SyntaxKind.CallExpression: {
         const call = expr as ts.CallExpression;
-        const calleeResult = findFirstParamWithSEOrSE(call.expression);
-        if (calleeResult !== undefined) return calleeResult;
-        for (const arg of call.arguments) {
-          const argResult = findFirstParamWithSEOrSE(arg);
-          if (argResult !== undefined) return argResult;
-        }
-        return { kind: "sideEffect" };
+        return findHazardInCallLike(call.expression, call.arguments);
       }
 
       // --- New expression ---
       case ts.SyntaxKind.NewExpression: {
         const newExpr = expr as ts.NewExpression;
-        const exprResult = findFirstParamWithSEOrSE(newExpr.expression);
-        if (exprResult !== undefined) return exprResult;
-        if (newExpr.arguments) {
-          for (const arg of newExpr.arguments) {
-            const argResult = findFirstParamWithSEOrSE(arg);
-            if (argResult !== undefined) return argResult;
-          }
-        }
-        return { kind: "sideEffect" };
+        return findHazardInCallLike(newExpr.expression, newExpr.arguments);
       }
 
       // --- Tagged template ---
       case ts.SyntaxKind.TaggedTemplateExpression: {
         const tte = expr as ts.TaggedTemplateExpression;
-        const tagResult = findFirstParamWithSEOrSE(tte.tag);
-        if (tagResult !== undefined) return tagResult;
-        if (tte.template.kind === ts.SyntaxKind.TemplateExpression) {
-          const template = tte.template as ts.TemplateExpression;
-          for (const span of template.templateSpans) {
-            const spanResult = findFirstParamWithSEOrSE(span.expression);
-            if (spanResult !== undefined) return spanResult;
-          }
-        }
-        return { kind: "sideEffect" };
+        const spanExprs =
+          tte.template.kind === ts.SyntaxKind.TemplateExpression
+            ? (tte.template as ts.TemplateExpression).templateSpans.map((s) => s.expression)
+            : undefined;
+        return findHazardInCallLike(tte.tag, spanExprs);
       }
 
       // --- Template expression ---
@@ -708,54 +747,12 @@ function hasSideEffectBeforeParamUse(
       }
 
       // --- Object literal ---
-      case ts.SyntaxKind.ObjectLiteralExpression: {
-        const obj = expr as ts.ObjectLiteralExpression;
-        for (const prop of obj.properties) {
-          if (prop.name?.kind === ts.SyntaxKind.ComputedPropertyName) {
-            const keyResult = findFirstParamWithSEOrSE(
-              (prop.name as ts.ComputedPropertyName).expression,
-            );
-            if (keyResult !== undefined) return keyResult;
-          }
-
-          switch (prop.kind) {
-            case ts.SyntaxKind.PropertyAssignment: {
-              const propAssign = prop as ts.PropertyAssignment;
-              const valueResult = findFirstParamWithSEOrSE(propAssign.initializer);
-              if (valueResult !== undefined) return valueResult;
-              break;
-            }
-            case ts.SyntaxKind.SpreadAssignment:
-              return { kind: "sideEffect" };
-            case ts.SyntaxKind.ShorthandPropertyAssignment:
-            case ts.SyntaxKind.MethodDeclaration:
-            case ts.SyntaxKind.GetAccessor:
-            case ts.SyntaxKind.SetAccessor:
-              break;
-            /* v8 ignore next -- defensive fallthrough for property kinds not present in valid inline bodies */
-            default:
-              return { kind: "sideEffect" };
-          }
-        }
-        return undefined;
-      }
+      case ts.SyntaxKind.ObjectLiteralExpression:
+        return findHazardInObjectLiteral(expr as ts.ObjectLiteralExpression);
 
       // --- Conditional expression ---
-      case ts.SyntaxKind.ConditionalExpression: {
-        const cond = expr as ts.ConditionalExpression;
-        const condResult = findFirstParamWithSEOrSE(cond.condition);
-        if (condResult !== undefined) return condResult;
-
-        const thenResult = findFirstParamWithSEOrSE(cond.whenTrue);
-        const elseResult = findFirstParamWithSEOrSE(cond.whenFalse);
-
-        // If either branch has a param or SE, return side-effect
-        // (params behind conditionals need eager temps)
-        if (thenResult !== undefined || elseResult !== undefined) {
-          return { kind: "sideEffect" };
-        }
-        return undefined;
-      }
+      case ts.SyntaxKind.ConditionalExpression:
+        return findHazardInConditional(expr as ts.ConditionalExpression);
 
       // --- Function definition ---
       case ts.SyntaxKind.FunctionExpression:

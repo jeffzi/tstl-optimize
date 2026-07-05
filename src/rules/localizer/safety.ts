@@ -433,37 +433,35 @@ export function hasTopLevelChainAccess(
   return statements.some((statement) => statementTouchesChain(statement, chain, true));
 }
 
-export function hasInterveningCallForChain(
+/** Returns the index of the first and last statement that touches `chain`, if any. */
+function findChainAccessRange(
   statements: readonly tstl.Statement[],
   chain: string,
   shallow: boolean,
-): boolean {
-  const root = chain.split(".")[0];
-  if (STDLIB_ROOTS.has(root)) {
-    return false;
-  }
+): { first: number; last: number } | undefined {
+  let first: number | undefined;
+  let last: number | undefined;
 
-  let firstAccessIndex: number | undefined;
-  let lastAccessIndex: number | undefined;
-
-  // First pass: record access indices only
   for (const [index, statement] of statements.entries()) {
     if (!statementTouchesChain(statement, chain, shallow)) {
       continue;
     }
-
-    if (firstAccessIndex === undefined) {
-      firstAccessIndex = index;
+    if (first === undefined) {
+      first = index;
     }
-    lastAccessIndex = index;
+    last = index;
   }
 
-  // No accesses found
-  if (firstAccessIndex === undefined || lastAccessIndex === undefined) {
-    return false;
-  }
+  return first === undefined || last === undefined ? undefined : { first, last };
+}
 
-  // Second pass: check safety at each access statement
+/** Checks whether any access statement itself contains an unsafe call relative to the access. */
+function hasUnsafeCallWithinAccessStatements(
+  statements: readonly tstl.Statement[],
+  chain: string,
+  shallow: boolean,
+  lastAccessIndex: number,
+): boolean {
   for (const [index, statement] of statements.entries()) {
     if (!statementTouchesChain(statement, chain, shallow)) {
       continue;
@@ -483,7 +481,15 @@ export function hasInterveningCallForChain(
       return true;
     }
   }
+  return false;
+}
 
+/** Checks for an unsafe call or write to `chain` before the first access statement. */
+function hasUnsafePreAccessState(
+  statements: readonly tstl.Statement[],
+  chain: string,
+  firstAccessIndex: number,
+): boolean {
   // Hoisting via unshift() would place the hoisted local above any pre-access call,
   // capturing a potentially stale snapshot if the call mutates the root. Calls to stdlib
   // functions are known to be safe. Runs regardless of whether reads are single- or
@@ -500,12 +506,16 @@ export function hasInterveningCallForChain(
       return true;
     }
   }
+  return false;
+}
 
-  // Only perform multi-statement intervening checks if there are multiple access statements
-  if (firstAccessIndex >= lastAccessIndex) {
-    return false;
-  }
-
+/** Checks for an unsafe call or write to `chain` between the first and last access statements. */
+function hasUnsafeInterveningGap(
+  statements: readonly tstl.Statement[],
+  chain: string,
+  firstAccessIndex: number,
+  lastAccessIndex: number,
+): boolean {
   // If the first-access statement itself writes the chain, any later read is stale.
   if (statementAssignsToChain(statements[firstAccessIndex], chain)) {
     return true;
@@ -523,6 +533,38 @@ export function hasInterveningCallForChain(
   }
 
   return false;
+}
+
+export function hasInterveningCallForChain(
+  statements: readonly tstl.Statement[],
+  chain: string,
+  shallow: boolean,
+): boolean {
+  const root = chain.split(".")[0];
+  if (STDLIB_ROOTS.has(root)) {
+    return false;
+  }
+
+  const range = findChainAccessRange(statements, chain, shallow);
+  if (range === undefined) {
+    return false;
+  }
+  const { first: firstAccessIndex, last: lastAccessIndex } = range;
+
+  if (hasUnsafeCallWithinAccessStatements(statements, chain, shallow, lastAccessIndex)) {
+    return true;
+  }
+
+  if (hasUnsafePreAccessState(statements, chain, firstAccessIndex)) {
+    return true;
+  }
+
+  // Only perform multi-statement intervening checks if there are multiple access statements
+  if (firstAccessIndex >= lastAccessIndex) {
+    return false;
+  }
+
+  return hasUnsafeInterveningGap(statements, chain, firstAccessIndex, lastAccessIndex);
 }
 
 // ---------------------------------------------------------------------------

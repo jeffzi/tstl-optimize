@@ -85,15 +85,22 @@ function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChai
   return parts.join("\n");
 }
 
+function collectCompileErrorMessages(
+  result: tstl.TranspileVirtualProjectResult,
+): string | undefined {
+  const errors = result.diagnostics.filter(
+    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
+  );
+  if (errors.length === 0) return undefined;
+  return errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+}
+
 export function extractTranspiledLua(
   result: tstl.TranspileVirtualProjectResult,
   { suffix = "main.lua", context }: { suffix?: string; context?: string } = {},
 ): string {
-  const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
-  );
-  if (errors.length > 0) {
-    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+  const msgs = collectCompileErrorMessages(result);
+  if (msgs) {
     const label = context ? `Compilation errors (${context}):\n` : "";
     throw new Error(`${label}${msgs}`);
   }
@@ -156,11 +163,8 @@ function extractSourceMapResult(
   luaFileSuffix: string,
   options?: CompileOptions,
 ): SourceMapCompileResult {
-  const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
-  );
-  if (errors.length > 0) {
-    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+  const msgs = collectCompileErrorMessages(result);
+  if (msgs) {
     throw new Error(msgs);
   }
 

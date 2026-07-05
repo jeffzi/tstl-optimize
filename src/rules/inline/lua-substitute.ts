@@ -67,15 +67,19 @@ function mapLuaExpression(
   return node;
 }
 
+const paramSubstituter =
+  (paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>) =>
+  (n: tstl.Expression): tstl.Expression | undefined => {
+    if (!tstl.isIdentifier(n)) return undefined;
+    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
+    return mapped ? deepCloneExpression(mapped) : undefined;
+  };
+
 export function substituteParams(
   node: tstl.Expression,
   paramMap: Map<tstl.SymbolId, tstl.Expression>,
 ): tstl.Expression {
-  return mapLuaExpression(node, (n) => {
-    if (!tstl.isIdentifier(n)) return undefined;
-    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
-    return mapped ? deepCloneExpression(mapped) : undefined;
-  });
+  return mapLuaExpression(node, paramSubstituter(paramMap));
 }
 
 /**
@@ -184,11 +188,7 @@ export function substituteParamsInStatements(
   statements: readonly tstl.Statement[],
   paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>,
 ): tstl.Statement[] {
-  return mapLuaStatements(statements, (n) => {
-    if (!tstl.isIdentifier(n)) return undefined;
-    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
-    return mapped ? deepCloneExpression(mapped) : undefined;
-  });
+  return mapLuaStatements(statements, paramSubstituter(paramMap));
 }
 
 // ---------------------------------------------------------------------------

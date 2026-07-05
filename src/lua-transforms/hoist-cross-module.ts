@@ -53,7 +53,6 @@ interface PreExistingHoist {
 export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
   const ast = parseLua(luaSource);
 
-  // Collect require bindings at chunk level
   const requireBindings = collectRequireBindings(ast);
   if (requireBindings.size === 0) {
     return {
@@ -62,6 +61,43 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     };
   }
 
+  const requireInfos = buildRequireInfos(ast, requireBindings);
+  const preExistingHoists = collectPreExistingHoists(ast, requireInfos);
+  const declarationLhses = collectDeclarationLhses(ast);
+  const accessesToHoist = collectAccessesToHoist(
+    ast,
+    requireInfos,
+    preExistingHoists,
+    collectExistingLocals(ast),
+    declarationLhses,
+  );
+
+  const { edits, localizedSymbols } = buildHoistEdits(
+    luaSource,
+    requireInfos,
+    preExistingHoists,
+    accessesToHoist,
+  );
+
+  const references = collectAccessReferences(ast, requireInfos, accessesToHoist, declarationLhses);
+  for (const ref of references) {
+    edits.push({
+      offset: ref.offset,
+      length: ref.length,
+      replacement: ref.name,
+    });
+  }
+
+  return {
+    source: applyEdits(luaSource, edits),
+    localizedSymbols,
+  };
+}
+
+function buildRequireInfos(
+  ast: luaparse.Chunk,
+  requireBindings: ReadonlyMap<string, { node: luaparse.LocalStatement; path: string }>,
+): Map<string, RequireInfo> {
   const requireInfos = new Map<string, RequireInfo>();
   for (const [moduleVar, binding] of requireBindings) {
     const index = ast.body.indexOf(binding.node);
@@ -74,8 +110,14 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
       });
     }
   }
+  return requireInfos;
+}
 
-  // Collect pre-existing hoists (consecutive LocalStatements after each require)
+/** Collects consecutive `local foo = ____mod.foo` hoists already present after each require. */
+function collectPreExistingHoists(
+  ast: luaparse.Chunk,
+  requireInfos: ReadonlyMap<string, RequireInfo>,
+): Map<string, PreExistingHoist[]> {
   const preExistingHoists = new Map<string, PreExistingHoist[]>();
   for (const [moduleVar, info] of requireInfos) {
     const hoists: PreExistingHoist[] = [];
@@ -115,34 +157,43 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
       preExistingHoists.set(moduleVar, hoists);
     }
   }
+  return preExistingHoists;
+}
 
-  const existingLocals = collectExistingLocals(ast);
+function matchRequireMember(
+  node: luaparse.Node,
+  requireInfos: ReadonlyMap<string, RequireInfo>,
+  declarationLhses: ReadonlySet<luaparse.Node>,
+): { member: luaparse.MemberExpression; moduleVar: string; memberName: string } | undefined {
+  if (node.type !== "MemberExpression" || declarationLhses.has(node)) return undefined;
+  const member = node as luaparse.MemberExpression;
+  if (member.base.type !== "Identifier") return undefined;
+  const moduleVar = (member.base as luaparse.Identifier).name;
+  if (!requireInfos.has(moduleVar)) return undefined;
+  return { member, moduleVar, memberName: (member.identifier as luaparse.Identifier).name };
+}
 
-  // Scan AST for member accesses to hoist, collecting them in source order
-  const accessesToHoist = new Map<string, { moduleVar: string; order: number }>();
-  const accessesByModule = new Map<string, Set<string>>();
-
-  // First pass: collect all member accesses with their source positions
-  const memberAccesses: Array<{
-    name: string;
-    moduleVar: string;
-    offset: number;
-  }> = [];
-  const declarationLhses = collectDeclarationLhses(ast);
+/**
+ * Scans the AST for member accesses on required modules and returns the first-access
+ * order for each name. Throws on collisions: two modules contributing the same member
+ * name, or a hoisted name shadowing an existing chunk-level local.
+ */
+function collectAccessesToHoist(
+  ast: luaparse.Chunk,
+  requireInfos: ReadonlyMap<string, RequireInfo>,
+  preExistingHoists: ReadonlyMap<string, PreExistingHoist[]>,
+  existingLocals: ReadonlySet<string>,
+  declarationLhses: ReadonlySet<luaparse.Node>,
+): Map<string, { moduleVar: string; order: number }> {
+  const memberAccesses: Array<{ name: string; moduleVar: string; offset: number }> = [];
 
   walkAstNode(ast, (node) => {
-    if (node.type === "MemberExpression" && !declarationLhses.has(node as luaparse.Node)) {
-      const member = node as luaparse.MemberExpression;
-      if (member.base.type === "Identifier") {
-        const moduleVar = (member.base as luaparse.Identifier).name;
-        if (requireInfos.has(moduleVar)) {
-          const memberName = (member.identifier as luaparse.Identifier).name;
-          const preExisting = preExistingHoists.get(moduleVar);
-          if (!preExisting?.some((h) => h.name === memberName)) {
-            const offset = nodeRange(member)[0];
-            memberAccesses.push({ name: memberName, moduleVar, offset });
-          }
-        }
+    const match = matchRequireMember(node, requireInfos, declarationLhses);
+    if (match) {
+      const preExisting = preExistingHoists.get(match.moduleVar);
+      if (!preExisting?.some((h) => h.name === match.memberName)) {
+        const offset = nodeRange(match.member)[0];
+        memberAccesses.push({ name: match.memberName, moduleVar: match.moduleVar, offset });
       }
     }
   });
@@ -150,7 +201,8 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
   // Sort by source offset to get first-access order
   memberAccesses.sort((a, b) => a.offset - b.offset);
 
-  // Now populate accessesToHoist in source order
+  const accessesToHoist = new Map<string, { moduleVar: string; order: number }>();
+  const accessesByModule = new Map<string, Set<string>>();
   for (let i = 0; i < memberAccesses.length; i++) {
     const { name, moduleVar } = memberAccesses[i];
     if (!accessesToHoist.has(name)) {
@@ -164,7 +216,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     moduleSet.add(moduleVar);
   }
 
-  // Detect collisions: two modules same name or shadowing existing local
   for (const [name] of accessesToHoist) {
     const moduleSet = accessesByModule.get(name);
     if (moduleSet && moduleSet.size > 1) {
@@ -179,23 +230,29 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     }
   }
 
+  return accessesToHoist;
+}
+
+/** Builds the `local name = moduleVar.name` insertion edits and the resulting symbol map. */
+function buildHoistEdits(
+  luaSource: string,
+  requireInfos: ReadonlyMap<string, RequireInfo>,
+  preExistingHoists: ReadonlyMap<string, PreExistingHoist[]>,
+  accessesToHoist: ReadonlyMap<string, { moduleVar: string; order: number }>,
+): { edits: Edit[]; localizedSymbols: Map<string, { moduleVar: string; memberName: string }> } {
   const edits: Edit[] = [];
   const localizedSymbols = new Map<string, { moduleVar: string; memberName: string }>();
 
-  // Populate localizedSymbols from pre-existing hoists
   for (const [moduleVar, hoists] of preExistingHoists) {
     for (const hoist of hoists) {
       localizedSymbols.set(hoist.name, { moduleVar, memberName: hoist.name });
     }
   }
 
-  // Process each require binding
   for (const [moduleVar, info] of requireInfos) {
     const preExisting = preExistingHoists.get(moduleVar);
 
-    // Collect new hoists (accesses not already hoisted), sorted by first access order
     const toInsertUnsorted: Array<{ name: string; order: number }> = [];
-
     for (const [name, { moduleVar: originModule, order }] of accessesToHoist) {
       if (originModule === moduleVar) {
         if (!preExisting?.some((h) => h.name === name)) {
@@ -205,11 +262,9 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
       }
     }
 
-    // Sort by access order to maintain first-reference order
     const toInsert = toInsertUnsorted.sort((a, b) => a.order - b.order).map((x) => x.name);
 
     if (toInsert.length > 0) {
-      // Compute insertion point: after the last pre-existing hoist or after the require
       let insertAfterNode = info.statement;
       if (preExisting && preExisting.length > 0) {
         insertAfterNode = preExisting[preExisting.length - 1].node;
@@ -218,7 +273,6 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
       const insertAfterRange = nodeRange(insertAfterNode);
       const insertPoint = nextLineOffset(luaSource, insertAfterRange[1]);
 
-      // Combine all insertions into a single replacement to maintain order
       const hoistCode = toInsert.map((name) => `local ${name} = ${moduleVar}.${name}`).join("\n");
       // If inserting mid-line (no newline before insertion point), prepend newline
       const needsLeadingNewline = insertPoint > 0 && luaSource[insertPoint - 1] !== "\n";
@@ -231,24 +285,7 @@ export function hoistCrossModuleAccesses(luaSource: string): HoistResult {
     }
   }
 
-  // Collect access references to rewrite
-  const references = collectAccessReferences(ast, requireInfos, accessesToHoist, declarationLhses);
-
-  for (const ref of references) {
-    edits.push({
-      offset: ref.offset,
-      length: ref.length,
-      replacement: ref.name,
-    });
-  }
-
-  // Apply edits in reverse offset order
-  const transformedSource = applyEdits(luaSource, edits);
-
-  return {
-    source: transformedSource,
-    localizedSymbols,
-  };
+  return { edits, localizedSymbols };
 }
 
 function collectDeclarationLhses(root: luaparse.Node): Set<luaparse.Node> {
@@ -286,22 +323,14 @@ function collectAccessReferences(
   const references: AccessReference[] = [];
 
   walkAstNode(node, (n) => {
-    if (n.type === "MemberExpression" && !declarationLhses.has(n as luaparse.Node)) {
-      const member = n as luaparse.MemberExpression;
-      if (member.base.type === "Identifier") {
-        const moduleVar = (member.base as luaparse.Identifier).name;
-        if (requireInfos.has(moduleVar)) {
-          const memberName = (member.identifier as luaparse.Identifier).name;
-          if (accessesToHoist.has(memberName)) {
-            const range = nodeRange(n);
-            references.push({
-              offset: range[0],
-              length: range[1] - range[0],
-              name: memberName,
-            });
-          }
-        }
-      }
+    const match = matchRequireMember(n, requireInfos, declarationLhses);
+    if (match && accessesToHoist.has(match.memberName)) {
+      const range = nodeRange(n);
+      references.push({
+        offset: range[0],
+        length: range[1] - range[0],
+        name: match.memberName,
+      });
     }
   });
 

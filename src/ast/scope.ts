@@ -195,6 +195,33 @@ export function collectScopeInfo(
 }
 
 // ---------------------------------------------------------------------------
+// Array-element pattern matchers
+// ---------------------------------------------------------------------------
+
+export function matchLoopIndexAccess(
+  expr: tstl.Expression,
+  loopVarNames: ReadonlySet<string>,
+): { base: string; index: string } | undefined {
+  if (
+    !tstl.isTableIndexExpression(expr) ||
+    !tstl.isIdentifier(expr.table) ||
+    !tstl.isIdentifier(expr.index) ||
+    !loopVarNames.has(expr.index.text)
+  ) {
+    return undefined;
+  }
+  return { base: expr.table.text, index: expr.index.text };
+}
+
+export function isLoopVarRebind(stmt: tstl.Statement, loopVarNames: ReadonlySet<string>): boolean {
+  return (
+    (tstl.isForStatement(stmt) && loopVarNames.has(stmt.controlVariable.text)) ||
+    (tstl.isForInStatement(stmt) &&
+      stmt.names.some((n) => tstl.isIdentifier(n) && loopVarNames.has(n.text)))
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Array-element accesses
 // ---------------------------------------------------------------------------
 
@@ -249,27 +276,19 @@ export function collectArrayElementAccesses(
     shallow,
     guardDepth: 0,
     expr: (expr: tstl.Expression) => {
-      if (
-        tstl.isTableIndexExpression(expr) &&
-        tstl.isIdentifier(expr.table) &&
-        tstl.isIdentifier(expr.index) &&
-        loopVarNames.has(expr.index.text)
-      ) {
+      const match = matchLoopIndexAccess(expr, loopVarNames);
+      if (match) {
         if (hooks.guardDepth === 0) {
-          trackLoopVar(expr.table.text, expr.index.text);
-          counts.set(expr.table.text, (counts.get(expr.table.text) ?? 0) + 1);
-          if (!firstAccess.has(expr.table.text)) firstAccess.set(expr.table.text, expr);
+          trackLoopVar(match.base, match.index);
+          counts.set(match.base, (counts.get(match.base) ?? 0) + 1);
+          if (!firstAccess.has(match.base)) firstAccess.set(match.base, expr);
         }
         return Walk.skip;
       }
       return Walk.keep;
     },
     stmt: (stmt: tstl.Statement, control: TraversalControl) => {
-      if (
-        (tstl.isForStatement(stmt) && loopVarNames.has(stmt.controlVariable.text)) ||
-        (tstl.isForInStatement(stmt) &&
-          stmt.names.some((name) => tstl.isIdentifier(name) && loopVarNames.has(name.text)))
-      ) {
+      if (isLoopVarRebind(stmt, loopVarNames)) {
         control.skip();
         return;
       }

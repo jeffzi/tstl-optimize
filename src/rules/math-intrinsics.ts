@@ -101,6 +101,19 @@ function buildSqrt(luaArg: tstl.Expression): tstl.Expression {
   );
 }
 
+function foldNumericUnary(
+  arg: ts.Expression,
+  node: ts.Node,
+  fn: (x: number) => number,
+): tstl.Expression | undefined {
+  if (!ts.isNumericLiteral(arg)) return undefined;
+  const folded = Number(arg.text);
+  if (!Number.isFinite(folded)) return undefined;
+  const lit = tstl.createNumericLiteral(fn(folded));
+  tstl.setNodeOriginal(lit, node);
+  return lit;
+}
+
 /**
  * Lua 5.1 has no `math.abs` intrinsic, so we emit the standard
  * `and`/`or` ternary idiom.  The zero branch `(arg == 0) and 0 or ...`
@@ -221,41 +234,17 @@ function handleCallExpression(
     }
     case "floor": {
       if (args.length !== 1) return undefined;
-      if (ts.isNumericLiteral(args[0])) {
-        const foldedValue = Number(args[0].text);
-        if (Number.isFinite(foldedValue)) {
-          const lit = tstl.createNumericLiteral(Math.floor(foldedValue));
-          tstl.setNodeOriginal(lit, node);
-          return lit;
-        }
-      }
-      return undefined;
+      return foldNumericUnary(args[0], node, Math.floor);
     }
     case "ceil": {
       if (args.length !== 1) return undefined;
-      if (ts.isNumericLiteral(args[0])) {
-        const foldedValue = Number(args[0].text);
-        if (Number.isFinite(foldedValue)) {
-          const lit = tstl.createNumericLiteral(Math.ceil(foldedValue));
-          tstl.setNodeOriginal(lit, node);
-          return lit;
-        }
-      }
-      return undefined;
+      return foldNumericUnary(args[0], node, Math.ceil);
     }
     case "round": {
       if (args.length !== 1) return undefined;
-      if (ts.isNumericLiteral(args[0])) {
-        const foldedValue = Number(args[0].text);
-        if (Number.isFinite(foldedValue)) {
-          // Math.round uses "round half toward positive infinity" — the same
-          // semantics as Lua's math.floor(x + 0.5) idiom emitted by TSTL.
-          const lit = tstl.createNumericLiteral(Math.round(foldedValue));
-          tstl.setNodeOriginal(lit, node);
-          return lit;
-        }
-      }
-      return undefined;
+      // Math.round uses "round half toward positive infinity" — the same
+      // semantics as Lua's math.floor(x + 0.5) idiom emitted by TSTL.
+      return foldNumericUnary(args[0], node, Math.round);
     }
     case "abs": {
       if (args.length !== 1) return undefined;

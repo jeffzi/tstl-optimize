@@ -2,25 +2,14 @@
 import * as tstl from "typescript-to-lua";
 import { withPositionFrom } from "../../ast/deep-clone";
 import { Walk, walkStatements } from "../../ast/lua-walker";
-import { collectArrayElementAccesses, collectScopeInfo } from "../../ast/scope";
+import {
+  collectArrayElementAccesses,
+  collectScopeInfo,
+  isLoopVarRebind,
+  matchLoopIndexAccess,
+} from "../../ast/scope";
 import { allocateHoistName, mergeNameSets } from "./hoist";
 import { hasCallExpression, hasEarlyExit } from "./safety";
-
-function getLocalizedArrayBaseName(
-  expr: tstl.Expression,
-  loopVarNames: ReadonlySet<string>,
-): string | undefined {
-  if (
-    !tstl.isTableIndexExpression(expr) ||
-    !tstl.isIdentifier(expr.table) ||
-    !tstl.isIdentifier(expr.index) ||
-    !loopVarNames.has(expr.index.text)
-  ) {
-    return undefined;
-  }
-
-  return expr.table.text;
-}
 
 /** Replace matching `base[loopVar]` expressions with cloned temp identifiers. */
 export function replaceArrayElements(
@@ -31,7 +20,7 @@ export function replaceArrayElements(
   walkStatements(statements, {
     shallow: true,
     expr: (expr: tstl.Expression) => {
-      const baseName = getLocalizedArrayBaseName(expr, loopVarNames);
+      const baseName = matchLoopIndexAccess(expr, loopVarNames)?.base;
       if (!baseName) return Walk.keep;
 
       const ident = hoisted.get(baseName);
@@ -41,11 +30,7 @@ export function replaceArrayElements(
       return Walk.keep;
     },
     stmt: (stmt, control) => {
-      if (
-        (tstl.isForStatement(stmt) && loopVarNames.has(stmt.controlVariable.text)) ||
-        (tstl.isForInStatement(stmt) &&
-          stmt.names.some((name) => tstl.isIdentifier(name) && loopVarNames.has(name.text)))
-      ) {
+      if (isLoopVarRebind(stmt, loopVarNames)) {
         control.skip();
         return;
       }
@@ -53,7 +38,7 @@ export function replaceArrayElements(
       if (tstl.isAssignmentStatement(stmt)) {
         for (let i = 0; i < stmt.left.length; i++) {
           const lhs = stmt.left[i];
-          const baseName = lhs && getLocalizedArrayBaseName(lhs, loopVarNames);
+          const baseName = lhs && matchLoopIndexAccess(lhs, loopVarNames)?.base;
           if (!baseName) continue;
 
           const ident = hoisted.get(baseName);
