@@ -116,6 +116,7 @@ export function hasSideEffects(
 ): boolean {
   const queue: ts.Expression[] = [];
   let current: ts.Expression = node;
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- intentional infinite loop
   while (true) {
     // Peel void, typeof, and spread — their side-effect profile depends only on the inner
     // expression, so hasSideEffects only cares about "could this do something?".
@@ -188,7 +189,7 @@ export function hasSideEffects(
         const tte = current as ts.TaggedTemplateExpression;
         queue.push(tte.tag);
         if (tte.template.kind !== ts.SyntaxKind.NoSubstitutionTemplateLiteral)
-          queueTemplateSpans(tte.template as ts.TemplateExpression, queue);
+          queueTemplateSpans(tte.template, queue);
         break;
       }
 
@@ -220,7 +221,7 @@ export function hasSideEffects(
               queue.push(child.initializer);
               break;
             case ts.SyntaxKind.SpreadAssignment:
-              queue.push((child as ts.SpreadAssignment).expression);
+              queue.push(child.expression);
               break;
             // Shorthand ({x}), methods, getters, setters — defining these is pure.
             // Computed keys on any of them are already handled above.
@@ -241,6 +242,9 @@ export function hasSideEffects(
       // - computed property names with side effects
       case ts.SyntaxKind.ClassExpression:
         return true;
+
+      default:
+        break;
     }
 
     if (queue.length === 0) return false;

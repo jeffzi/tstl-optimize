@@ -69,7 +69,7 @@ function getVersion(cmd: string, args: string[]): string {
 
   if (result.error) return "";
 
-  const output = (result.stdout ?? "") + (result.stderr ?? "");
+  const output = result.stdout + result.stderr;
   if (!output.trim()) return "";
 
   const [firstLine = ""] = output.split("\n");

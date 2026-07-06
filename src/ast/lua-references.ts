@@ -179,6 +179,7 @@ export function forEachAccess(
     }
 
     if (tstl.isReturnStatement(stmt)) {
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- expressions can be undefined at runtime (bare return)
       if (stmt.expressions) {
         for (const expr of stmt.expressions) {
           if (walkExpression(expr, inFunctionBody)) {

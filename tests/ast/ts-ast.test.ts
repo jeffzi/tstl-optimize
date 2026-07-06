@@ -13,8 +13,10 @@ import {
 function parseExpr(code: string): ts.Expression {
   const src = ts.createSourceFile("test.ts", code, ts.ScriptTarget.Latest, true);
   const stmt = src.statements[0];
-  if (!ts.isExpressionStatement(stmt)) {
-    throw new Error(`Expected ExpressionStatement, got ${ts.SyntaxKind[stmt.kind]}`);
+  if (!stmt || !ts.isExpressionStatement(stmt)) {
+    throw new Error(
+      `Expected ExpressionStatement, got ${stmt ? ts.SyntaxKind[stmt.kind] : "undefined"}`,
+    );
   }
   return stmt.expression;
 }
@@ -424,7 +426,7 @@ describe("unwrapTransparent", () => {
     // SpreadElement is the element inside [...items]
     const arr = parseExpr("[...items]") as ts.ArrayLiteralExpression;
     const spreadElem = arr.elements[0];
-    if (!ts.isSpreadElement(spreadElem)) {
+    if (!spreadElem || !ts.isSpreadElement(spreadElem)) {
       throw new Error("Expected SpreadElement");
     }
     const unwrapped = unwrapTransparent(spreadElem, EXTENDED_TRANSPARENT_KINDS);

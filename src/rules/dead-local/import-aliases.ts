@@ -24,12 +24,12 @@ function matchRequireBinding(stmt: tstl.Statement): RequireBinding | undefined {
   }
 
   const id = stmt.left[0];
-  if (!TSTL_REQUIRE_BINDING_PATTERN.test(id.text)) {
+  if (id === undefined || !TSTL_REQUIRE_BINDING_PATTERN.test(id.text)) {
     return undefined;
   }
 
   const rhs = stmt.right[0];
-  if (!tstl.isCallExpression(rhs)) {
+  if (rhs === undefined || !tstl.isCallExpression(rhs)) {
     return undefined;
   }
 
@@ -40,7 +40,7 @@ function matchRequireBinding(stmt: tstl.Statement): RequireBinding | undefined {
 
   const arg = params[0];
   /* v8 ignore next -- TSTL always emits require() with a string literal argument */
-  if (!tstl.isStringLiteral(arg)) return undefined;
+  if (arg === undefined || !tstl.isStringLiteral(arg)) return undefined;
 
   return { stmt, modulePath: arg.value, id };
 }
@@ -54,8 +54,12 @@ function matchImportAlias(
   }
 
   const aliasId = stmt.left[0];
+  if (aliasId === undefined) {
+    return undefined;
+  }
+
   const rhs = stmt.right[0];
-  if (!tstl.isTableIndexExpression(rhs)) {
+  if (rhs === undefined || !tstl.isTableIndexExpression(rhs)) {
     return undefined;
   }
 

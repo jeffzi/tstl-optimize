@@ -145,6 +145,8 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
 
   for (let j = 0; j < statements.length; j++) {
     const stmt = statements[j];
+    /* v8 ignore next -- loop bounds ensure statements[j] is defined */
+    if (stmt === undefined) continue;
     if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
@@ -162,7 +164,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
           isRootAllowed,
           elseBranchOwner: stmt,
         });
-        processFunctionBodies(getElseBranchStatements(stmt.elseBlock), ctx);
+        processFunctionBodies(elseBranchStatements, ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)

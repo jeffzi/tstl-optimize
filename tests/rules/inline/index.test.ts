@@ -12,7 +12,7 @@ describe("inline", () => {
     function parseCallArguments(code: string): ts.NodeArray<ts.Expression> {
       const src = ts.createSourceFile("test.ts", code, ts.ScriptTarget.Latest, true);
       const stmt = src.statements[0];
-      if (!ts.isExpressionStatement(stmt) || !ts.isCallExpression(stmt.expression)) {
+      if (!stmt || !ts.isExpressionStatement(stmt) || !ts.isCallExpression(stmt.expression)) {
         throw new Error("Expected call expression statement");
       }
       return stmt.expression.arguments;
@@ -994,7 +994,9 @@ describe("inline", () => {
         { skipLuaCheck, pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("@inline ignored");
+      const diag = diagnostics[0];
+      expect(diag).toBeDefined();
+      expect(diag?.messageText).toContain("@inline ignored");
     });
 
     it.each([
@@ -1010,7 +1012,9 @@ describe("inline", () => {
         { pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("not supported");
+      const diag0 = diagnostics[0];
+      expect(diag0).toBeDefined();
+      expect(diag0?.messageText).toContain("not supported");
     });
 
     it("warns on multi-statement body at expression position", () => {
@@ -1023,7 +1027,9 @@ describe("inline", () => {
         { pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("cannot be inlined at expression position");
+      const diag1 = diagnostics[0];
+      expect(diag1).toBeDefined();
+      expect(diag1?.messageText).toContain("cannot be inlined at expression position");
     });
 
     it.each([
@@ -1087,7 +1093,9 @@ describe("inline", () => {
         { pluginOptions: { rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("side effects");
+      const diag = diagnostics[0];
+      if (!diag) return;
+      expect(diag.messageText).toContain("side effects");
     });
 
     describe("zero-usage param with side-effecting arg", () => {
@@ -1103,7 +1111,9 @@ describe("inline", () => {
         );
 
         expect(diagnostics).toHaveLength(1);
-        expect(diagnostics[0].messageText).toContain("side effects");
+        const diag = diagnostics[0];
+        if (!diag) return;
+        expect(diag.messageText).toContain("side effects");
       });
     });
   });
@@ -1131,7 +1141,9 @@ describe("inline", () => {
       );
 
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("destructuring parameters are not supported");
+      const diag = diagnostics[0];
+      if (!diag) return;
+      expect(diag.messageText).toContain("destructuring parameters are not supported");
     });
   });
 
@@ -1277,7 +1289,9 @@ describe("inline", () => {
         { pluginOptions: { strict: true, rules: { "constant-propagation": false } } },
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      const diag = diagnostics[0];
+      if (!diag) return;
+      expect(diag.category).toBe(ts.DiagnosticCategory.Error);
     });
   });
 

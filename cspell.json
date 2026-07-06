@@ -66,6 +66,7 @@
     "joff",
     "nojit",
     "normalise",
+    "oxlint",
     "pcall",
     "prereq",
     "prereqs",

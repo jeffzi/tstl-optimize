@@ -1,12 +1,12 @@
 {
   "clone_groups": [
-    "src/ast/lua-walker.ts:132-139|src/ast/lua-walker.ts:141-148",
-    "src/ast/scope.ts:106-110|src/rules/localizer/hoist.ts:57-61",
+    "src/ast/lua-walker.ts:132-141|src/ast/lua-walker.ts:143-152",
+    "src/ast/scope.ts:106-112|src/rules/localizer/hoist.ts:57-65",
     "src/config.ts:287-298|src/config.ts:303-314",
-    "src/rules/inline/builders.ts:328-336|src/rules/inline/builders.ts:660-673",
-    "src/rules/inline/builders.ts:347-356|src/rules/inline/builders.ts:634-642",
-    "src/rules/inline/builders.ts:592-607|src/rules/inline/destructure-builders.ts:39-58",
-    "src/rules/inline/handlers.ts:144-157|src/rules/inline/handlers.ts:210-223",
+    "src/rules/inline/builders.ts:332-340|src/rules/inline/builders.ts:666-679",
+    "src/rules/inline/builders.ts:351-360|src/rules/inline/builders.ts:640-648",
+    "src/rules/inline/builders.ts:598-613|src/rules/inline/destructure-builders.ts:39-58",
+    "src/rules/inline/handlers.ts:145-158|src/rules/inline/handlers.ts:211-224",
     "tests/sourcemap-helpers.ts:183-188|tests/sourcemap-helpers.ts:219-224"
   ]
 }

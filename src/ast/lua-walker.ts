@@ -132,7 +132,9 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
         expr.expression = n;
       });
       for (let i = 0; i < expr.params.length && !stopped; i++) {
-        visitExpr(expr.params[i], (n) => {
+        const param = expr.params[i];
+        if (!param) continue;
+        visitExpr(param, (n) => {
           expr.params[i] = n;
         });
       }
@@ -141,7 +143,9 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
         expr.prefixExpression = n;
       });
       for (let i = 0; i < expr.params.length && !stopped; i++) {
-        visitExpr(expr.params[i], (n) => {
+        const param = expr.params[i];
+        if (!param) continue;
+        visitExpr(param, (n) => {
           expr.params[i] = n;
         });
       }
@@ -161,6 +165,7 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
             field.key = n;
           });
         }
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
         if (stopped) return;
         visitExpr(field.value, (n) => {
           field.value = n;
@@ -181,11 +186,13 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
       visitExpr(expr.condition, (n) => {
         expr.condition = n;
       });
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
       if (stopped) return;
       enterGuard();
       visitExpr(expr.whenTrue, (n) => {
         expr.whenTrue = n;
       });
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
       if (stopped) {
         exitGuard();
         return;
@@ -201,6 +208,7 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
     if (stmtHook) {
       skipped = false;
       stmtHook(stmt, control);
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flags mutated in visitor callbacks
       if (stopped || skipped) return;
     }
 
@@ -210,7 +218,9 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
       const { right } = stmt;
       if (right) {
         for (let i = 0; i < right.length && !stopped; i++) {
-          visitExpr(right[i], (n) => {
+          const expr = right[i];
+          if (!expr) continue;
+          visitExpr(expr, (n) => {
             right[i] = n;
           });
         }
@@ -222,6 +232,7 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
           visitExpr(lhs.table, (n) => {
             lhs.table = n;
           });
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
           if (stopped) return;
           visitExpr(lhs.index, (n) => {
             lhs.index = n;
@@ -235,7 +246,9 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
         }
       }
       for (let i = 0; i < stmt.right.length && !stopped; i++) {
-        visitExpr(stmt.right[i], (n) => {
+        const expr = stmt.right[i];
+        if (!expr) continue;
+        visitExpr(expr, (n) => {
           stmt.right[i] = n;
         });
       }
@@ -246,6 +259,7 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
       if (stopped) return;
       enterGuard();
       walkStmts(stmt.ifBlock.statements);
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
       if (stopped) {
         exitGuard();
         return;
@@ -278,17 +292,21 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
       visitExpr(stmt.limitExpression, (n) => {
         stmt.limitExpression = n;
       });
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
       if (stopped) return;
       if (stmt.stepExpression) {
         visitExpr(stmt.stepExpression, (n) => {
           stmt.stepExpression = n;
         });
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- closure flag mutated in visitor callbacks
         if (stopped) return;
       }
       walkStmts(stmt.body.statements);
     } else if (tstl.isForInStatement(stmt)) {
       for (let i = 0; i < stmt.expressions.length && !stopped; i++) {
-        visitExpr(stmt.expressions[i], (n) => {
+        const expr = stmt.expressions[i];
+        if (!expr) continue;
+        visitExpr(expr, (n) => {
           stmt.expressions[i] = n;
         });
       }
@@ -296,9 +314,12 @@ export function walkStatements(statements: readonly tstl.Statement[], hooks: Wal
       walkStmts(stmt.body.statements);
     } else if (tstl.isReturnStatement(stmt)) {
       const { expressions } = stmt;
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- expressions can be undefined at runtime (bare return)
       if (!expressions) return;
       for (let i = 0; i < expressions.length && !stopped; i++) {
-        visitExpr(expressions[i], (n) => {
+        const expr = expressions[i];
+        if (!expr) continue;
+        visitExpr(expr, (n) => {
           expressions[i] = n;
         });
       }

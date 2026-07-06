@@ -18,6 +18,7 @@ const CROSS_MODULE_WARNING_MESSAGE = "cross-module function references non-param
 
 export function isDescendant(node: ts.Node, ancestor: ts.Node): boolean {
   let current: ts.Node | undefined = node;
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- parent can be undefined at runtime (SourceFile root)
   while (current !== undefined) {
     if (current === ancestor) return true;
     current = current.parent;

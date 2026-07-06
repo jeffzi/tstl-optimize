@@ -114,6 +114,7 @@ export function mergeVisitorMaps(primary: tstl.Visitors, fallback: tstl.Visitors
   // them out rather than propagating them into the merged map.
   const fallbackByKind = new Map<number, RegisteredVisitor>();
   for (const [kindStr, visitor] of Object.entries(fallback)) {
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- Object.entries includes explicit null/undefined values from callers
     if (visitor != null) {
       // visitor is neither undefined nor null due to the guard above, so it's safely a RegisteredVisitor
       fallbackByKind.set(Number(kindStr), visitor as RegisteredVisitor);
@@ -124,8 +125,10 @@ export function mergeVisitorMaps(primary: tstl.Visitors, fallback: tstl.Visitors
     const kind = Number(kindStr);
     // rawPrimary from Object.entries of tstl.Visitors; filter out undefined values.
     // TSTL visitor types are complex unions; after checking shape, we safely cast.
+    /* oxlint-disable typescript/no-unnecessary-condition -- rawPrimary can be null/undefined at runtime despite declared type */
     const isValidVisitor =
       typeof rawPrimary === "function" || (rawPrimary && typeof rawPrimary === "object");
+    /* oxlint-enable typescript/no-unnecessary-condition */
     const primaryVisitor = isValidVisitor ? (rawPrimary as RegisteredVisitor) : undefined;
     const normalizedPrimary = normalizeVisitor(primaryVisitor);
     const fallbackEntry = fallbackByKind.get(kind);
@@ -142,7 +145,7 @@ export function mergeVisitorMaps(primary: tstl.Visitors, fallback: tstl.Visitors
     merged[kind] = entry;
   }
 
-  return merged as tstl.Visitors;
+  return merged;
 }
 
 /**

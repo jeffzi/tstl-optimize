@@ -79,12 +79,21 @@ function matchUnspillDecl(
 
   const base = stmt.right[0];
   const key = stmt.right[1];
+  const v1Name = stmt.left[0];
+  const v2Name = stmt.left[1];
 
-  if (!isPure(base) || !isPure(key)) {
+  if (
+    base === undefined ||
+    key === undefined ||
+    v1Name === undefined ||
+    v2Name === undefined ||
+    !isPure(base) ||
+    !isPure(key)
+  ) {
     return undefined;
   }
 
-  return { declStmt: stmt, base, key, v1Name: stmt.left[0].text, v2Name: stmt.left[1].text };
+  return { declStmt: stmt, base, key, v1Name: v1Name.text, v2Name: v2Name.text };
 }
 
 /**
@@ -112,11 +121,12 @@ export function matchUnspillValueTemp(
   const { declStmt, base, key, v1Name, v2Name } = decl;
 
   const valueDeclStmt = stmts[index + 1];
-  const assignStmt = stmts[index + 2];
+  if (valueDeclStmt === undefined) {
+    return undefined;
+  }
 
   // Second stmt: local v3 = <expr containing v1[v2]>
   if (
-    valueDeclStmt === undefined ||
     !tstl.isVariableDeclarationStatement(valueDeclStmt) ||
     valueDeclStmt.left.length !== 1 ||
     valueDeclStmt.right === undefined ||
@@ -125,7 +135,11 @@ export function matchUnspillValueTemp(
     return undefined;
   }
 
-  const valueInit = valueDeclStmt.right[0];
+  const [valueInit] = valueDeclStmt.right;
+  /* v8 ignore next -- length check above ensures valueInit exists */
+  if (valueInit === undefined) {
+    return undefined;
+  }
 
   /* v8 ignore next -- TSTL always emits v1[v2] in the value-temp init */
   if (!rhsContainsIndexRead(valueInit, v1Name, v2Name)) {
@@ -133,6 +147,11 @@ export function matchUnspillValueTemp(
   }
 
   // Third stmt: v1[v2] = <rhs>
+  const assignStmt = stmts[index + 2];
+  if (assignStmt === undefined) {
+    return undefined;
+  }
+
   const validatedAssign = validateIndexLhs(assignStmt, v1Name, v2Name);
   if (validatedAssign === undefined) {
     return undefined;
@@ -173,6 +192,9 @@ export function matchUnspillPair(
   const { declStmt, base, key, v1Name, v2Name } = decl;
 
   const assignStmt = stmts[index + 1];
+  if (assignStmt === undefined) {
+    return undefined;
+  }
 
   // Second stmt: v1[v2] = <rhs>
   const validatedAssign = validateIndexLhs(assignStmt, v1Name, v2Name);
@@ -187,8 +209,14 @@ export function matchUnspillPair(
     return undefined;
   }
 
+  const [rhsExpr] = validatedAssign.right;
+  /* v8 ignore next -- length check above ensures rhsExpr exists */
+  if (rhsExpr === undefined) {
+    return undefined;
+  }
+
   /* v8 ignore next -- TSTL always emits v1[v2] as the left operand of the RHS expression */
-  if (!rhsContainsIndexRead(validatedAssign.right[0], v1Name, v2Name)) {
+  if (!rhsContainsIndexRead(rhsExpr, v1Name, v2Name)) {
     return undefined;
   }
 
@@ -214,7 +242,12 @@ function validateIndexLhs(
     return undefined;
   }
 
-  const lhs = stmt.left[0];
+  const [lhs] = stmt.left;
+  /* v8 ignore next -- length check above ensures lhs exists */
+  if (lhs === undefined) {
+    return undefined;
+  }
+
   /* v8 ignore next -- TSTL always emits a TableIndexExpression with Identifier table and index */
   if (
     !tstl.isTableIndexExpression(lhs) ||

@@ -2939,6 +2939,7 @@ describe("localizer raw Lua visitor coverage", () => {
       throw new Error("expected writeback assignment");
     }
     const writebackLeft = writeback.left[0];
+    if (!writebackLeft) return;
     expect(tstl.isTableIndexExpression(writebackLeft)).toBe(true);
     const writebackRight = writeback.right[0];
     if (!writebackRight || !tstl.isIdentifier(writebackRight)) {
@@ -3066,7 +3067,9 @@ describe("localizer raw Lua visitor coverage", () => {
       throw new Error("expected nested assignment");
     }
 
-    expect(tstl.isTableIndexExpression(nestedAssign.left[0])).toBe(true);
+    const nestedLeft0 = nestedAssign.left[0];
+    if (!nestedLeft0) return;
+    expect(tstl.isTableIndexExpression(nestedLeft0)).toBe(true);
     const nestedRight = nestedAssign.right[0];
     if (!nestedRight || !tstl.isBinaryExpression(nestedRight)) {
       throw new Error("expected nested assignment RHS to be binary expression");

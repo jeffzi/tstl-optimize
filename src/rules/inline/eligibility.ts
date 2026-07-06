@@ -60,12 +60,8 @@ export function isModuleScopeDeclaration(node: ts.Node): boolean {
     return ts.isSourceFile(node.parent);
   }
   if (ts.isVariableDeclaration(node)) {
-    const varStatement = node.parent?.parent;
-    return (
-      varStatement !== undefined &&
-      ts.isVariableStatement(varStatement) &&
-      ts.isSourceFile(varStatement.parent)
-    );
+    const varStatement = node.parent.parent;
+    return ts.isVariableStatement(varStatement) && ts.isSourceFile(varStatement.parent);
   }
   return false;
 }
@@ -114,9 +110,8 @@ function isCallSiteFullyInlined(callNode: ts.CallExpression, checker: ts.TypeChe
     return false;
   }
 
-  const variableStatement = callNode.parent.parent?.parent;
+  const variableStatement = callNode.parent.parent.parent;
   return (
-    variableStatement !== undefined &&
     ts.isVariableStatement(variableStatement) &&
     variableStatement.declarationList.declarations.length === 1 &&
     isSupportedInlineBindingPattern(callNode.parent.name) &&
@@ -187,6 +182,7 @@ function analyzeParamUsage(
 ): { isCaptured: boolean; isWritten: boolean; count: number } {
   const isCapturedByNestedFunction = (node: ts.Identifier): boolean => {
     let current: ts.Node | undefined = node.parent;
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- parent can be undefined at runtime (SourceFile root)
     while (current !== undefined) {
       if (ts.isFunctionLike(current)) {
         return ts.isFunctionLike(body)
@@ -282,7 +278,10 @@ export function computeDirectSubstitutableParams(
     if (hasSideEffects(arg)) continue;
     if (lastSEArgIndex > i) continue;
 
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    const param = params[i];
+    /* v8 ignore next -- loop bounds ensure params[i] is defined */
+    if (!param) continue;
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
     if (!paramSymbol) continue;
 
     const captured = bodyNodes.some(
@@ -364,7 +363,14 @@ export function canInline(
     };
 
   for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    const param = params[i];
+    /* v8 ignore next 4 -- loop bounds ensure params[i] is defined */
+    if (!param)
+      return {
+        reason: "parameter symbol could not be resolved",
+        code: InlineDiagnosticCode.parameterRestriction,
+      };
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
     if (!paramSymbol)
       return {
         reason: "parameter symbol could not be resolved",
@@ -572,15 +578,13 @@ function hasSideEffectBeforeParamUse(
   function findHazardInObjectLiteral(obj: ts.ObjectLiteralExpression): EvalHazard | undefined {
     for (const prop of obj.properties) {
       if (prop.name?.kind === ts.SyntaxKind.ComputedPropertyName) {
-        const keyResult = findFirstParamWithSEOrSE(
-          (prop.name as ts.ComputedPropertyName).expression,
-        );
+        const keyResult = findFirstParamWithSEOrSE(prop.name.expression);
         if (keyResult !== undefined) return keyResult;
       }
 
       switch (prop.kind) {
         case ts.SyntaxKind.PropertyAssignment: {
-          const valueResult = findFirstParamWithSEOrSE((prop as ts.PropertyAssignment).initializer);
+          const valueResult = findFirstParamWithSEOrSE(prop.initializer);
           if (valueResult !== undefined) return valueResult;
           break;
         }
@@ -648,7 +652,7 @@ function hasSideEffectBeforeParamUse(
 
       // --- Identifier: check if it's a parameter ---
       case ts.SyntaxKind.Identifier: {
-        const sym = checker.getSymbolAtLocation(expr as ts.Identifier);
+        const sym = checker.getSymbolAtLocation(expr);
         for (let i = 0; i < paramSymbols.length; i++) {
           if (sym === paramSymbols[i]) {
             return sideEffectArgIndices.has(i) ? { kind: "seParam", index: i } : undefined;
@@ -674,11 +678,13 @@ function hasSideEffectBeforeParamUse(
         const bin = expr as ts.BinaryExpression;
         const leftResult = findFirstParamWithSEOrSE(bin.left);
         if (leftResult !== undefined) return leftResult;
+        const targetSym = paramSymbols[targetParamIndex];
         if (
+          targetSym !== undefined &&
           (bin.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
             bin.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
             bin.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) &&
-          containsTargetParam(bin.right, paramSymbols[targetParamIndex], checker)
+          containsTargetParam(bin.right, targetSym, checker)
         ) {
           return { kind: "sideEffect" };
         }
@@ -734,7 +740,7 @@ function hasSideEffectBeforeParamUse(
         const tte = expr as ts.TaggedTemplateExpression;
         const spanExprs =
           tte.template.kind === ts.SyntaxKind.TemplateExpression
-            ? (tte.template as ts.TemplateExpression).templateSpans.map((s) => s.expression)
+            ? tte.template.templateSpans.map((s) => s.expression)
             : undefined;
         return findHazardInCallLike(tte.tag, spanExprs);
       }
@@ -824,6 +830,7 @@ export function needsEagerArgumentTemps(
 
   for (let i = 0; i < target.params.length; i++) {
     const paramSymbol = paramSymbols[i];
+    if (!paramSymbol) return false;
     const usage = analyzeParamUsage(target.bodyExpr, paramSymbol, checker);
     if (usage.isCaptured) {
       return true;

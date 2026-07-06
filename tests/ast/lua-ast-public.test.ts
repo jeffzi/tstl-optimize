@@ -59,8 +59,12 @@ describe("public lua-ast subpath", () => {
         const stmts = buildInput();
         const out = unspillStatements(stmts);
         expect(out.length).toBe(2);
-        assertNode(out[0], tstl.isVariableDeclarationStatement);
-        assertNode(out[1], tstl.isAssignmentStatement);
+        const stmt0 = out[0];
+        if (!stmt0) return;
+        assertNode(stmt0, tstl.isVariableDeclarationStatement);
+        const stmt1 = out[1];
+        if (!stmt1) return;
+        assertNode(stmt1, tstl.isAssignmentStatement);
       });
     });
 
@@ -70,11 +74,14 @@ describe("public lua-ast subpath", () => {
         const out = unspillStatements(stmts, { isPure: permissiveIsPure });
         expect(out.length).toBe(1);
         const folded = out[0];
+        if (!folded) return;
         assertNode(folded, tstl.isAssignmentStatement);
         const lhs = folded.left[0];
+        if (!lhs) return;
         assertNode(lhs, tstl.isTableIndexExpression);
         assertIsArchCompIndex(lhs.table);
         const rhs = folded.right[0];
+        if (!rhs) return;
         assertNode(rhs, tstl.isBinaryExpression);
         assertNode(rhs.left, tstl.isTableIndexExpression);
         assertIsArchCompIndex(rhs.left.table);

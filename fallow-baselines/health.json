@@ -11,7 +11,7 @@
         "count": 1
       },
       "crap_moderate": {
-        "count": 2
+        "count": 1
       }
     },
     "scripts/conformance.ts": {
@@ -32,13 +32,10 @@
     },
     "src/ast/lua-references.ts": {
       "complexity_critical": {
-        "count": 1
-      },
-      "complexity_high": {
-        "count": 1
+        "count": 2
       },
       "crap_critical": {
-        "count": 1
+        "count": 2
       }
     },
     "src/ast/lua-walker.ts": {
@@ -46,7 +43,15 @@
         "count": 2
       },
       "crap_critical": {
+        "count": 2
+      }
+    },
+    "src/ast/scope.ts": {
+      "complexity_high": {
         "count": 1
+      },
+      "crap_high": {
+        "count": 2
       }
     },
     "src/ast/ts-ast.ts": {
@@ -57,12 +62,52 @@
         "count": 1
       }
     },
+    "src/lua-transforms/hoist-cross-module.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
     "src/rules/conditional-compilation/fold-safety.ts": {
       "complexity_high": {
         "count": 1
       }
     },
+    "src/rules/conditional-compilation/index.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
     "src/rules/constant-folding.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 4
+      }
+    },
+    "src/rules/constant-propagation.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/dead-local/import-aliases.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/dead-local/index.ts": {
+      "complexity_high": {
+        "count": 1
+      },
       "crap_high": {
         "count": 1
       }
@@ -75,28 +120,156 @@
         "count": 1
       }
     },
-    "src/rules/inline/lua-substitute.ts": {
-      "complexity_high": {
+    "src/rules/inline/const-literal.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
         "count": 1
       }
     },
+    "src/rules/inline/cross-module.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/inline/eligibility.ts": {
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/rules/inline/lua-substitute.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
     "src/rules/inline/rewrite-body.ts": {
-      "complexity_high": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/rules/inline/target.ts": {
+      "crap_moderate": {
         "count": 1
       }
     },
     "src/rules/localizer/hoist.ts": {
-      "complexity_high": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "src/rules/localizer/index.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/localizer/safety.ts": {
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/loop-rebase.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/math-intrinsics.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/merge-locals.ts": {
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/rules/remove-empty-branch.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/rules/unspill/match.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/rules/unspill/transform.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "tests/ast/deep-clone.test.ts": {
+      "crap_high": {
         "count": 1
       }
     },
     "tests/ast/ts-ambient.test.ts": {
-      "complexity_moderate": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "tests/helpers.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "tests/rules/dead-local/index.test.ts": {
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "tests/rules/inline/index.test.ts": {
+      "crap_high": {
         "count": 1
       }
     },
     "tests/rules/localizer/index.test.ts": {
-      "complexity_moderate": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
         "count": 2
       }
     },
@@ -108,13 +281,18 @@
   },
   "runtime_coverage_findings": [],
   "target_keys": [
+    "src/rules/constant-folding.ts:untested risk",
+    "src/rules/merge-locals.ts:untested risk",
     "src/ast/scope.ts:complexity",
-    "src/rules/inline/lua-substitute.ts:complexity",
     "src/rules/localizer/hoist.ts:complexity",
-    "src/ast/ts-ast.ts:complexity",
+    "src/rules/inline/lua-substitute.ts:complexity",
     "src/ast/lua-references.ts:complexity",
+    "src/ast/ts-ast.ts:complexity",
     "src/rules/inline/eligibility.ts:complexity",
+    "src/rules/math-intrinsics.ts:complexity",
     "src/ast/lua-walker.ts:high impact",
+    "src/rules/dead-local/index.ts:complexity",
+    "src/rules/loop-rebase.ts:untested risk",
     "src/rules/inline/builders.ts:complexity",
     "src/rules/inline/rewrite-body.ts:complexity",
     "src/rules/conditional-compilation/fold-safety.ts:complexity",

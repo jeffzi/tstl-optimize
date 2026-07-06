@@ -502,7 +502,8 @@ function hasUnsafePreAccessState(
   // If the chain is assigned before any read, hoisting would snapshot the pre-mutation
   // value and produce incorrect results.
   for (let index = 0; index < firstAccessIndex; index += 1) {
-    if (statementAssignsToChain(statements[index], chain)) {
+    const stmt = statements[index];
+    if (stmt !== undefined && statementAssignsToChain(stmt, chain)) {
       return true;
     }
   }
@@ -517,18 +518,22 @@ function hasUnsafeInterveningGap(
   lastAccessIndex: number,
 ): boolean {
   // If the first-access statement itself writes the chain, any later read is stale.
-  if (statementAssignsToChain(statements[firstAccessIndex], chain)) {
+  const firstAccessStmt = statements[firstAccessIndex];
+  if (firstAccessStmt !== undefined && statementAssignsToChain(firstAccessStmt, chain)) {
     return true;
   }
 
   // Calls: start at firstAccessIndex + 1 (first-access statement's calls already vetted).
   // Assignments: start at firstAccessIndex + 1 (already checked above).
   for (let index = firstAccessIndex + 1; index < lastAccessIndex; index += 1) {
-    if (hasCallExpression([statements[index]])) {
-      return true;
-    }
-    if (statementAssignsToChain(statements[index], chain)) {
-      return true;
+    const stmt = statements[index];
+    if (stmt !== undefined) {
+      if (hasCallExpression([stmt])) {
+        return true;
+      }
+      if (statementAssignsToChain(stmt, chain)) {
+        return true;
+      }
     }
   }
 
@@ -541,7 +546,7 @@ export function hasInterveningCallForChain(
   shallow: boolean,
 ): boolean {
   const root = chain.split(".")[0];
-  if (STDLIB_ROOTS.has(root)) {
+  if (root === undefined || STDLIB_ROOTS.has(root)) {
     return false;
   }
 

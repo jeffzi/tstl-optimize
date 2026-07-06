@@ -125,27 +125,30 @@ function collectPreExistingHoists(
 
     while (currentIndex < ast.body.length) {
       const stmt = ast.body[currentIndex];
-      if (stmt.type !== "LocalStatement") {
+      if (stmt?.type !== "LocalStatement") {
         break;
       }
 
-      const local = stmt as luaparse.LocalStatement;
-      if (local.variables.length !== 1 || local.init.length !== 1) {
+      if (stmt.variables.length !== 1 || stmt.init.length !== 1) {
         break;
       }
 
-      const varName = local.variables[0].name;
-      const init = local.init[0];
+      const variable = stmt.variables[0];
+      const init = stmt.init[0];
+      if (!variable || !init) {
+        break;
+      }
+      const varName = variable.name;
       if (
         init.type === "MemberExpression" &&
         init.base.type === "Identifier" &&
-        (init.base as luaparse.Identifier).name === moduleVar &&
-        (init.identifier as luaparse.Identifier).name === varName
+        init.base.name === moduleVar &&
+        init.identifier.name === varName
       ) {
         hoists.push({
           name: varName,
           moduleVar,
-          node: local,
+          node: stmt,
         });
         currentIndex++;
       } else {
@@ -166,11 +169,10 @@ function matchRequireMember(
   declarationLhses: ReadonlySet<luaparse.Node>,
 ): { member: luaparse.MemberExpression; moduleVar: string; memberName: string } | undefined {
   if (node.type !== "MemberExpression" || declarationLhses.has(node)) return undefined;
-  const member = node as luaparse.MemberExpression;
-  if (member.base.type !== "Identifier") return undefined;
-  const moduleVar = (member.base as luaparse.Identifier).name;
+  if (node.base.type !== "Identifier") return undefined;
+  const moduleVar = node.base.name;
   if (!requireInfos.has(moduleVar)) return undefined;
-  return { member, moduleVar, memberName: (member.identifier as luaparse.Identifier).name };
+  return { member: node, moduleVar, memberName: node.identifier.name };
 }
 
 /**
@@ -204,7 +206,10 @@ function collectAccessesToHoist(
   const accessesToHoist = new Map<string, { moduleVar: string; order: number }>();
   const accessesByModule = new Map<string, Set<string>>();
   for (let i = 0; i < memberAccesses.length; i++) {
-    const { name, moduleVar } = memberAccesses[i];
+    const access = memberAccesses[i];
+    /* v8 ignore next -- loop bounds ensure memberAccesses[i] is defined */
+    if (!access) continue;
+    const { name, moduleVar } = access;
     if (!accessesToHoist.has(name)) {
       accessesToHoist.set(name, { moduleVar, order: i });
     }
@@ -266,8 +271,9 @@ function buildHoistEdits(
 
     if (toInsert.length > 0) {
       let insertAfterNode = info.statement;
-      if (preExisting && preExisting.length > 0) {
-        insertAfterNode = preExisting[preExisting.length - 1].node;
+      const lastExisting = preExisting?.[preExisting.length - 1];
+      if (lastExisting) {
+        insertAfterNode = lastExisting.node;
       }
 
       const insertAfterRange = nodeRange(insertAfterNode);
@@ -292,13 +298,11 @@ function collectDeclarationLhses(root: luaparse.Node): Set<luaparse.Node> {
   const lhses = new Set<luaparse.Node>();
   walkAstNode(root, (n) => {
     if (n.type === "FunctionDeclaration") {
-      const func = n as luaparse.FunctionDeclaration;
-      if (func.identifier && func.identifier.type === "MemberExpression") {
-        lhses.add(func.identifier);
+      if (n.identifier && n.identifier.type === "MemberExpression") {
+        lhses.add(n.identifier);
       }
     } else if (n.type === "AssignmentStatement") {
-      const assign = n as luaparse.AssignmentStatement;
-      for (const variable of assign.variables) {
+      for (const variable of n.variables) {
         if (variable.type === "MemberExpression") {
           lhses.add(variable);
         }

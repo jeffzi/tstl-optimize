@@ -85,13 +85,13 @@ function classifyBody(
   const { statements } = body;
   if (statements.length === 1) {
     const stmt = statements[0];
-    if (ts.isReturnStatement(stmt) && stmt.expression) {
+    if (stmt && ts.isReturnStatement(stmt) && stmt.expression) {
       return { kind: "expression", expr: stmt.expression };
     }
   }
 
   const lastStmt = statements[statements.length - 1];
-  if (ts.isReturnStatement(lastStmt) && lastStmt.expression) {
+  if (lastStmt && ts.isReturnStatement(lastStmt) && lastStmt.expression) {
     return {
       kind: "statementsWithReturn",
       stmts: statements.slice(0, -1),
@@ -171,8 +171,8 @@ export function getInlineTarget(
     }
 
     if (ts.isVariableDeclaration(decl) && decl.initializer) {
-      const varStmt = decl.parent?.parent;
-      const tagNode = varStmt && ts.isVariableStatement(varStmt) ? varStmt : decl;
+      const varStmt = decl.parent.parent;
+      const tagNode = ts.isVariableStatement(varStmt) ? varStmt : decl;
       if (!hasInlineTag(tagNode)) continue;
 
       const init = decl.initializer;
@@ -200,8 +200,11 @@ export function returnsLuaMultiReturn(
 
   const signature = checker.getResolvedSignature(callNode);
   const returnType = signature ? checker.getReturnTypeOfSignature(signature) : undefined;
+  if (!returnType) return false;
+  /* oxlint-disable typescript/no-unnecessary-condition -- symbol/aliasSymbol can be undefined at runtime for primitive types */
   return (
-    returnType?.symbol?.name === "LuaMultiReturn" ||
-    returnType?.aliasSymbol?.name === "LuaMultiReturn"
+    returnType.symbol?.name === "LuaMultiReturn" ||
+    returnType.aliasSymbol?.name === "LuaMultiReturn"
   );
+  /* oxlint-enable typescript/no-unnecessary-condition */
 }

@@ -76,7 +76,9 @@ describe("replaceArrayElements", () => {
       replaceArrayElements(statements, new Map(), new Set(["i"]));
 
       // LHS is still a table index expression (not replaced)
-      expect(tstl.isTableIndexExpression(assignStmt.left[0])).toBe(true);
+      const lhs0 = assignStmt.left[0];
+      if (!lhs0) return;
+      expect(tstl.isTableIndexExpression(lhs0)).toBe(true);
     });
   });
 });

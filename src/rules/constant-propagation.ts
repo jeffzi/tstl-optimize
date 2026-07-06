@@ -57,6 +57,8 @@ function propagateScope(statements: tstl.Statement[]): void {
 
     const lhs = stmt.left[0];
     const rhs = stmt.right[0];
+    /* v8 ignore next -- length checks above guarantee both accesses are defined */
+    if (!lhs || !rhs) continue;
     const symbolId = lhs.symbolId;
     if (symbolId === undefined) continue;
 
@@ -73,7 +75,9 @@ function propagateScope(statements: tstl.Statement[]): void {
   /* v8 ignore start -- defensive: no TS-reachable path produces symbolId-less writes */
   const candidatesByName = new Map<string, number[]>();
   for (const [symbolId, candidate] of candidates) {
-    const name = candidate.declStmt.left[0].text;
+    const lhsAtZero = candidate.declStmt.left[0];
+    if (!lhsAtZero) continue;
+    const name = lhsAtZero.text;
     const ids = candidatesByName.get(name);
     if (ids !== undefined) {
       ids.push(symbolId);

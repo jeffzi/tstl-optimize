@@ -15,6 +15,9 @@ pre-commit:
     typecheck:
       glob: "**/*.ts"
       run: npm run typecheck
+    typelint:
+      glob: "{src,scripts}/**/*.ts"
+      run: npx oxlint --type-aware src scripts
     fallow:
       glob: "**/*.{ts,js,json}"
       run: npx fallow audit --quiet

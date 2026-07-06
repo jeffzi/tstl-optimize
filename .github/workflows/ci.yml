@@ -40,6 +40,9 @@ jobs:
             npm run typecheck
           fi
 
+      - name: Type-aware lint
+        run: npm run check:typelint
+
       - name: Fallow audit
         run: npm run check:fallow
 

@@ -13,7 +13,11 @@ function countOccurrences(text: string, needle: string): number {
 function parseCallExpression(source: string): ts.CallExpression {
   const sourceFile = ts.createSourceFile("main.ts", source, ts.ScriptTarget.Latest, true);
   const statement = sourceFile.statements[0];
-  if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+  if (
+    !statement ||
+    !ts.isExpressionStatement(statement) ||
+    !ts.isCallExpression(statement.expression)
+  ) {
     throw new Error("Expected first statement to be a call expression.");
   }
   return statement.expression;
@@ -22,7 +26,11 @@ function parseCallExpression(source: string): ts.CallExpression {
 function parseBinaryExpression(source: string): ts.BinaryExpression {
   const sourceFile = ts.createSourceFile("main.ts", source, ts.ScriptTarget.Latest, true);
   const statement = sourceFile.statements[0];
-  if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression)) {
+  if (
+    !statement ||
+    !ts.isExpressionStatement(statement) ||
+    !ts.isBinaryExpression(statement.expression)
+  ) {
     throw new Error("Expected first statement to be a binary expression.");
   }
   return statement.expression;

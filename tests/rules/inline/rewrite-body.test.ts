@@ -96,7 +96,9 @@ describe("rewriteWithConstSubstitutions", () => {
 
     const result = rewriteWithConstSubstitutions(objectLiteral, substitutions, checker);
 
-    expect(ts.isShorthandPropertyAssignment(result.properties[0])).toBe(true);
+    const prop0 = result.properties[0];
+    if (!prop0) return;
+    expect(ts.isShorthandPropertyAssignment(prop0)).toBe(true);
   });
 
   it("keeps synthetic shorthand properties without symbols", () => {
@@ -148,9 +150,10 @@ describe("rewriteWithConstSubstitutions", () => {
       expect(ts.isIdentifier(call.expression) && (call.expression as ts.Identifier).text).toBe(
         "require",
       );
-      expect(
-        ts.isStringLiteral(call.arguments[0]) && (call.arguments[0] as ts.StringLiteral).text,
-      ).toBe("bit");
+      const arg0 = call.arguments[0];
+      expect(arg0 ? ts.isStringLiteral(arg0) && (arg0 as ts.StringLiteral).text : false).toBe(
+        "bit",
+      );
       expect(propAccess.name.text).toBe("band");
     });
 
@@ -177,9 +180,8 @@ describe("rewriteWithConstSubstitutions", () => {
       expect(ts.isIdentifier(call.expression) && (call.expression as ts.Identifier).text).toBe(
         "require",
       );
-      expect(
-        ts.isStringLiteral(call.arguments[0]) && (call.arguments[0] as ts.StringLiteral).text,
-      ).toBe("bit");
+      const arg = call.arguments[0];
+      expect(arg ? ts.isStringLiteral(arg) && (arg as ts.StringLiteral).text : false).toBe("bit");
     });
 
     it("literal substitution takes priority over import substitution for the same symbol", () => {

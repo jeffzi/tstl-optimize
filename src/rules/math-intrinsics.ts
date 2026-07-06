@@ -227,43 +227,61 @@ function handleCallExpression(
 
   switch (method) {
     case "sqrt": {
+      const [arg0] = args;
       if (args.length !== 1) return undefined;
-      const sqrtResult = buildSqrt(context.transformExpression(args[0]));
+      /* v8 ignore next -- noUncheckedIndexedAccess guard; length check above ensures arg0 exists */
+      if (!arg0) return undefined;
+      const sqrtResult = buildSqrt(context.transformExpression(arg0));
       tstl.setNodeOriginal(sqrtResult, node);
       return sqrtResult;
     }
     case "floor": {
+      const [arg0] = args;
       if (args.length !== 1) return undefined;
-      return foldNumericUnary(args[0], node, Math.floor);
+      /* v8 ignore next -- noUncheckedIndexedAccess guard; length check above ensures arg0 exists */
+      if (!arg0) return undefined;
+      return foldNumericUnary(arg0, node, Math.floor);
     }
     case "ceil": {
+      const [arg0] = args;
       if (args.length !== 1) return undefined;
-      return foldNumericUnary(args[0], node, Math.ceil);
+      /* v8 ignore next -- noUncheckedIndexedAccess guard; length check above ensures arg0 exists */
+      if (!arg0) return undefined;
+      return foldNumericUnary(arg0, node, Math.ceil);
     }
     case "round": {
+      const [arg0] = args;
       if (args.length !== 1) return undefined;
+      /* v8 ignore next -- noUncheckedIndexedAccess guard; length check above ensures arg0 exists */
+      if (!arg0) return undefined;
       // Math.round uses "round half toward positive infinity" — the same
       // semantics as Lua's math.floor(x + 0.5) idiom emitted by TSTL.
-      return foldNumericUnary(args[0], node, Math.round);
+      return foldNumericUnary(arg0, node, Math.round);
     }
     case "abs": {
+      const [arg0] = args;
       if (args.length !== 1) return undefined;
-      if (hasSideEffects(args[0])) return undefined;
-      const absResult = buildAbs(context.transformExpression(args[0]));
+      /* v8 ignore next -- noUncheckedIndexedAccess guard; length check above ensures arg0 exists */
+      if (!arg0) return undefined;
+      if (hasSideEffects(arg0)) return undefined;
+      const absResult = buildAbs(context.transformExpression(arg0));
       tstl.setNodeOriginal(absResult, node);
       return absResult;
     }
     case "max":
     case "min": {
+      const [arg0, arg1] = args;
       if (args.length !== 2) return undefined;
-      if (!isSafeMinMaxRewriteArg(args[0]) || !isSafeMinMaxRewriteArg(args[1])) {
+      /* v8 ignore next -- noUncheckedIndexedAccess guard; length check above ensures arg0/arg1 exist */
+      if (!arg0 || !arg1) return undefined;
+      if (!isSafeMinMaxRewriteArg(arg0) || !isSafeMinMaxRewriteArg(arg1)) {
         return undefined;
       }
       const op =
         method === "max" ? tstl.SyntaxKind.GreaterThanOperator : tstl.SyntaxKind.LessThanOperator;
       const minMaxResult = buildMinMax(
-        context.transformExpression(args[0]),
-        context.transformExpression(args[1]),
+        context.transformExpression(arg0),
+        context.transformExpression(arg1),
         op,
       );
       tstl.setNodeOriginal(minMaxResult, node);
@@ -374,5 +392,5 @@ export const createVisitors: RuleFactory = (checker, config) => {
       return powResult;
     },
   };
-  return visitors as tstl.Visitors;
+  return visitors;
 };

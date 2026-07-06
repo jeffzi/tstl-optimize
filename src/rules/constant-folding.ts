@@ -23,8 +23,11 @@ function compareUtf8Strings(left: string, right: string): number {
   const sharedLength = Math.min(leftBytes.length, rightBytes.length);
 
   for (let i = 0; i < sharedLength; i++) {
-    if (leftBytes[i] !== rightBytes[i]) {
-      return leftBytes[i] < rightBytes[i] ? -1 : 1;
+    const leftByte = leftBytes[i];
+    const rightByte = rightBytes[i];
+    if (leftByte === undefined || rightByte === undefined) continue;
+    if (leftByte !== rightByte) {
+      return leftByte < rightByte ? -1 : 1;
     }
   }
 
@@ -65,6 +68,8 @@ function evaluateBinary(
         return left > right;
       case tstl.SyntaxKind.GreaterEqualOperator:
         return left >= right;
+      default:
+        break;
     }
   }
   if (typeof left === "string" && typeof right === "string") {
@@ -84,6 +89,8 @@ function evaluateBinary(
         return ordering > 0;
       case tstl.SyntaxKind.GreaterEqualOperator:
         return ordering >= 0;
+      default:
+        break;
     }
   }
   if (typeof left === "boolean" && typeof right === "boolean") {
@@ -96,6 +103,8 @@ function evaluateBinary(
         return left && right;
       case tstl.SyntaxKind.OrOperator:
         return left || right;
+      default:
+        break;
     }
   }
   // Mixed types — only fold equality; and/or have different semantics in Lua vs JS for non-booleans
@@ -104,6 +113,8 @@ function evaluateBinary(
       return left === right;
     case tstl.SyntaxKind.InequalityOperator:
       return left !== right;
+    default:
+      break;
   }
   return undefined;
 }
@@ -122,6 +133,8 @@ function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue
       break;
     case tstl.SyntaxKind.NegationOperator:
       if (typeof operand === "number") return -operand;
+      break;
+    default:
       break;
   }
   return undefined;
@@ -198,6 +211,7 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
 
   for (let i = 0; i < statements.length; i++) {
     const stmt = statements[i];
+    if (!stmt) continue;
 
     if (hasReturn) {
       statements.length = i;

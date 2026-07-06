@@ -186,7 +186,7 @@ function extractSourceMapResult(
   }
 
   const tracebackMatch = lua.match(/__TS__SourceMapTraceBack\([^,]+,\s*(\{[^}]*\})\)/);
-  if (tracebackMatch === null) {
+  if (tracebackMatch === null || tracebackMatch[1] === undefined) {
     throw new Error(
       "compileWithSourceMap: no __TS__SourceMapTraceBack(...) call found in Lua output — " +
         "check that sourceMapTraceback:true was applied",

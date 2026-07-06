@@ -1114,6 +1114,7 @@ describe("Walk action API", () => {
       });
 
       const decl = stmts[0];
+      if (!decl) return;
       assertNode(decl, tstl.isVariableDeclarationStatement);
       expect(decl.right?.[0] && tstl.isNumericLiteral(decl.right[0]) && decl.right[0].value).toBe(
         99,
@@ -1260,8 +1261,10 @@ describe("Walk action API", () => {
           return { stmts: [forIn], target: forIn };
         },
         targetValue: 5,
-        check: (target: tstl.ForInStatement) =>
-          tstl.isNumericLiteral(target.expressions[0]) && target.expressions[0].value === 99,
+        check: (target: tstl.ForInStatement) => {
+          const expr = target.expressions[0];
+          return expr ? tstl.isNumericLiteral(expr) && expr.value === 99 : false;
+        },
       },
       {
         label: "while-statement condition",
@@ -1300,8 +1303,10 @@ describe("Walk action API", () => {
           return { stmts: [assignStmt], target: assignStmt };
         },
         targetValue: 1,
-        check: (target: tstl.AssignmentStatement) =>
-          tstl.isNumericLiteral(target.right[0]) && target.right[0].value === 99,
+        check: (target: tstl.AssignmentStatement) => {
+          const expr = target.right[0];
+          return expr ? tstl.isNumericLiteral(expr) && expr.value === 99 : false;
+        },
       },
       {
         label: "assignment-statement LHS table",
@@ -1383,8 +1388,10 @@ describe("Walk action API", () => {
           return { stmts: [tstl.createExpressionStatement(call)], target: call };
         },
         targetValue: 1,
-        check: (target: tstl.MethodCallExpression) =>
-          tstl.isNumericLiteral(target.params[0]) && target.params[0].value === 99,
+        check: (target: tstl.MethodCallExpression) => {
+          const param = target.params[0];
+          return param ? tstl.isNumericLiteral(param) && param.value === 99 : false;
+        },
       },
       {
         label: "table-expression field key",
@@ -1435,6 +1442,7 @@ describe("Walk action API", () => {
       });
 
       const decl = stmts[0];
+      if (!decl) return;
       assertNode(decl, tstl.isVariableDeclarationStatement);
       expect(decl.right?.[0] && tstl.isNumericLiteral(decl.right[0]) && decl.right[0].value).toBe(
         99,

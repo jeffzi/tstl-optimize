@@ -97,11 +97,12 @@ export function deepCloneExpression(node: tstl.Expression): tstl.Expression {
     }
     case tstl.SyntaxKind.FunctionExpression: {
       const { params, dots, body, flags } = node as tstl.FunctionExpression;
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- body can be undefined at runtime despite the type declaration
       if (!body) {
         throw new Error("FunctionExpression body is required for deepCloneExpression");
       }
       const clonedParams = params?.map((p) => deepCloneExpression(p) as tstl.Identifier);
-      const clonedDots = dots ? (tstl.cloneNode(dots) as tstl.DotsLiteral) : undefined;
+      const clonedDots = dots ? tstl.cloneNode(dots) : undefined;
       const clonedBody = cloneBlock(body);
       return cloneWith(node, () =>
         tstl.createFunctionExpression(clonedBody, clonedParams, clonedDots, flags),
@@ -187,10 +188,12 @@ export function deepCloneStatement(stmt: tstl.Statement): tstl.Statement {
     }
     case tstl.SyntaxKind.ReturnStatement: {
       const exprs = (stmt as tstl.ReturnStatement).expressions;
+      /* oxlint-disable typescript/no-unnecessary-condition -- expressions can be undefined at runtime (bare return) */
       return cloneWith(stmt, () =>
-        // biome-ignore lint/suspicious/noExplicitAny: expressions is typed as required but can be undefined at runtime (bare return)
+        // biome-ignore lint/suspicious/noExplicitAny: expressions can be undefined at runtime despite the type declaration (bare return)
         (tstl.createReturnStatement as any)(exprs?.map(deepCloneExpression)),
       );
+      /* oxlint-enable typescript/no-unnecessary-condition */
     }
     case tstl.SyntaxKind.ExpressionStatement:
       return cloneWith(stmt, () =>

@@ -68,9 +68,13 @@ function eliminateDeadLocals(
       stmt.right !== undefined &&
       stmt.right.length === 1
     ) {
-      const symbolId = stmt.left[0].symbolId;
+      const decl = stmt.left[0];
+      const rhs = stmt.right[0];
+      /* v8 ignore next -- length checks above guarantee both accesses are defined */
+      if (!decl || !rhs) continue;
+      const symbolId = decl.symbolId;
       if (symbolId !== undefined) {
-        declsBySymbol.set(symbolId, { index, stmt, rhs: stmt.right[0] });
+        declsBySymbol.set(symbolId, { index, stmt, rhs });
       }
     }
   }
@@ -91,7 +95,11 @@ function eliminateDeadLocals(
       }
 
       // Keep initializer if the name is accessed by a symbolId-less identifier
-      const declName = stmt.left[0].text;
+      const declIdent = stmt.left[0];
+      if (declIdent === undefined) {
+        continue;
+      }
+      const declName = declIdent.text;
       if (undefinedSymbolIdNames.has(declName)) {
         continue;
       }

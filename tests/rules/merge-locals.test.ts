@@ -1722,9 +1722,15 @@ describe("merge-locals — upvalue capture detection", () => {
       const statements = extractInnerBody(transformed) as tstl.VariableDeclarationStatement[];
 
       expect(statements).toHaveLength(3);
-      expect(statements[0].left).toHaveLength(1);
-      expect(statements[1].right).toHaveLength(2);
-      expect(statements[2].left).toHaveLength(1);
+      const stmt0 = statements[0];
+      if (!stmt0) return;
+      expect(stmt0.left).toHaveLength(1);
+      const stmt1 = statements[1];
+      if (!stmt1) return;
+      expect(stmt1.right).toHaveLength(2);
+      const stmt2 = statements[2];
+      if (!stmt2) return;
+      expect(stmt2.left).toHaveLength(1);
     });
   });
 
@@ -1817,7 +1823,8 @@ describe("merge-locals — upvalue capture detection", () => {
           // After merge, all n declarations share one local statement → only one `local ` line in the function.
           // We check the function body has exactly one local declaration line.
           const localLines = lua.split("\n").filter((l) => /^local v0/.test(l));
-          return localLines.length === 1 && localLines[0].includes(`v${n - 1}`);
+          const localLine = localLines[0];
+          return localLines.length === 1 && localLine ? localLine.includes(`v${n - 1}`) : false;
         }),
         FC_OPTS,
       );

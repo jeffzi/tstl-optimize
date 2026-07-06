@@ -84,22 +84,28 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
     // On property access, only rewrite the object side, not the property name
     if (ts.isPropertyAccessExpression(n)) {
       const rewrittenExpr = ts.visitNode(n.expression, visit);
-      /* v8 ignore next -- property-access expressions only visit expression children */
+      /* v8 ignore start -- property-access expressions only visit expression children */
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- visitNode can return undefined at runtime
       if (!rewrittenExpr || !ts.isExpression(rewrittenExpr)) return n;
+      /* v8 ignore stop */
       return ts.factory.updatePropertyAccessExpression(n, rewrittenExpr, n.name);
     }
 
     if (ts.isPropertyAssignment(n)) {
       const rewrittenInitializer = ts.visitNode(n.initializer, visit);
-      /* v8 ignore next -- property assignments only visit expression initializers */
+      /* v8 ignore start -- property assignments only visit expression initializers */
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- visitNode can return undefined at runtime
       if (!rewrittenInitializer || !ts.isExpression(rewrittenInitializer)) return n;
+      /* v8 ignore stop */
 
       if (ts.isComputedPropertyName(n.name)) {
         const rewrittenName = ts.visitNode(n.name.expression, visit);
-        /* v8 ignore next -- computed property names only visit expression children */
+        /* v8 ignore start -- computed property names only visit expression children */
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- visitNode can return undefined at runtime
         if (!rewrittenName || !ts.isExpression(rewrittenName)) {
           return ts.factory.updatePropertyAssignment(n, n.name, rewrittenInitializer);
         }
+        /* v8 ignore stop */
         return ts.factory.updatePropertyAssignment(
           n,
           ts.factory.updateComputedPropertyName(n.name, rewrittenName),
@@ -159,6 +165,7 @@ export function rewriteWithConstSubstitutions<T extends ts.Node>(
     },
   ]);
   const transformed = result.transformed[0];
+  if (!transformed) throw new Error("Transform produced no result");
   result.dispose();
   return transformed;
 }

@@ -141,6 +141,8 @@ function pruneTrailingEmptyBranches(
     // Work backwards through the elseif chain (skipping the main if at index 0)
     for (let i = chain.length - 1; i > 0; i--) {
       const current = chain[i];
+      /* v8 ignore next -- loop bounds ensure chain[i] is defined */
+      if (!current) continue;
       if (
         current.ifBlock.statements.length === 0 &&
         isSafeEmptyBranchCondition(current.condition, safeIdentifiers)
@@ -168,7 +170,7 @@ function negateCondition(expr: tstl.Expression): tstl.Expression {
 
 function promoteElseBlock(statements: tstl.Statement[], i: number): void {
   const stmt = statements[i];
-  if (!tstl.isIfStatement(stmt) || stmt.ifBlock.statements.length > 0 || !stmt.elseBlock) {
+  if (!stmt || !tstl.isIfStatement(stmt) || stmt.ifBlock.statements.length > 0 || !stmt.elseBlock) {
     return;
   }
 
@@ -213,6 +215,10 @@ function removeEmptyBranches(
   let i = 0;
   while (i < statements.length) {
     const stmt = statements[i];
+    if (!stmt) {
+      i++;
+      continue;
+    }
     rememberSafeConditionBindings(stmt, safeIdentifiers);
 
     if (tstl.isIfStatement(stmt)) {

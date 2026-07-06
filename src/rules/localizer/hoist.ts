@@ -59,7 +59,7 @@ function replaceChains(
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
           const root = chain.split(".")[0];
-          if (isRootShadowedInActiveScopes(root, shadowStack)) {
+          if (root !== undefined && isRootShadowedInActiveScopes(root, shadowStack)) {
             // Root is shadowed by an active ancestor function parameter — don't replace
             return Walk.keep;
           }
@@ -118,6 +118,7 @@ export function hoistScope(
     if (count < threshold || alreadyHoisted.has(chain)) continue;
     const parts = chain.split(".");
     const root = parts[0];
+    if (root === undefined) continue;
     if (isRootAllowed && !isRootAllowed(root)) continue;
     // Module-scope hoists must come from actual module-scope uses for non-stdlib roots.
     // Otherwise an included mutable root like obj/config would be snapshotted once at load time

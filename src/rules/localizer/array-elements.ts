@@ -87,8 +87,9 @@ export function hoistArrayElements(
     if (count < threshold) continue;
 
     const hoistBaseName = `____${baseName}`;
-    // biome-ignore lint/style/noNonNullAssertion: counts and loopVar are populated together — undefined is unreachable
-    const indexName = loopVar.get(baseName)!;
+    const indexName = loopVar.get(baseName);
+    /* v8 ignore next -- counts and loopVar are populated together; undefined is unreachable */
+    if (indexName === undefined) continue;
 
     // Safety: base locally defined — hoisting would read before definition
     if (scopeDefs.has(baseName)) continue;
@@ -101,8 +102,11 @@ export function hoistArrayElements(
     scopeDefs.add(hoistName);
     unavailableNames.add(hoistName);
 
-    // biome-ignore lint/style/noNonNullAssertion: firstAccess and counts are populated together — undefined is unreachable
-    const positionSource = firstAccess.get(baseName)!;
+    const positionSource = firstAccess.get(baseName);
+    /* v8 ignore next -- counts and firstAccess are populated together; undefined is unreachable */
+    if (positionSource === undefined) {
+      throw new Error(`unreachable: no firstAccess for ${baseName}`);
+    }
     const tableAccess = tstl.createTableIndexExpression(
       withPositionFrom(tstl.createIdentifier(baseName), positionSource),
       withPositionFrom(tstl.createIdentifier(indexName), positionSource),

@@ -355,10 +355,12 @@ export function extractRequirePattern(expr: tstl.Expression): RequirePattern | u
     tstl.isCallExpression(expr) &&
     tstl.isIdentifier(expr.expression) &&
     expr.expression.text === "require" &&
-    expr.params.length === 1 &&
-    tstl.isStringLiteral(expr.params[0])
+    expr.params.length === 1
   ) {
-    return { requirePath: expr.params[0].value, memberName: undefined };
+    const param = expr.params[0];
+    if (param && tstl.isStringLiteral(param)) {
+      return { requirePath: param.value, memberName: undefined };
+    }
   }
 
   // require("path").member  →  TableIndexExpression(CallExpression(require, ["path"]), StringLiteral(member))

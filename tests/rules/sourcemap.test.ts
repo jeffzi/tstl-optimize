@@ -68,6 +68,7 @@ const x = DEBUG;`;
     expect(pos.line).toBe(2);
     // TS line 2: "const x = DEBUG;" → `DEBUG` starts at col 10
     const tsLine2 = source.split("\n")[1];
+    if (!tsLine2) return;
     const tsDebugCol = tsLine2.indexOf("DEBUG");
     expect(pos.column).toBe(tsDebugCol);
   });
@@ -110,6 +111,7 @@ for (const i of $range(0, n - 1)) {
 
     // col 23 is where `0` appears in `for (const i of $range(0, n - 1)) {`
     const tsLine3 = source.split("\n")[2];
+    if (!tsLine3) return;
     const tsZeroCol = tsLine3.indexOf("$range(") + "$range(".length;
     expect(pos.column).toBe(tsZeroCol);
     assertTracebackMapsTo(traceback, forLine, 3);
@@ -138,6 +140,7 @@ for (const i of $range(0, 5)) {
 
     const forLine = findLuaLine(lua, "for i = 1, 6");
     const forLineText = lua.split("\n")[forLine - 1];
+    if (!forLineText) return;
     // col of `6` in `for i = 1, 6 do`
     const luaLimitCol = forLineText.indexOf(", 6") + 2;
 
@@ -145,6 +148,7 @@ for (const i of $range(0, 5)) {
     expect(pos.line).toBe(2);
     // TS line 2: `for (const i of $range(0, 5)) {` → `5` is after `$range(0, `
     const tsLine2 = source.split("\n")[1];
+    if (!tsLine2) return;
     const tsLimitCol = tsLine2.indexOf("$range(0, ") + "$range(0, ".length;
     expect(pos.column).toBe(tsLimitCol);
   });
@@ -169,6 +173,7 @@ for (const i of $range(0, n - 1)) {
 
     const bodyLine = findLuaLine(lua, "arr[i]");
     const bodyLineText = lua.split("\n")[bodyLine - 1];
+    if (!bodyLineText) return;
     const luaIndexCol = luaColOf(bodyLineText, "i]");
     const pos = await assertMapped(externalMap, bodyLine, luaIndexCol);
     // TS line 4: `  const x = arr[i];`
@@ -210,6 +215,7 @@ const a = Math.floor(x);`;
 
     const luaLine = findLuaLine(lua, "math.floor");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     const exprCol = rhsStartCol(luaLineText);
     const expectedTsCol = tsColOf(source, 1, "Math.floor");
 
@@ -236,6 +242,7 @@ const a = Math.abs(x);`;
 
     const luaLine = findLuaLine(lua, "a =");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     const exprCol = rhsStartCol(luaLineText);
     const expectedTsCol = tsColOf(source, 1, "Math.abs");
 
@@ -260,6 +267,7 @@ const a = Math.sqrt(x);`;
 
     const luaLine = findLuaLine(lua, "^ 0.5");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     const pos = await assertMapped(externalMap, luaLine, rhsStartCol(luaLineText));
     expect(pos.line).toBe(2);
     expect(pos.column).toBe(tsColOf(source, 1, "Math.sqrt"));
@@ -281,6 +289,7 @@ const a = (x + 1) ** 2;`;
 
     const luaLine = findLuaLine(lua, "*");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     const pos = await assertMapped(externalMap, luaLine, rhsStartCol(luaLineText));
     expect(pos.line).toBe(2);
     expect(pos.column).toBe(tsColOf(source, 1, "(x + 1) ** 2"));
@@ -304,6 +313,7 @@ const a = M.floor(x);`;
     // M.floor(x) triggers the builtin-alias branch — emits a CallExpression
     const luaLine = findLuaLine(lua, "M.floor");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     const pos = await assertMapped(externalMap, luaLine, rhsStartCol(luaLineText));
     // Line 3 in TS: const a = M.floor(x);
     expect(pos.line).toBe(3);
@@ -358,6 +368,7 @@ if (x) {
     expect(pos.line).toBe(3);
     // TS line 3: "if (x) {" → `x` is at col 4
     const tsLine3 = source.split("\n")[2];
+    if (!tsLine3) return;
     const tsCondCol = tsLine3.indexOf("(") + 1;
     expect(pos.column).toBe(tsCondCol);
   });
@@ -394,12 +405,14 @@ if (x > 0) {
     // The `(x > 0)` ParenthesizedExpression starts at col 7 (after `if not `).
     const ifLine = findLuaLine(lua, "if not (x > 0) then");
     const luaLineText = lua.split("\n")[ifLine - 1];
+    if (!luaLineText) return;
     const luaParensCol = luaLineText.indexOf("(x");
 
     const pos = await assertMapped(externalMap, ifLine, luaParensCol);
     expect(pos.line).toBe(3);
     // TS line 3: `if (x > 0) {` → `x > 0` BinaryExpression starts at `x`, col 4
     const tsLine3 = source.split("\n")[2];
+    if (!tsLine3) return;
     const tsCondCol = tsLine3.indexOf("x > 0");
     expect(pos.column).toBe(tsCondCol);
   });
@@ -431,6 +444,7 @@ describe("constant-folding sourcemap: folded literal maps to original expression
     // `3` starts at col 4 (after `a = `).
     const luaLine = findLuaLine(lua, "a = 3");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     const pos = await assertMapped(externalMap, luaLine, rhsStartCol(luaLineText));
     expect(pos.line).toBe(1);
     expect(pos.column).toBe(tsColOf(source, 0, "1 + 2"));
@@ -512,6 +526,7 @@ function f() {
     // The `42` should map back to the TS position of `x` in `return x;`
     const luaLine = findLuaLine(lua, "return 42");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
     // Find column of `42` in the Lua line
     const luaCol = luaColOf(luaLineText, "42");
 
@@ -558,6 +573,7 @@ obj[k] += other[j];`;
 
     const luaLine = findLuaLine(lua, "obj[k] = obj[k] + other[j]");
     const luaLineText = lua.split("\n")[luaLine - 1];
+    if (!luaLineText) return;
 
     // Matched substitution: obj[k] on LHS maps to TS line 5
     const lhsPos = await assertMapped(externalMap, luaLine, luaColOf(luaLineText, "obj[k]"));

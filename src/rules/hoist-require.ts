@@ -70,7 +70,7 @@ function hoistRequireInScope(
   walkStatements(statements, {
     shallow: true,
     expr: (expr: tstl.Expression) => {
-      if (tstl.isIdentifier(expr) && expr.text !== undefined) {
+      if (tstl.isIdentifier(expr)) {
         existingNames.add(expr.text);
       }
       return Walk.keep;

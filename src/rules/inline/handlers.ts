@@ -139,6 +139,7 @@ export function handleVariableStatement(
   if (decls.length !== 1) return undefined;
 
   const decl = decls[0];
+  if (!decl) return undefined;
   if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
 
   const callNode = decl.initializer;
@@ -379,12 +380,15 @@ export function handleVariableStatementDeclaration(
   checker: ts.TypeChecker,
 ): tstl.Statement[] | undefined {
   const decls = node.declarationList.declarations;
+  if (decls.length !== 1) return undefined;
+  const decl = decls[0];
+  if (!decl) return undefined;
+
   if (
-    decls.length === 1 &&
     hasInlineTag(node) &&
-    isModuleScopeDeclaration(decls[0]) &&
+    isModuleScopeDeclaration(decl) &&
     !isExported(node) &&
-    canEraseInlineDeclaration(decls[0], checker)
+    canEraseInlineDeclaration(decl, checker)
   ) {
     return [];
   }

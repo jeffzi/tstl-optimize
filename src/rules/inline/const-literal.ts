@@ -393,6 +393,9 @@ function resolveRequireArgument(
   visited: Set<ts.Symbol>,
 ): string | undefined {
   const arg = call.arguments[0];
+  /* v8 ignore next -- isRequireCall verified arguments.length === 1 */
+  if (!arg) return undefined;
+
   // Fast path: literal string argument.
   const literal = extractPrimitiveLiteral(arg);
   if (literal?.kind === "string") return literal.value;

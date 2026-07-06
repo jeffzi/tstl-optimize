@@ -108,6 +108,8 @@ export function collectScopeInfo(
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
           const root = chain.split(".")[0];
+          /* v8 ignore next -- chain is non-empty string; split always returns non-empty array */
+          if (!root) return Walk.keep;
           const isShadowed = isRootShadowedInActiveScopes(root, shadowStack);
           const immediateShadow = shadowStack[shadowStack.length - 1]?.has(root) ?? false;
 
@@ -144,10 +146,11 @@ export function collectScopeInfo(
     stmt: (stmt: tstl.Statement) => {
       currentStmt = stmt;
       if (tstl.isVariableDeclarationStatement(stmt) || tstl.isAssignmentStatement(stmt)) {
+        const onlyRight = stmt.right?.length === 1 ? stmt.right[0] : undefined;
         const isFunctionDef =
           tstl.isAssignmentStatement(stmt) &&
-          stmt.right.length === 1 &&
-          tstl.isFunctionExpression(stmt.right[0]);
+          onlyRight !== undefined &&
+          tstl.isFunctionExpression(onlyRight);
 
         for (const lhs of stmt.left) {
           if (tstl.isIdentifier(lhs)) {
@@ -338,8 +341,8 @@ export function buildChainExpression(
   source?: tstl.Node,
   rootIdentifier?: tstl.Identifier,
 ): tstl.TableIndexExpression {
-  const parts = chain.split(".");
-  if (parts.length < 2) {
+  const [rootName, firstKeyName, ...rest] = chain.split(".");
+  if (rootName === undefined || firstKeyName === undefined) {
     throw new Error(`buildChainExpression requires a dotted chain (got "${chain}")`);
   }
 
@@ -348,19 +351,16 @@ export function buildChainExpression(
   };
 
   const root = rootIdentifier
-    ? tstl.createIdentifier(parts[0], undefined, rootIdentifier.symbolId)
-    : tstl.createIdentifier(parts[0]);
+    ? tstl.createIdentifier(rootName, undefined, rootIdentifier.symbolId)
+    : tstl.createIdentifier(rootName);
   applySource(root);
 
-  // Build the first TableIndexExpression from the root identifier. The parts.length < 2
-  // guard above ensures parts[1] exists, so the non-null assertion is safe.
-  // biome-ignore lint/style/noNonNullAssertion: length guard above proves parts[1] is defined
-  const firstKey = tstl.createStringLiteral(parts[1]!);
+  const firstKey = tstl.createStringLiteral(firstKeyName);
   applySource(firstKey);
   let result: tstl.TableIndexExpression = tstl.createTableIndexExpression(root, firstKey);
   applySource(result);
 
-  for (const part of parts.slice(2)) {
+  for (const part of rest) {
     const key = tstl.createStringLiteral(part);
     applySource(key);
     result = tstl.createTableIndexExpression(result, key);

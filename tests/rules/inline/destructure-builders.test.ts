@@ -14,7 +14,8 @@ import { findNode, makeChecker } from "./helpers";
 const SOURCE = "function f(x: number): number { return x; }";
 const { checker: fixtureChecker, sourceFile } = makeChecker(SOURCE);
 const firstStmt = sourceFile.statements[0];
-if (!ts.isFunctionDeclaration(firstStmt)) throw new Error("expected function declaration");
+if (!firstStmt || !ts.isFunctionDeclaration(firstStmt))
+  throw new Error("expected function declaration");
 const funcDecl = firstStmt;
 if (!funcDecl.name) throw new Error("expected function name");
 const maybeResolvedSymbol = fixtureChecker.getSymbolAtLocation(funcDecl.name);

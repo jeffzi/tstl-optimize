@@ -631,12 +631,14 @@ describe("constant-folding", () => {
       const transformed = runSourceFileVisitor(file);
       expect(tstl.isFile(transformed)).toBe(true);
       const file_transformed = transformed as tstl.File;
-      const [bitwise, length, neg] =
-        file_transformed.statements as tstl.VariableDeclarationStatement[];
+      const statements = file_transformed.statements as tstl.VariableDeclarationStatement[];
+      const bitwise = statements[0];
+      const length = statements[1];
+      const neg = statements[2];
 
-      expect(bitwise.right && tstl.isUnaryExpression(bitwise.right[0])).toBe(true);
-      expect(length.right && tstl.isUnaryExpression(length.right[0])).toBe(true);
-      expect(neg.right && tstl.isUnaryExpression(neg.right[0])).toBe(true);
+      expect(bitwise?.right?.[0] && tstl.isUnaryExpression(bitwise.right[0])).toBe(true);
+      expect(length?.right?.[0] && tstl.isUnaryExpression(length.right[0])).toBe(true);
+      expect(neg?.right?.[0] && tstl.isUnaryExpression(neg.right[0])).toBe(true);
     });
 
     it("truncates raw Lua statements after a direct return", () => {

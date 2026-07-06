@@ -284,7 +284,9 @@ describe("hasCrossModuleFreeVariable", () => {
     const { checker, sourceFile } = makeMultiFileChecker(files, "test.ts");
     const fn = findFunction(sourceFile);
     // For destructured parameter defaults, check parameters; for body usage, check statements
-    const isParameterTest = files["test.ts"].includes("fn({ shared");
+    const testContent = files["test.ts"];
+    if (!testContent) return;
+    const isParameterTest = testContent.includes("fn({ shared");
     const nodesToCheck = isParameterTest ? fn.parameters : (fn.body?.statements ?? []);
     const params = isParameterTest ? [] : fn.parameters;
 
