@@ -98,8 +98,10 @@ describe("deepCloneExpression", () => {
     assertNode(cloned, tstl.isTableExpression);
 
     expect(cloned).not.toBe(tbl);
-    expect(cloned.fields[0]).not.toBe(field);
-    expect(cloned.fields[0].key).not.toBe(field.key);
+    const clonedField = cloned.fields[0];
+    expect(clonedField).toBeDefined();
+    expect(clonedField).not.toBe(field);
+    expect(clonedField?.key).not.toBe(field.key);
     expect(cloned).toStrictEqual(tbl);
   });
 
@@ -134,12 +136,14 @@ describe("deepCloneExpression", () => {
 
     const cloned = deepCloneExpression(funcExpr);
     assertNode(cloned, tstl.isFunctionExpression);
-    assertNode(cloned.body.statements[0], tstl.isReturnStatement);
+    const clonedStmt = cloned.body.statements[0];
+    if (!clonedStmt) return;
+    assertNode(clonedStmt, tstl.isReturnStatement);
 
     expect(cloned).not.toBe(funcExpr);
     expect(cloned.body).not.toBe(funcExpr.body);
-    expect(cloned.body.statements[0]).not.toBe(bodyStmt);
-    expect(cloned.body.statements[0].expressions).toBeUndefined();
+    expect(clonedStmt).not.toBe(bodyStmt);
+    expect((clonedStmt as tstl.ReturnStatement).expressions).toBeUndefined();
     expect(cloned).toStrictEqual(funcExpr);
   });
 
@@ -185,11 +189,16 @@ describe("deepCloneExpression", () => {
     const field2 = tstl.createTableFieldExpression(id("v2")); // No key
     const expr = tstl.createTableExpression([field1, field2]);
     const cloned = deepCloneExpression(expr);
+    if (!cloned) return;
     expect(cloned).not.toBe(expr);
     assertNode(cloned, tstl.isTableExpression);
-    expect(cloned.fields[0]).not.toBe(field1);
-    expect(cloned.fields[0].key).not.toBe(field1.key);
-    expect(cloned.fields[1]).not.toBe(field2);
+    const clonedField0 = cloned.fields[0];
+    if (!clonedField0) return;
+    expect(clonedField0).not.toBe(field1);
+    expect(clonedField0.key).not.toBe(field1.key);
+    const clonedField1 = cloned.fields[1];
+    if (!clonedField1) return;
+    expect(clonedField1).not.toBe(field2);
     expect(cloned).toStrictEqual(expr);
   });
 

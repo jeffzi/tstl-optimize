@@ -23,8 +23,11 @@ function compareUtf8Strings(left: string, right: string): number {
   const sharedLength = Math.min(leftBytes.length, rightBytes.length);
 
   for (let i = 0; i < sharedLength; i++) {
-    if (leftBytes[i] !== rightBytes[i]) {
-      return leftBytes[i] < rightBytes[i] ? -1 : 1;
+    const leftByte = leftBytes[i];
+    const rightByte = rightBytes[i];
+    if (leftByte === undefined || rightByte === undefined) continue;
+    if (leftByte !== rightByte) {
+      return leftByte < rightByte ? -1 : 1;
     }
   }
 
@@ -65,6 +68,8 @@ function evaluateBinary(
         return left > right;
       case tstl.SyntaxKind.GreaterEqualOperator:
         return left >= right;
+      default:
+        break;
     }
   }
   if (typeof left === "string" && typeof right === "string") {
@@ -84,6 +89,8 @@ function evaluateBinary(
         return ordering > 0;
       case tstl.SyntaxKind.GreaterEqualOperator:
         return ordering >= 0;
+      default:
+        break;
     }
   }
   if (typeof left === "boolean" && typeof right === "boolean") {
@@ -96,6 +103,8 @@ function evaluateBinary(
         return left && right;
       case tstl.SyntaxKind.OrOperator:
         return left || right;
+      default:
+        break;
     }
   }
   // Mixed types — only fold equality; and/or have different semantics in Lua vs JS for non-booleans
@@ -104,6 +113,8 @@ function evaluateBinary(
       return left === right;
     case tstl.SyntaxKind.InequalityOperator:
       return left !== right;
+    default:
+      break;
   }
   return undefined;
 }
@@ -122,6 +133,8 @@ function evaluateUnary(op: tstl.Operator, operand: ConstantValue): ConstantValue
       break;
     case tstl.SyntaxKind.NegationOperator:
       if (typeof operand === "number") return -operand;
+      break;
+    default:
       break;
   }
   return undefined;
@@ -142,11 +155,63 @@ function allConditionsPure(stmt: tstl.IfStatement): boolean {
   return true;
 }
 
+/**
+ * Recurses into an if/elseif/else chain, pruning empty pure branches. Returns true if the
+ * whole statement is now dead (every branch empty and every condition pure) and should be
+ * removed by the caller.
+ */
+function foldIfStatement(stmt: tstl.IfStatement): boolean {
+  optimizeControlFlow(stmt.ifBlock.statements);
+
+  // Single forward pass: recurse into each branch and simultaneously track
+  // allBranchesEmpty / pruneFrom so we only traverse the elseif chain once.
+  // pruneFrom resets to undefined when a non-empty bare else is seen (terminal).
+  let allBranchesEmpty = stmt.ifBlock.statements.length === 0;
+  let pruneFrom: tstl.IfStatement | undefined = allBranchesEmpty ? undefined : stmt;
+  let cursor = stmt.elseBlock;
+  while (cursor) {
+    if (tstl.isIfStatement(cursor)) {
+      optimizeControlFlow(cursor.ifBlock.statements);
+      if (cursor.ifBlock.statements.length > 0) {
+        allBranchesEmpty = false;
+        pruneFrom = cursor;
+      }
+      cursor = cursor.elseBlock;
+    } else {
+      optimizeControlFlow(cursor.statements);
+      if (cursor.statements.length > 0) {
+        allBranchesEmpty = false;
+        pruneFrom = undefined; // bare else is terminal; nothing to prune after it
+      }
+      break;
+    }
+  }
+
+  if (allBranchesEmpty && allConditionsPure(stmt)) {
+    return true;
+  }
+  if (pruneFrom !== undefined) {
+    // Only prune trailing empty elseif branches whose conditions are pure.
+    let canPrune = true;
+    let toCheck = pruneFrom.elseBlock;
+    while (toCheck && tstl.isIfStatement(toCheck)) {
+      if (!isLuaExprPure(toCheck.condition)) {
+        canPrune = false;
+        break;
+      }
+      toCheck = toCheck.elseBlock;
+    }
+    if (canPrune) pruneFrom.elseBlock = undefined;
+  }
+  return false;
+}
+
 function optimizeControlFlow(statements: tstl.Statement[]): void {
   let hasReturn = false;
 
   for (let i = 0; i < statements.length; i++) {
     const stmt = statements[i];
+    if (!stmt) continue;
 
     if (hasReturn) {
       statements.length = i;
@@ -159,47 +224,9 @@ function optimizeControlFlow(statements: tstl.Statement[]): void {
     }
 
     if (tstl.isIfStatement(stmt)) {
-      optimizeControlFlow(stmt.ifBlock.statements);
-
-      // Single forward pass: recurse into each branch and simultaneously track
-      // allBranchesEmpty / pruneFrom so we only traverse the elseif chain once.
-      // pruneFrom resets to undefined when a non-empty bare else is seen (terminal).
-      let allBranchesEmpty = stmt.ifBlock.statements.length === 0;
-      let pruneFrom: tstl.IfStatement | undefined = allBranchesEmpty ? undefined : stmt;
-      let cursor = stmt.elseBlock;
-      while (cursor) {
-        if (tstl.isIfStatement(cursor)) {
-          optimizeControlFlow(cursor.ifBlock.statements);
-          if (cursor.ifBlock.statements.length > 0) {
-            allBranchesEmpty = false;
-            pruneFrom = cursor;
-          }
-          cursor = cursor.elseBlock;
-        } else {
-          optimizeControlFlow(cursor.statements);
-          if (cursor.statements.length > 0) {
-            allBranchesEmpty = false;
-            pruneFrom = undefined; // bare else is terminal; nothing to prune after it
-          }
-          break;
-        }
-      }
-
-      if (allBranchesEmpty && allConditionsPure(stmt)) {
+      if (foldIfStatement(stmt)) {
         statements.splice(i, 1);
         i--;
-      } else if (pruneFrom !== undefined) {
-        // Only prune trailing empty elseif branches whose conditions are pure.
-        let canPrune = true;
-        let toCheck = pruneFrom.elseBlock;
-        while (toCheck && tstl.isIfStatement(toCheck)) {
-          if (!isLuaExprPure(toCheck.condition)) {
-            canPrune = false;
-            break;
-          }
-          toCheck = toCheck.elseBlock;
-        }
-        if (canPrune) pruneFrom.elseBlock = undefined;
       }
     } else if (tstl.isDoStatement(stmt)) {
       optimizeControlFlow(stmt.statements);

@@ -101,5 +101,5 @@ export const createVisitors: RuleFactory = (checker, config) => {
       return undefined;
     },
   };
-  return visitors as tstl.Visitors;
+  return visitors;
 };

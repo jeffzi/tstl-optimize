@@ -1,3 +1,4 @@
+import type ts from "typescript";
 // biome-ignore lint/performance/noNamespaceImport: TSTL has no default export
 import * as tstl from "typescript-to-lua";
 
@@ -28,6 +29,27 @@ function isLuaStatement(node: unknown): node is tstl.Statement {
 
 function isLuaStatementArray(value: unknown): value is tstl.Statement[] {
   return Array.isArray(value) && value.every(isLuaStatement);
+}
+
+/**
+ * Transforms a TS SourceFile via superTransformNode and returns the resulting
+ * Lua file. Falls back to rebuilding from individual statement transforms when
+ * superTransformNode does not produce a File directly.
+ */
+export function transformSourceFile(
+  node: ts.SourceFile,
+  context: tstl.TransformationContext,
+): tstl.File {
+  const result = context.superTransformNode(node);
+  const fileNode = Array.isArray(result) ? result[0] : result;
+  if (isLuaNode(fileNode) && tstl.isFile(fileNode)) {
+    return fileNode;
+  }
+  const stmts: tstl.Statement[] = [];
+  for (const s of node.statements) {
+    stmts.push(...context.superTransformStatements(s));
+  }
+  return tstl.createFile(stmts, context.usedLuaLibFeatures, "", node);
 }
 
 export function getTransformedFile(result: unknown): tstl.File {

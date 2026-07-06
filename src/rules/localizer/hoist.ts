@@ -45,7 +45,7 @@ function isAnyPrefixBound(chain: string, scopeDefs: ReadonlySet<string>): boolea
 }
 
 /** In-place replace matching TableIndexExpression chains with cloned identifiers. */
-export function replaceChains(
+function replaceChains(
   statements: readonly tstl.Statement[],
   hoisted: Map<string, tstl.Identifier>,
   shallow: boolean,
@@ -59,7 +59,7 @@ export function replaceChains(
         const chain = luaPropertyChain(expr);
         if (chain !== undefined) {
           const root = chain.split(".")[0];
-          if (isRootShadowedInActiveScopes(root, shadowStack)) {
+          if (root !== undefined && isRootShadowedInActiveScopes(root, shadowStack)) {
             // Root is shadowed by an active ancestor function parameter — don't replace
             return Walk.keep;
           }
@@ -80,7 +80,7 @@ export function replaceChains(
   });
 }
 
-export interface HoistScopeOptions {
+interface HoistScopeOptions {
   reservedNames?: ReadonlySet<string>;
   isRootAllowed?: (root: string) => boolean;
   outDecls?: tstl.VariableDeclarationStatement[];
@@ -118,6 +118,7 @@ export function hoistScope(
     if (count < threshold || alreadyHoisted.has(chain)) continue;
     const parts = chain.split(".");
     const root = parts[0];
+    if (root === undefined) continue;
     if (isRootAllowed && !isRootAllowed(root)) continue;
     // Module-scope hoists must come from actual module-scope uses for non-stdlib roots.
     // Otherwise an included mutable root like obj/config would be snapshotted once at load time

@@ -242,6 +242,8 @@ export const createVisitors: RuleFactory = (checker, config) => {
 
       for (let i = 0; i < clauses.length; i++) {
         const clause = clauses[i];
+        /* v8 ignore next -- loop bounds ensure clauses[i] is defined */
+        if (!clause) continue;
         if (ts.isCaseClause(clause)) {
           const caseValue = evaluateScopedCondition(clause.expression);
           if (caseValue === undefined) {
@@ -324,7 +326,9 @@ export const createVisitors: RuleFactory = (checker, config) => {
 
       const collected: ts.Statement[] = [];
       for (let i = matchIndex; i < clauses.length; i++) {
-        const stmts = clauses[i].statements;
+        const clause = clauses[i];
+        if (!clause) break;
+        const stmts = clause.statements;
         if (containsConditionalCaseBreak(stmts)) {
           return context.superTransformStatements(node);
         }

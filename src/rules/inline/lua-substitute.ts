@@ -8,7 +8,7 @@ import { deepCloneExpression } from "../../ast/deep-clone";
  * Otherwise the default recursion rebuilds the node with mapped children.
  * Recurses into nested function bodies (e.g. IIFEs from eager-argument evaluation).
  */
-export function mapLuaExpression(
+function mapLuaExpression(
   node: tstl.Expression,
   leafFn: (n: tstl.Expression) => tstl.Expression | undefined,
 ): tstl.Expression {
@@ -67,15 +67,19 @@ export function mapLuaExpression(
   return node;
 }
 
+const paramSubstituter =
+  (paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>) =>
+  (n: tstl.Expression): tstl.Expression | undefined => {
+    if (!tstl.isIdentifier(n)) return undefined;
+    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
+    return mapped ? deepCloneExpression(mapped) : undefined;
+  };
+
 export function substituteParams(
   node: tstl.Expression,
   paramMap: Map<tstl.SymbolId, tstl.Expression>,
 ): tstl.Expression {
-  return mapLuaExpression(node, (n) => {
-    if (!tstl.isIdentifier(n)) return undefined;
-    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
-    return mapped ? deepCloneExpression(mapped) : undefined;
-  });
+  return mapLuaExpression(node, paramSubstituter(paramMap));
 }
 
 /**
@@ -184,11 +188,7 @@ export function substituteParamsInStatements(
   statements: readonly tstl.Statement[],
   paramMap: ReadonlyMap<tstl.SymbolId, tstl.Expression>,
 ): tstl.Statement[] {
-  return mapLuaStatements(statements, (n) => {
-    if (!tstl.isIdentifier(n)) return undefined;
-    const mapped = n.symbolId !== undefined ? paramMap.get(n.symbolId) : undefined;
-    return mapped ? deepCloneExpression(mapped) : undefined;
-  });
+  return mapLuaStatements(statements, paramSubstituter(paramMap));
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ export function walkLuaExpression(node: tstl.Expression, visit: (n: tstl.Node) =
 // at function/module scope.
 // ---------------------------------------------------------------------------
 
-export interface RequirePattern {
+interface RequirePattern {
   requirePath: string;
   /** Undefined for a bare `require("path")` without a member access. */
   memberName: string | undefined;
@@ -355,10 +355,12 @@ export function extractRequirePattern(expr: tstl.Expression): RequirePattern | u
     tstl.isCallExpression(expr) &&
     tstl.isIdentifier(expr.expression) &&
     expr.expression.text === "require" &&
-    expr.params.length === 1 &&
-    tstl.isStringLiteral(expr.params[0])
+    expr.params.length === 1
   ) {
-    return { requirePath: expr.params[0].value, memberName: undefined };
+    const param = expr.params[0];
+    if (param && tstl.isStringLiteral(param)) {
+      return { requirePath: param.value, memberName: undefined };
+    }
   }
 
   // require("path").member  →  TableIndexExpression(CallExpression(require, ["path"]), StringLiteral(member))

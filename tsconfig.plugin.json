@@ -6,6 +6,7 @@
     "types": ["node"],
     "declaration": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

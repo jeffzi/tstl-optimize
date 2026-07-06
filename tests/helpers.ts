@@ -46,7 +46,7 @@ function checkLuaSyntax(lua: string): void {
   }
 }
 
-export interface CompileResult {
+interface CompileResult {
   lua: string;
   diagnostics: ts.Diagnostic[];
 }
@@ -85,15 +85,22 @@ function extractDiagnosticMessage(messageText: string | ts.DiagnosticMessageChai
   return parts.join("\n");
 }
 
+function collectCompileErrorMessages(
+  result: tstl.TranspileVirtualProjectResult,
+): string | undefined {
+  const errors = result.diagnostics.filter(
+    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
+  );
+  if (errors.length === 0) return undefined;
+  return errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+}
+
 export function extractTranspiledLua(
   result: tstl.TranspileVirtualProjectResult,
   { suffix = "main.lua", context }: { suffix?: string; context?: string } = {},
 ): string {
-  const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
-  );
-  if (errors.length > 0) {
-    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+  const msgs = collectCompileErrorMessages(result);
+  if (msgs) {
     const label = context ? `Compilation errors (${context}):\n` : "";
     throw new Error(`${label}${msgs}`);
   }
@@ -137,7 +144,7 @@ export function compileWithDiagnostics(source: string, options?: CompileOptions)
  */
 export type TracebackTable = Record<number, number>;
 
-export interface SourceMapCompileResult {
+interface SourceMapCompileResult {
   lua: string;
   /** Raw JSON of the external `.lua.map` sourcemap. */
   externalMap: string;
@@ -156,11 +163,8 @@ function extractSourceMapResult(
   luaFileSuffix: string,
   options?: CompileOptions,
 ): SourceMapCompileResult {
-  const errors = result.diagnostics.filter(
-    (d) => d.category === ts.DiagnosticCategory.Error && d.source !== "tstl-optimize",
-  );
-  if (errors.length > 0) {
-    const msgs = errors.map((d) => extractDiagnosticMessage(d.messageText)).join("\n");
+  const msgs = collectCompileErrorMessages(result);
+  if (msgs) {
     throw new Error(msgs);
   }
 
@@ -182,7 +186,7 @@ function extractSourceMapResult(
   }
 
   const tracebackMatch = lua.match(/__TS__SourceMapTraceBack\([^,]+,\s*(\{[^}]*\})\)/);
-  if (tracebackMatch === null) {
+  if (tracebackMatch === null || tracebackMatch[1] === undefined) {
     throw new Error(
       "compileWithSourceMap: no __TS__SourceMapTraceBack(...) call found in Lua output — " +
         "check that sourceMapTraceback:true was applied",

@@ -7,6 +7,7 @@ export interface Edit {
 }
 
 export function walkAstNode(node: luaparse.Node, onNode: (n: luaparse.Node) => void): void {
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- defensive guard: recursive calls cast through Record<string, unknown>
   if (!node || typeof node !== "object" || Array.isArray(node)) {
     return;
   }

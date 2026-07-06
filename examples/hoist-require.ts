@@ -1,3 +1,4 @@
+// biome-ignore lint/suspicious/noExplicitAny: Lua require() returns untyped modules
 declare function require(path: string): any;
 
 // @inline helper wrapping a Lua-native library call.
@@ -6,6 +7,7 @@ declare function require(path: string): any;
 // a single `local ____req_bit_band = require("bit").band`.
 
 /** @inline */
+// biome-ignore lint/suspicious/noExplicitAny: Lua module cast
 const band = (a: number, b: number): number => (require("bit") as any).band(a, b);
 
 const flags = 0xff0f;
@@ -20,6 +22,7 @@ print(low, high);
 
 // Not hoisted: only one call site — the threshold is 2+ occurrences.
 /** @inline */
+// biome-ignore lint/suspicious/noExplicitAny: Lua module cast
 const bor = (a: number, b: number): number => (require("bit") as any).bor(a, b);
 
 const combined = bor(flags, mask);

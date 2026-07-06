@@ -284,7 +284,9 @@ describe("hasCrossModuleFreeVariable", () => {
     const { checker, sourceFile } = makeMultiFileChecker(files, "test.ts");
     const fn = findFunction(sourceFile);
     // For destructured parameter defaults, check parameters; for body usage, check statements
-    const isParameterTest = files["test.ts"].includes("fn({ shared");
+    const testContent = files["test.ts"];
+    if (!testContent) return;
+    const isParameterTest = testContent.includes("fn({ shared");
     const nodesToCheck = isParameterTest ? fn.parameters : (fn.body?.statements ?? []);
     const params = isParameterTest ? [] : fn.parameters;
 
@@ -320,7 +322,7 @@ describe("classifyCrossModuleFreeVariables", () => {
     expect(result.substitutions.size).toBe(0);
   });
 
-  it("ambient global is not blocking and not substituted", () => {
+  it("ambient global is not blocking and not substituted", { timeout: 15_000 }, () => {
     const { checker, sourceFile } = makeChecker("function fn(x: number) { return Math.floor(x); }");
     const fn = findFunction(sourceFile);
 

@@ -400,7 +400,7 @@ describe("collectScopeInfo", () => {
       tstl.createFunctionExpression(tstl.createBlock([]), [tstl.createIdentifier("arg")]),
     );
     const definedFunction = variadicDefinition.right[0];
-    if (!tstl.isFunctionExpression(definedFunction)) {
+    if (!definedFunction || !tstl.isFunctionExpression(definedFunction)) {
       throw new Error("Expected FunctionExpression");
     }
     const dotsLiteral2 = tstl.createDotsLiteral();

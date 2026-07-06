@@ -970,9 +970,13 @@ describe("statementAssignsToChain (parametrized cases)", () => {
     if (parts.length === 0) {
       throw new Error("chain must have at least one part");
     }
-    let expr: tstl.AssignmentLeftHandSideExpression = tstl.createIdentifier(parts[0]);
+    const part0 = parts[0];
+    if (!part0) throw new Error("chain must have at least one part");
+    let expr: tstl.AssignmentLeftHandSideExpression = tstl.createIdentifier(part0);
     for (let i = 1; i < parts.length; i++) {
-      expr = tstl.createTableIndexExpression(expr, tstl.createStringLiteral(parts[i]));
+      const partsI = parts[i];
+      if (!partsI) break;
+      expr = tstl.createTableIndexExpression(expr, tstl.createStringLiteral(partsI));
     }
     return expr;
   }

@@ -14,6 +14,7 @@ import { createInlineWarning, InlineDiagnosticCode } from "./diagnostics";
 import {
   canEraseInlineDeclaration,
   canInlineStatements,
+  checkInlineEligibility,
   isExported,
   isModuleScopeDeclaration,
   isPureAtVoidSite,
@@ -54,11 +55,14 @@ function validateAndClassifyReturnValueInline(
       consumerBindings: Map<ts.Symbol, ts.Symbol>;
     }
   | undefined {
-  const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
+  if (
+    !checkInlineEligibility(
+      canInlineStatements(target, callNode, checker),
+      callNode,
+      context.diagnostics,
+      strict,
+    )
+  ) {
     return undefined;
   }
 
@@ -135,6 +139,7 @@ export function handleVariableStatement(
   if (decls.length !== 1) return undefined;
 
   const decl = decls[0];
+  if (!decl) return undefined;
   if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return undefined;
 
   const callNode = decl.initializer;
@@ -274,11 +279,14 @@ export function handleExpressionStatement(
     return undefined;
   }
 
-  const canInlineResult = canInlineStatements(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
+  if (
+    !checkInlineEligibility(
+      canInlineStatements(target, callNode, checker),
+      callNode,
+      context.diagnostics,
+      strict,
+    )
+  ) {
     return undefined;
   }
 
@@ -372,12 +380,15 @@ export function handleVariableStatementDeclaration(
   checker: ts.TypeChecker,
 ): tstl.Statement[] | undefined {
   const decls = node.declarationList.declarations;
+  if (decls.length !== 1) return undefined;
+  const decl = decls[0];
+  if (!decl) return undefined;
+
   if (
-    decls.length === 1 &&
     hasInlineTag(node) &&
-    isModuleScopeDeclaration(decls[0]) &&
+    isModuleScopeDeclaration(decl) &&
     !isExported(node) &&
-    canEraseInlineDeclaration(decls[0], checker)
+    canEraseInlineDeclaration(decl, checker)
   ) {
     return [];
   }

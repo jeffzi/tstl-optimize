@@ -9,7 +9,7 @@ export function isTruthy(value: ConstantValue): boolean {
   return value !== false;
 }
 
-export type IdentifierResolver = (node: ts.Identifier) => ConstantValue | undefined;
+type IdentifierResolver = (node: ts.Identifier) => ConstantValue | undefined;
 
 export function unwrapCompileTimeExpression(expr: ts.Expression): ts.Expression {
   let current = expr;

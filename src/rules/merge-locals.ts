@@ -214,7 +214,10 @@ function isMergeable(stmt: tstl.Statement): stmt is tstl.VariableDeclarationStat
   const rhs = stmt.right;
   if (!rhs || rhs.length === 0) return true;
   if (rhs.length > 1) return false;
-  return isLuaRhsPure(rhs[0]);
+  const rhsAtZero = rhs[0];
+  /* v8 ignore next -- length check above guarantees rhs[0] is defined */
+  if (!rhsAtZero) return false;
+  return isLuaRhsPure(rhsAtZero);
 }
 
 /**
@@ -232,18 +235,26 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
 
   function flushRun(): void {
     if (run.length >= 2) {
-      const lefts = run.map((s) => s.left[0]);
+      const lefts: (tstl.Identifier | undefined)[] = run.map((s) => s.left[0]);
       const hasAnyRhs = run.some((s) => s.right && s.right.length > 0);
       const rights = hasAnyRhs
-        ? run.map((s) => (s.right && s.right.length > 0 ? s.right[0] : tstl.createNilLiteral()))
+        ? run.map((s) => {
+            const rhsAtZero = s.right?.[0];
+            return rhsAtZero ?? tstl.createNilLiteral();
+          })
         : undefined;
-      const merged = tstl.createVariableDeclarationStatement(lefts, rights);
+      // Filter out undefined identifiers, should not happen given isMergeable checks
+      const validLefts = lefts.filter((id): id is tstl.Identifier => id !== undefined);
+      if (validLefts.length !== lefts.length) return;
+      const merged = tstl.createVariableDeclarationStatement(validLefts, rights);
       const origin = run[0];
+      if (!origin) return;
       if (origin.line !== undefined) merged.line = origin.line;
       if (origin.column !== undefined) merged.column = origin.column;
       result.push(merged);
     } else if (run.length === 1) {
-      result.push(run[0]);
+      const stmt = run[0];
+      if (stmt) result.push(stmt);
     }
     run = [];
     declaredNames = new Set<string>();
@@ -255,7 +266,10 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
       if (rhs !== undefined && expressionReferencesAnyOf(rhs, declaredNames)) {
         flushRun();
       }
-      declaredNames.add(stmt.left[0].text);
+      const leftAtZero = stmt.left[0];
+      /* v8 ignore next -- isMergeable ensures stmt.left.length === 1 */
+      if (!leftAtZero) continue;
+      declaredNames.add(leftAtZero.text);
       run.push(stmt);
     } else {
       flushRun();

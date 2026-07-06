@@ -6,6 +6,7 @@ import { Walk, walkStatements } from "../../ast/lua-walker";
 import { collectScopeInfo } from "../../ast/scope";
 import type { LocalizerConfig, RuleFactory } from "../../config";
 import { resolveLocalizerConfig } from "../../config";
+import { transformSourceFile } from "../source-file";
 import { hoistArrayElements } from "./array-elements";
 import { hoistScope, mergeNameSets } from "./hoist";
 import { STDLIB_ROOTS } from "./safety";
@@ -144,6 +145,8 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
 
   for (let j = 0; j < statements.length; j++) {
     const stmt = statements[j];
+    /* v8 ignore next -- loop bounds ensure statements[j] is defined */
+    if (stmt === undefined) continue;
     if (tstl.isDoStatement(stmt)) {
       processFunctionBodies(stmt.statements, ctx);
     } else if (tstl.isIfStatement(stmt)) {
@@ -161,7 +164,7 @@ function processFunctionBodies(statements: tstl.Statement[], ctx: ProcessingCont
           isRootAllowed,
           elseBranchOwner: stmt,
         });
-        processFunctionBodies(getElseBranchStatements(stmt.elseBlock), ctx);
+        processFunctionBodies(elseBranchStatements, ctx);
       }
     } else if (tstl.isForInStatement(stmt) || tstl.isForStatement(stmt)) {
       const loopNames = tstl.isForInStatement(stmt)
@@ -201,19 +204,7 @@ export const createVisitors: RuleFactory = (_checker, config) => {
 
   return {
     [ts.SyntaxKind.SourceFile]: (node: ts.SourceFile, context: tstl.TransformationContext) => {
-      const result = context.superTransformNode(node);
-      const fileNode = Array.isArray(result) ? result[0] : result;
-      if (fileNode && tstl.isFile(fileNode)) {
-        processFile(fileNode, resolved, context, isRootAllowedStrict, isRootAllowedLenient);
-        return fileNode;
-      }
-      // Fallback: superTransformStatements still routes each statement through the
-      // full plugin visitor chain, so other rules (inline, loop-rebase, etc.) still fire.
-      const stmts: tstl.Statement[] = [];
-      for (const s of node.statements) {
-        stmts.push(...context.superTransformStatements(s));
-      }
-      const file = tstl.createFile(stmts, context.usedLuaLibFeatures, "", node);
+      const file = transformSourceFile(node, context);
       processFile(file, resolved, context, isRootAllowedStrict, isRootAllowedLenient);
       return file;
     },

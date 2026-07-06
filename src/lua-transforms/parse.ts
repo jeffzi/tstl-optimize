@@ -49,22 +49,20 @@ export function collectRequireBindings(
       continue;
     }
 
-    const local = stmt as luaparse.LocalStatement;
-
-    if (local.variables.length !== 1 || local.init.length !== 1) {
+    if (stmt.variables.length !== 1 || stmt.init.length !== 1) {
       continue;
     }
 
-    const variable = local.variables[0];
+    const variable = stmt.variables[0];
     if (!variable || !/^____\w+$/.test(variable.name)) {
       continue;
     }
 
-    const init = local.init[0];
+    const init = stmt.init[0];
     if (
       init?.type !== "CallExpression" ||
       init.base.type !== "Identifier" ||
-      (init.base as luaparse.Identifier).name !== "require" ||
+      init.base.name !== "require" ||
       init.arguments.length !== 1
     ) {
       continue;
@@ -78,9 +76,8 @@ export function collectRequireBindings(
     // luaparse sets `.value` to null at runtime despite the type declaration.
     // The `.raw` field contains the quoted string (e.g. `"mod/path"` or `'mod/path'`);
     // stripping the surrounding quote characters gives the unescaped path.
-    const raw = (arg as luaparse.StringLiteral).raw;
-    const path = raw.slice(1, -1);
-    result.set(variable.name, { path, node: local });
+    const path = arg.raw.slice(1, -1);
+    result.set(variable.name, { path, node: stmt });
   }
 
   return result;
@@ -103,8 +100,7 @@ export function collectExistingLocals(ast: luaparse.Chunk): Set<string> {
       continue;
     }
 
-    const local = stmt as luaparse.LocalStatement;
-    for (const variable of local.variables) {
+    for (const variable of stmt.variables) {
       result.add(variable.name);
     }
   }

@@ -649,14 +649,23 @@ describe("dead-local", () => {
         throw new Error("Expected source-file visitor to return a Lua file");
       }
 
-      const fnDecl = expectVariableDeclarationStatement(transformed.statements[0]);
-      const fnExpr = expectFunctionExpression(fnDecl.right?.[0]);
-      const xDecl = expectVariableDeclarationStatement(fnExpr.body.statements[0]);
+      const fnDeclStmt = transformed.statements[0];
+      if (!fnDeclStmt) return;
+      const fnDecl = expectVariableDeclarationStatement(fnDeclStmt);
+      const fnInit = fnDecl.right?.[0];
+      if (!fnInit) return;
+      const fnExpr = expectFunctionExpression(fnInit);
+      const xDeclStmt = fnExpr.body.statements[0];
+      if (!xDeclStmt) return;
+      const xDecl = expectVariableDeclarationStatement(xDeclStmt);
 
       expect(xDecl.left).toHaveLength(1);
-      expect(xDecl.left[0].text).toBe("x");
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isNumericLiteral(xDecl.right![0])).toBe(true);
+      const xId = xDecl.left[0];
+      if (!xId) return;
+      expect(xId.text).toBe("x");
+      const xInit = xDecl.right?.[0];
+      if (!xInit) return;
+      expect(tstl.isNumericLiteral(xInit)).toBe(true);
     });
 
     it("preserves an initializer when the first later read is conditional inside a nested do block", () => {
@@ -694,23 +703,32 @@ describe("dead-local", () => {
       if (!tstl.isFile(transformed)) {
         throw new Error(`Expected File, got ${transformed?.kind}`);
       }
-      const fnDecl = transformed.statements[0];
-      if (!tstl.isVariableDeclarationStatement(fnDecl)) {
-        throw new Error(`Expected VariableDeclarationStatement, got ${fnDecl?.kind}`);
+      const fnDeclStmt = transformed.statements[0];
+      if (!fnDeclStmt) {
+        throw new Error("Expected statements[0] to exist");
       }
-      const fnExpr = fnDecl.right?.[0];
+      if (!tstl.isVariableDeclarationStatement(fnDeclStmt)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${fnDeclStmt?.kind}`);
+      }
+      const fnExpr = fnDeclStmt.right?.[0];
       if (!fnExpr || !tstl.isFunctionExpression(fnExpr)) {
         throw new Error(`Expected FunctionExpression, got ${fnExpr?.kind}`);
       }
-      const xDecl = fnExpr.body.statements[0];
-      if (!tstl.isVariableDeclarationStatement(xDecl)) {
-        throw new Error(`Expected VariableDeclarationStatement, got ${xDecl?.kind}`);
+      const xDeclStmt = fnExpr.body.statements[0];
+      if (!xDeclStmt) {
+        throw new Error("Expected statements[0] to exist");
+      }
+      if (!tstl.isVariableDeclarationStatement(xDeclStmt)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${xDeclStmt?.kind}`);
       }
 
-      expect(xDecl.left).toHaveLength(1);
-      expect(xDecl.left[0].text).toBe("x");
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isNumericLiteral(xDecl.right![0])).toBe(true);
+      expect(xDeclStmt.left).toHaveLength(1);
+      const xId = xDeclStmt.left[0];
+      if (!xId) return;
+      expect(xId.text).toBe("x");
+      const xInit = xDeclStmt.right?.[0];
+      if (!xInit) return;
+      expect(tstl.isNumericLiteral(xInit)).toBe(true);
     });
 
     it("preserves an initializer when a raw numeric-for step expression reads the local before a later write", () => {
@@ -743,23 +761,26 @@ describe("dead-local", () => {
       if (!tstl.isFile(transformed)) {
         throw new Error(`Expected File, got ${transformed?.kind}`);
       }
-      const fnDecl = transformed.statements[0];
-      if (!tstl.isVariableDeclarationStatement(fnDecl)) {
-        throw new Error(`Expected VariableDeclarationStatement, got ${fnDecl?.kind}`);
+      const fnDeclStmt = transformed.statements[0];
+      if (!fnDeclStmt || !tstl.isVariableDeclarationStatement(fnDeclStmt)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${fnDeclStmt?.kind}`);
       }
-      const fnExpr = fnDecl.right?.[0];
+      const fnExpr = fnDeclStmt.right?.[0];
       if (!fnExpr || !tstl.isFunctionExpression(fnExpr)) {
         throw new Error(`Expected FunctionExpression, got ${fnExpr?.kind}`);
       }
-      const stepDecl = fnExpr.body.statements[0];
-      if (!tstl.isVariableDeclarationStatement(stepDecl)) {
-        throw new Error(`Expected VariableDeclarationStatement, got ${stepDecl?.kind}`);
+      const stepDeclStmt = fnExpr.body.statements[0];
+      if (!stepDeclStmt || !tstl.isVariableDeclarationStatement(stepDeclStmt)) {
+        throw new Error(`Expected VariableDeclarationStatement, got ${stepDeclStmt?.kind}`);
       }
 
-      expect(stepDecl.left).toHaveLength(1);
-      expect(stepDecl.left[0].text).toBe("step");
-      // biome-ignore lint/style/noNonNullAssertion: node constructed with value
-      expect(tstl.isNumericLiteral(stepDecl.right![0])).toBe(true);
+      expect(stepDeclStmt.left).toHaveLength(1);
+      const stepId = stepDeclStmt.left[0];
+      if (!stepId) return;
+      expect(stepId.text).toBe("step");
+      const stepInit = stepDeclStmt.right?.[0];
+      if (!stepInit) return;
+      expect(tstl.isNumericLiteral(stepInit)).toBe(true);
     });
   });
 

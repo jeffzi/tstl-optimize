@@ -4,9 +4,9 @@ import * as tstl from "typescript-to-lua";
 import { hasSideEffects } from "../../ast/ts-ast";
 import type { ImportBinding, LiteralKind } from "./const-literal";
 import { classifyCrossModuleInline, resolveConsumerBindings } from "./cross-module";
-import { createInlineWarning } from "./diagnostics";
 import {
   canInline,
+  checkInlineEligibility,
   computeDirectSubstitutableParams,
   needsEagerArgumentTemps,
 } from "./eligibility";
@@ -146,7 +146,10 @@ export function buildParamMap(
   const tempDecls: tstl.VariableDeclarationStatement[] = [];
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
   for (let i = 0; i < params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(params[i].name);
+    const param = params[i];
+    /* v8 ignore next -- loop bounds ensure params[i] is defined */
+    if (!param) return undefined;
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
     if (!paramSymbol) return undefined;
     const paramSymbolId = context.symbolIdMaps.get(paramSymbol);
     const callArg = callArgs[i];
@@ -271,6 +274,7 @@ export function transformInlineBodyAndReturn(
 
 function createInlineReturnStatement(returnExpr: ts.Expression): ts.ReturnStatement {
   const parent = returnExpr.parent;
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- parent can be undefined at runtime for synthetic nodes
   if (parent && ts.isReturnStatement(parent) && parent.expression === returnExpr) {
     return parent;
   }
@@ -418,11 +422,14 @@ export function inlineExpressionBody(
   strict: boolean,
   warnCrossModule: boolean,
 ): tstl.Expression | undefined {
-  const canInlineResult = canInline(target, callNode, checker);
-  if (canInlineResult !== undefined) {
-    context.diagnostics.push(
-      createInlineWarning(callNode, canInlineResult.reason, strict, canInlineResult.code),
-    );
+  if (
+    !checkInlineEligibility(
+      canInline(target, callNode, checker),
+      callNode,
+      context.diagnostics,
+      strict,
+    )
+  ) {
     return undefined;
   }
 
@@ -476,7 +483,9 @@ export function inlineExpressionBody(
 
   const paramMap = new Map<tstl.SymbolId, tstl.Expression>();
   for (let i = 0; i < target.params.length; i++) {
-    const paramSymbol = checker.getSymbolAtLocation(target.params[i].name);
+    const param = target.params[i];
+    if (!param) return undefined;
+    const paramSymbol = checker.getSymbolAtLocation(param.name);
     // Defensive only: canInline verified all param symbols resolve before we reach here
     /* v8 ignore next */
     if (!paramSymbol) return undefined;

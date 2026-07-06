@@ -1,0 +1,12 @@
+{
+  "clone_groups": [
+    "src/ast/lua-walker.ts:132-141|src/ast/lua-walker.ts:143-152",
+    "src/ast/scope.ts:106-112|src/rules/localizer/hoist.ts:57-65",
+    "src/config.ts:287-298|src/config.ts:303-314",
+    "src/rules/inline/builders.ts:332-340|src/rules/inline/builders.ts:666-679",
+    "src/rules/inline/builders.ts:351-360|src/rules/inline/builders.ts:640-648",
+    "src/rules/inline/builders.ts:598-613|src/rules/inline/destructure-builders.ts:39-58",
+    "src/rules/inline/handlers.ts:145-158|src/rules/inline/handlers.ts:211-224",
+    "tests/sourcemap-helpers.ts:183-188|tests/sourcemap-helpers.ts:219-224"
+  ]
+}

@@ -124,7 +124,9 @@ describe("inline", () => {
 
 describe("loop-rebase", () => {
   it("loop-rebase generator produces compilable source", () => {
-    const [arr] = fc.sample(arbSmallArray, 1);
+    const samples = fc.sample(arbSmallArray, 1);
+    const arr = samples[0];
+    if (!arr) return;
     const source = `
       ${PRINT_DECL}
       const arr = [${arr.join(", ")}];

@@ -31,7 +31,7 @@ function parseExpression(source: string): ts.Expression {
     true,
   );
   const statement = file.statements[0];
-  if (!ts.isVariableStatement(statement)) {
+  if (!statement || !ts.isVariableStatement(statement)) {
     throw new Error("Expected variable statement.");
   }
   const initializer = statement.declarationList.declarations[0]?.initializer;
@@ -52,7 +52,7 @@ function parseIdentifierExpression(source: string): ts.Identifier {
 function parseVariableDeclaration(source: string): ts.VariableDeclaration {
   const file = ts.createSourceFile("decl.ts", source, ts.ScriptTarget.Latest, true);
   const statement = file.statements[0];
-  if (!ts.isVariableStatement(statement)) {
+  if (!statement || !ts.isVariableStatement(statement)) {
     throw new Error("Expected variable statement.");
   }
 
@@ -437,7 +437,9 @@ describe("conditional-compilation", () => {
         ccOpts({ DEBUG: { env: "X", default: true } }),
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("could not be fully resolved");
+      const diag = diagnostics[0];
+      expect(diag).toBeDefined();
+      expect(diag?.messageText).toContain("could not be fully resolved");
     });
 
     it("promotes warning to error in strict mode", () => {
@@ -446,7 +448,9 @@ describe("conditional-compilation", () => {
         pluginOptions: { ...pluginOptions, strict: true },
       });
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
+      const diag = diagnostics[0];
+      if (!diag) return;
+      expect(diag.category).toBe(ts.DiagnosticCategory.Error);
     });
 
     it("warns when a partially resolvable switch discriminant is preserved", () => {
@@ -467,7 +471,9 @@ describe("conditional-compilation", () => {
       );
 
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0].messageText).toContain("could not be fully resolved");
+      const diag = diagnostics[0];
+      if (!diag) return;
+      expect(diag.messageText).toContain("could not be fully resolved");
       expect(normalizeLua(lua)).toContain("1 + foo()");
     });
   });
