@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-07-06
+
 ### Changed
 
 - Upgraded to typescript-to-lua 1.37; conformance now tests against `v1.37.0`.
@@ -19,9 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator-precedence errors in the emitted Lua.
 - **constant-propagation** no longer substitutes a local when it is written through an identifier
   that lacks a `symbolId`, which could miss a reassignment and propagate a stale value.
-- **dead-local** now preserves `require()` bindings and aliases that are read only through
-  identifiers without a `symbolId` (e.g. some plugin- or JSX-transpiled references), instead of
-  removing them as unused.
+- **dead-local** now preserves any local declaration that is read only through an identifier
+  without a `symbolId` (e.g. some plugin- or JSX-transpiled references), instead of removing it as
+  unused. This covers `require()` bindings and aliases as well as ordinary locals.
 - **unspill** declines folds that would orphan temporaries in unreachable positions or leave a
   temporary referenced outside the recognized `base[key]` pattern, and preserves source-map
   positions on rebuilt index expressions.
@@ -292,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform benchmark runner (Lua 5.1 and LuaJIT) for validating optimizations.
 - Runnable examples with generation script.
 
-[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/jeffzi/tstl-optimize/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/jeffzi/tstl-optimize/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jeffzi/tstl-optimize/compare/v0.8.0...v0.9.0
