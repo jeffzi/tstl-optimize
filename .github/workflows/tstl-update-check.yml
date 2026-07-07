@@ -40,8 +40,10 @@ jobs:
 
           ### Steps
           1. Update \`TSTL_TAG\` in \`scripts/conformance.ts\` to \`$LATEST\`
-          2. Run \`npm run test:conformance\` — if the patch fails, regenerate \`scripts/conformance.patch\`
-          3. Verify all conformance tests pass
+          2. Update the \`typescript-to-lua\` devDependency to the same version (the conformance script fails fast on a mismatch)
+          3. Bump the \`typescript-to-lua\` peerDependencies floor and the README version note to match (latest-only support policy)
+          4. Run \`npm run test:conformance\` — if the patch fails, regenerate \`scripts/conformance.patch\`
+          5. Verify all conformance tests pass
           EOF
           )"
 

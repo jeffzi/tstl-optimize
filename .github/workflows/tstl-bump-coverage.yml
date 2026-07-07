@@ -32,8 +32,8 @@ jobs:
         id: detect
         run: |
           base_ver=$(git show "${{ github.event.pull_request.base.sha }}:package.json" \
-            | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).devDependencies['typescript-to-lua']??''))")
-          head_ver=$(node -e "const p=require('./package.json');console.log(p.devDependencies['typescript-to-lua']??'')")
+            | jq -r '.devDependencies["typescript-to-lua"] // ""')
+          head_ver=$(jq -r '.devDependencies["typescript-to-lua"] // ""' package.json)
           echo "base=$base_ver"
           echo "head=$head_ver"
           if [ "$base_ver" = "$head_ver" ]; then

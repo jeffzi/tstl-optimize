@@ -18,19 +18,7 @@ index 501b24b..2b98a0d 100644
  // Using `test` directly makes eslint-plugin-jest consider this file as a test
  const defineTest = test;
  
-@@ -61,7 +70,10 @@ export function testEachVersion<T extends TestBuilder>(
-     common: () => T,
-     special?: Record<tstl.LuaTarget, ((builder: T) => void) | boolean>
- ): void {
--    for (const version of Object.values(tstl.LuaTarget) as tstl.LuaTarget[]) {
-+    const versions = optimizePlugin
-+        ? [tstl.LuaTarget.Lua51]
-+        : Object.values(tstl.LuaTarget) as tstl.LuaTarget[];
-+    for (const version of versions) {
-         const specialBuilder = special?.[version];
-         if (specialBuilder === false) continue;
- 
-@@ -165,6 +177,7 @@ export abstract class TestBuilder {
+@@ -165,6 +174,7 @@ export abstract class TestBuilder {
          moduleResolution: ts.ModuleResolutionKind.Bundler,
          resolveJsonModule: true,
          sourceMap: true,
@@ -38,11 +26,14 @@ index 501b24b..2b98a0d 100644
      };
      public setOptions(options: tstl.CompilerOptions = {}): this {
          this.throwIfProgramExists("setOptions");
-@@ -414,12 +427,17 @@ export abstract class TestBuilder {
+@@ -414,12 +424,20 @@ export abstract class TestBuilder {
      }
  
      public expectLuaToMatchSnapshot(): this {
-+        if (optimizePlugin) return this;
++        if (optimizePlugin) {
++            this.expectToHaveNoDiagnostics();
++            return this;
++        }
          this.expectToHaveNoDiagnostics();
          expect(this.getMainLuaCodeChunk()).toMatchSnapshot();
          return this;
@@ -69,3 +60,21 @@ index b180cc8..f5e72cc 100644
  
          return (globalThis as any).__TS__sourcemap;
      `;
+diff --git a/test/unit/tstl-optimize-canary.spec.ts b/test/unit/tstl-optimize-canary.spec.ts
+new file mode 100644
+--- /dev/null
++++ b/test/unit/tstl-optimize-canary.spec.ts
+@@ -0,0 +1,13 @@
++import * as util from "../util";
++
++// Guards against the optimize plugin silently becoming a no-op: if optimizations
++// stopped applying, the rest of the conformance suite would stay green while
++// exercising stock TSTL only.
++const testIfOptimize = process.env.TSTL_OPTIMIZE_PLUGIN ? test : test.skip;
++
++testIfOptimize("tstl-optimize canary: plugin transforms output", () => {
++    const lua = util.testFunction`
++        return 2 + 3;
++    `.getMainLuaCodeChunk();
++    expect(lua).toContain("return 5");
++});
