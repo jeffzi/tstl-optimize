@@ -38,7 +38,7 @@
     "test:runtime": "vitest run --config vitest.config.runtime.ts",
     "test:conformance": "tsx scripts/conformance.ts",
     "check": "biome check --fix --error-on-warnings .",
-    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#.research' '#research' '#plans' '#CLAUDE.md'",
+    "check:md": "markdownlint-cli2 '**/*.md' '#node_modules' '#.conformance' '#.planning' '#.research' '#research' '#plans' '#.claude' '#CLAUDE.md'",
     "check:fallow": "fallow audit --quiet",
     "check:package": "publint --level error && attw --pack . --ignore-rules cjs-only-exports-default no-resolution --quiet",
     "check:spelling": "cspell --no-progress --no-summary .",
@@ -53,7 +53,7 @@
     "prepare": "npm run build && (test -d .git && lefthook install || true)"
   },
   "peerDependencies": {
-    "typescript-to-lua": ">=1.22.0"
+    "typescript-to-lua": ">=1.37.0"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.0",

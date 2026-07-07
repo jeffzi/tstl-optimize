@@ -68,7 +68,7 @@ Rule reference:
 npm install --save-dev typescript-to-lua tstl-optimize
 ```
 
-Requires `typescript-to-lua >= 1.22.0`; tested against `1.37.0`.
+Requires `typescript-to-lua >= 1.37.0` (the version conformance-tested by CI).
 
 The package also exports additional subpaths for library consumers:
 
@@ -1214,9 +1214,9 @@ See [root filtering](#root-filtering) for the full resolution formula and engine
 
 ### `npm install` warns about peer dep version
 
-`typescript-to-lua >= 1.22.0` is the documented floor; CI tests against `1.37.0`. Older TSTL
-versions may work but are not verified — if you see plugin behavior that contradicts this README,
-upgrade TSTL first.
+`typescript-to-lua >= 1.37.0` is the documented floor — only the latest TSTL release is supported,
+and it is the version CI conformance-tests against. Older TSTL versions may work but are not
+verified — if you see plugin behavior that contradicts this README, upgrade TSTL first.
 
 ### Can I use this on Lua 5.2 / 5.3 / 5.4?
 

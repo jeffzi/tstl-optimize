@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Requires `typescript-to-lua >= 1.37.0` (previously `>= 1.22.0`). Only the latest TSTL release is
+  supported; it is the version the plugin is conformance-tested against.
+
 ## [0.11.1] - 2026-07-06
 
 ### Changed
