@@ -61,7 +61,7 @@ jobs:
         run: npm run build
 
       - name: Fallow
-        uses: fallow-rs/fallow@v2
+        uses: fallow-rs/fallow@v3
         with:
           command: audit
           gate: new-only
