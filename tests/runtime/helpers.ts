@@ -182,6 +182,8 @@ interface RunResult {
   stderr: string;
 }
 
+export { type RunResult, runLua as _runLua };
+
 function runLua(lua: string, runtime: LuaRuntime): RunResult {
   const r = spawnSync(runtime.cmd, [...(runtime.args ?? []), "-"], {
     input: lua,
@@ -190,7 +192,7 @@ function runLua(lua: string, runtime: LuaRuntime): RunResult {
   });
   return {
     stdout: String(r.stdout ?? ""),
-    exitCode: r.status ?? (r.error ? -1 : 0),
+    exitCode: r.status ?? -1,
     stderr: String(r.stderr ?? "").trim(),
   };
 }

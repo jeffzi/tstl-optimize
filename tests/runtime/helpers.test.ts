@@ -15,6 +15,7 @@ vi.mock("node:child_process");
 import { spawnSync } from "node:child_process";
 import {
   _resetRuntimeCache,
+  _runLua,
   assertExpectedRuntimes,
   detectRuntimes,
   type LuaRuntime,
@@ -203,5 +204,50 @@ describe("assertExpectedRuntimes", () => {
       const runtimes = [{ label: "lua5.1", cmd: "lua5.1" }];
       expect(() => assertExpectedRuntimes(runtimes)).toThrow(LABEL_LUAJIT_NOJIT);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// _runLua — exit code semantics
+// ---------------------------------------------------------------------------
+
+describe("_runLua", () => {
+  it.each([
+    {
+      scenario: "normal exit",
+      spawn: { status: 0, signal: null, error: undefined },
+      expectedCode: 0,
+    },
+    {
+      scenario: "nonzero exit",
+      spawn: { status: 2, signal: null, error: undefined },
+      expectedCode: 2,
+    },
+    {
+      scenario: "signal termination (e.g. SIGKILL)",
+      spawn: { status: null, signal: "SIGKILL" as NodeJS.Signals, error: undefined },
+      expectedCode: -1,
+    },
+    {
+      scenario: "spawn failure (ENOENT)",
+      spawn: { status: null, signal: null, error: new Error("ENOENT") },
+      expectedCode: -1,
+    },
+    {
+      scenario: "timeout",
+      spawn: { status: null, signal: "SIGTERM" as NodeJS.Signals, error: new Error("ETIMEDOUT") },
+      expectedCode: -1,
+    },
+  ])("returns exitCode $expectedCode for $scenario", ({ spawn, expectedCode }) => {
+    vi.mocked(spawnSync).mockReturnValue({
+      ...BASE_SPAWN_SYNC_RESULT,
+      stdout: "",
+      stderr: "",
+      ...spawn,
+    });
+
+    const result = _runLua("print('hi')", { label: "test", cmd: "lua" });
+
+    expect(result.exitCode).toBe(expectedCode);
   });
 });

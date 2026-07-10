@@ -42,7 +42,7 @@ pre-push:
       glob: "src/**/*.ts"
       run: npm run build
     test:
-      glob: "src/**/*.ts"
+      glob: "{src,tests,scripts}/**/*.ts"
       run: npm test
     examples:
       glob: "{src/**/*.ts,examples/**/*.ts}"

@@ -182,8 +182,9 @@ function substituteTemps(
  * carrying source positions from the original temp identifiers so sourcemaps
  * stay anchored. Shared by the 2-temp and 3-temp collapse paths.
  *
- * ponytail: caller guarantees origLhs is a TableIndexExpression with Identifier
- * table/index (validated by validateIndexLhs); we guard anyway for type safety.
+ * Caller guarantees origLhs is a TableIndexExpression with Identifier
+ * table/index (validated by validateIndexLhs); the guard is retained for
+ * type-level narrowing.
  */
 function rebuildLhs(
   assignStmt: tstl.AssignmentStatement,

@@ -13,9 +13,5 @@ import { collectRequireBindings, parseLua } from "./parse.js";
 export function getRequireBindings(luaSource: string): ReadonlyMap<string, string> {
   const ast = parseLua(luaSource);
   const raw = collectRequireBindings(ast);
-  const result = new Map<string, string>();
-  for (const [name, { path }] of raw) {
-    result.set(name, path);
-  }
-  return result;
+  return new Map(Array.from(raw, ([name, { path }]) => [name, path]));
 }

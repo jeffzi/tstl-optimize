@@ -243,12 +243,14 @@ function mergeConsecutiveLocals(statements: tstl.Statement[]): void {
             return rhsAtZero ?? tstl.createNilLiteral();
           })
         : undefined;
-      // Filter out undefined identifiers, should not happen given isMergeable checks
       const validLefts = lefts.filter((id): id is tstl.Identifier => id !== undefined);
-      if (validLefts.length !== lefts.length) return;
+      /* v8 ignore next */
+      if (validLefts.length !== lefts.length)
+        throw new Error("unreachable: undefined LHS in merge run");
       const merged = tstl.createVariableDeclarationStatement(validLefts, rights);
       const origin = run[0];
-      if (!origin) return;
+      /* v8 ignore next */
+      if (!origin) throw new Error("unreachable: empty merge run");
       if (origin.line !== undefined) merged.line = origin.line;
       if (origin.column !== undefined) merged.column = origin.column;
       result.push(merged);
