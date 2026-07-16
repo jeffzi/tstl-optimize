@@ -112,6 +112,52 @@ describe("debug-strip", () => {
     });
   });
 
+  describe("when the namespace receiver is wrapped", () => {
+    const DEBUG_NS = "declare namespace debug { function traceback(): string; }";
+
+    it.each([
+      { name: "as-cast receiver", call: "(debug as any).traceback();" },
+      { name: "parenthesized receiver", call: "(debug).traceback();" },
+      { name: "non-null-asserted receiver", call: "debug!.traceback();" },
+    ])("strips a namespace call through a $name", ({ call }) => {
+      const lua = compile(`${DEBUG_NS}\n${call}\nconst x = 1;`, enabled);
+      expect(normalizeLua(lua)).toBe("x = 1");
+    });
+  });
+
+  describe("when the statement expression is not a direct call", () => {
+    // The rule only strips ExpressionStatements whose expression IS the call;
+    // wrapping the whole call keeps it (conservative pass-through).
+    it.each([
+      { name: "as-void wrapped call", stmt: 'print("hello") as void;' },
+      { name: "parenthesized call", stmt: '(print("hello"));' },
+    ])("keeps a $name", ({ stmt }) => {
+      const lua = compile(`${ENV}${stmt}\nconst x = 1;`, enabled);
+      expect(lua).toContain('print("hello")');
+    });
+  });
+
+  describe("when a call has a similar but different name", () => {
+    it.each([
+      {
+        name: "function print2",
+        code: 'declare function print2(msg: string): void; print2("hello"); const x = 1;',
+        expected: 'print2("hello")',
+      },
+      {
+        name: "namespace debugger2",
+        code: [
+          "declare namespace debugger2 { function log(msg: string): void; }",
+          'debugger2.log("hello");',
+          "const x = 1;",
+        ].join("\n"),
+        expected: 'debugger2.log("hello")',
+      },
+    ])("does not strip $name", ({ code, expected }) => {
+      expect(normalizeLua(compile(code, enabled))).toContain(expected);
+    });
+  });
+
   describe("when config is customized", () => {
     it("custom functions list replaces defaults", () => {
       const lua = compile(

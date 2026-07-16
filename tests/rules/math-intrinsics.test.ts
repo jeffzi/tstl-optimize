@@ -118,6 +118,12 @@ describe("math-intrinsics", () => {
       expect(lua).toContain("x < 0");
     });
 
+    it("unwraps a type-asserted argument and still applies the intrinsic", () => {
+      const lua = compile("declare const x: number; const a = Math.abs(x as number);");
+      expect(lua).not.toContain("math.abs");
+      expect(lua).toContain("x < 0");
+    });
+
     it("parenthesizes negation to avoid Lua comment syntax", () => {
       const noFold = { pluginOptions: { rules: { "constant-folding": false } } };
 
@@ -204,6 +210,7 @@ describe("math-intrinsics", () => {
       { source: "Math.sqrt(value, other);", label: "sqrt with wrong arity" },
       { source: "Math.floor(value, other);", label: "floor with wrong arity" },
       { source: "Math.abs(value, other);", label: "abs with wrong arity" },
+      { source: "Math.abs();", label: "abs with no arguments" },
     ])("returns undefined for $label", ({ source }) => {
       const visitors = Reflect.apply(createVisitors, undefined, [checker, { target: "puc" }]);
       const visitor = Reflect.get(visitors, ts.SyntaxKind.CallExpression) as (
@@ -362,6 +369,11 @@ describe("math-intrinsics", () => {
         name: "keeps x ^ 4 on Lua 5.1 (C pow is faster than 3 MULs)",
         source: "declare const x: number; const a = x ** 4;",
         contains: ["^ 4"],
+      },
+      {
+        name: "keeps x ^ 5 (exponent above the expansion range)",
+        source: "declare const x: number; const a = x ** 5;",
+        contains: ["^ 5"],
       },
       {
         name: "keeps element-access bases to avoid duplicating indexed reads",

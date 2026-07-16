@@ -132,6 +132,17 @@ describe("remove-empty-branch rule", () => {
       `);
     });
 
+    it("preserves an empty if whose binary condition contains a call operand", () => {
+      const source = `
+        const x = true;
+        function sideEffect(): boolean { return true; }
+        if (x && sideEffect()) {}
+      `;
+
+      const lua = normalizeLua(compile(source, opts));
+      expect(lua).toContain("if x and sideEffect() then");
+    });
+
     it("preserves empty if statements with compound conditions", () => {
       const source = `
         const x = true;

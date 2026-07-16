@@ -69,6 +69,16 @@ describe("constant-folding", () => {
     expect(lua).toContain(expected);
   });
 
+  it("folds true division to the fractional value (not floor division)", () => {
+    // A non-power-of-2 divisor keeps math-intrinsics away, so constant-folding
+    // performs the division; 12 / 5 must give 2.4, not floor's 2.
+    const lua = compile("const x = (12 as number) / 5;", {
+      pluginOptions: { rules: { "constant-propagation": false } },
+    });
+
+    expect(lua).toContain("x = 2.4");
+  });
+
   describe("unary negation folding (multi-pass)", () => {
     it("folds double negation to the positive value", () => {
       const lua = compile("const x = -(-5);", {
@@ -146,6 +156,25 @@ describe("constant-folding", () => {
       );
 
       expect(lua).toContain("sideEffect()");
+    });
+
+    it("preserves the chain when an elseif condition is impure and every branch is empty", () => {
+      // With all branches empty, removal hinges on the chain-wide purity check —
+      // the impure elseif condition must veto it.
+      const lua = compile(
+        `
+        declare const a: boolean;
+        declare function sideEffect(): boolean;
+        if (a) {} else if (sideEffect()) {}
+      `,
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "remove-empty-branch": false },
+          },
+        },
+      );
+
+      expect(lua).toContain("elseif sideEffect() then");
     });
   });
 
@@ -398,6 +427,146 @@ describe("constant-folding", () => {
 
       expect(lua).toContain("len = 4");
     });
+  });
+
+  describe("comparison operators fold to the correct value in both directions", () => {
+    // Asserting the folded *value* (not just that folding occurred) distinguishes
+    // each operator from its negation and from constant true/false.
+    it.each([
+      { expr: "(1 as number) < 2", expected: "true" },
+      { expr: "(2 as number) < 1", expected: "false" },
+      { expr: "(1 as number) <= 1", expected: "true" },
+      { expr: "(2 as number) <= 1", expected: "false" },
+      { expr: "(2 as number) > 1", expected: "true" },
+      { expr: "(1 as number) > 2", expected: "false" },
+      { expr: "(1 as number) >= 1", expected: "true" },
+      { expr: "(1 as number) >= 2", expected: "false" },
+      { expr: "(1 as number) === 2", expected: "false" },
+      { expr: "(1 as number) !== 1", expected: "false" },
+      { expr: '("b" as string) < ("a" as string)', expected: "false" },
+      { expr: '("a" as string) > ("b" as string)', expected: "false" },
+      { expr: '("x" as string) < ("x" as string)', expected: "false" },
+      { expr: '("x" as string) <= ("x" as string)', expected: "true" },
+      { expr: '("x" as string) >= ("x" as string)', expected: "true" },
+      { expr: '("abc" as string) < ("ab" as string)', expected: "false" },
+      { expr: '("abc" as string) >= ("ab" as string)', expected: "true" },
+      { expr: '("a" as string) === "b"', expected: "false" },
+      { expr: '("a" as string) !== "a"', expected: "false" },
+      // Boundary rows: <, >, ===, !== differ from their neighbors only on equal
+      // (or reversed) operands, so each operator needs its distinguishing case.
+      { expr: "(1 as number) === 1", expected: "true" },
+      { expr: "(2 as number) !== 1", expected: "true" },
+      { expr: "(1 as number) < 1", expected: "false" },
+      { expr: "(1 as number) > 1", expected: "false" },
+      { expr: '("x" as string) === ("x" as string)', expected: "true" },
+      { expr: '("b" as string) !== ("a" as string)', expected: "true" },
+      { expr: '("b" as string) <= ("a" as string)', expected: "false" },
+      { expr: '("x" as string) > ("x" as string)', expected: "false" },
+      { expr: '("a" as string) >= ("b" as string)', expected: "false" },
+    ])("folds $expr to $expected", ({ expr, expected }) => {
+      const lua = normalizeLua(
+        compile(`export const out = ${expr};`, {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        }),
+      );
+
+      expect(lua).toContain(`out = ${expected}`);
+    });
+  });
+
+  describe("boolean operators fold to the correct value", () => {
+    it.each([
+      { expr: "(true as boolean) === true", expected: "true" },
+      { expr: "(true as boolean) === false", expected: "false" },
+      { expr: "(true as boolean) !== true", expected: "false" },
+      { expr: "(false as boolean) !== true", expected: "true" },
+      { expr: "(true as boolean) && true", expected: "true" },
+      { expr: "(true as boolean) && false", expected: "false" },
+      { expr: "(false as boolean) || true", expected: "true" },
+      { expr: "(false as boolean) || false", expected: "false" },
+    ])("folds $expr to $expected", ({ expr, expected }) => {
+      const lua = normalizeLua(
+        compile(`export const out = ${expr};`, {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        }),
+      );
+
+      expect(lua).toContain(`out = ${expected}`);
+    });
+
+    it("does not fold and/or across mixed types (Lua truthiness differs from JS)", () => {
+      // JS: 0 && true === 0 (falsy); Lua: 0 and true === true (0 is truthy).
+      const lua = normalizeLua(
+        compile("export const out = (0 as any) && (true as boolean);", {
+          pluginOptions: { rules: { "constant-propagation": false } },
+        }),
+      );
+
+      expect(lua).toContain("0 and true");
+    });
+  });
+
+  describe("empty-if removal inside loop bodies", () => {
+    // remove-empty-branch is disabled so the removal is attributable to
+    // constant-folding's optimizeControlFlow recursion into loop bodies.
+    it.each([
+      {
+        loop: "while",
+        source: "declare let x: boolean; while (x) { if (x) {} }",
+        keeps: "while x do",
+      },
+      {
+        loop: "numeric for",
+        source: "declare let x: boolean; for (const i of $range(1, 10)) { if (x) {} }",
+        keeps: "for i = 1, 10 do",
+      },
+      {
+        loop: "for-in",
+        source:
+          "declare const t: Record<string, number>; declare let x: boolean; for (const k in t) { if (x) {} }",
+        keeps: "for k in pairs(t) do",
+      },
+      {
+        loop: "repeat",
+        source: "declare let x: boolean; do { if (x) {} } while (x);",
+        keeps: "repeat",
+      },
+    ])("removes an empty pure-condition if inside a $loop body", ({ source, keeps }) => {
+      const lua = normalizeLua(
+        compile(source, {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "remove-empty-branch": false },
+          },
+        }),
+      );
+
+      expect(lua).toContain(keeps);
+      expect(lua).not.toContain("if x then");
+    });
+  });
+
+  it("prunes only the empty trailing else in a mixed empty/non-empty chain", () => {
+    const lua = normalizeLua(
+      compile(
+        `
+        declare const a: boolean;
+        declare const b: boolean;
+        declare function work(): void;
+        if (a) {} else if (b) { work(); } else {}
+      `,
+        {
+          pluginOptions: {
+            rules: { "constant-propagation": false, "remove-empty-branch": false },
+          },
+        },
+      ),
+    );
+
+    // The non-empty elseif survives; the trailing empty else is pruned.
+    expect(lua).toContain("if a then");
+    expect(lua).toContain("elseif b then");
+    expect(lua).toContain("work()");
+    expect(lua).not.toMatch(/\nelse\n/);
   });
 
   describe("when folding BitwiseNot at Lua AST level", () => {

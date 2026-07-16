@@ -157,6 +157,43 @@ describe("merge-locals", () => {
 
       expect(lua).toContain("local a, b = 1, 2");
     });
+
+    it.each([
+      {
+        loop: "while",
+        code: `
+          declare function cond(): boolean;
+          declare function use(x: number): void;
+          function foo(): void {
+            while (cond()) {
+              const a = 1;
+              const b = 2;
+              use(a + b);
+            }
+          }
+        `,
+      },
+      {
+        loop: "numeric for ($range)",
+        code: `
+          /** @noSelfInFile */
+          declare function use(x: number): void;
+          function foo(): void {
+            for (const i of $range(1, 10)) {
+              const a = 1;
+              const b = 2;
+              use(a + b);
+            }
+          }
+        `,
+      },
+    ])("merges pure locals inside a $loop loop body", ({ code }) => {
+      const lua = normalizeLua(
+        compile(code, { pluginOptions: { rules: { "constant-propagation": false } } }),
+      );
+
+      expect(lua).toContain("local a, b = 1, 2");
+    });
   });
 
   describe("disabled", () => {

@@ -87,6 +87,24 @@ describe("constant-propagation", () => {
       expect(lua).toContain("return x");
       expect(lua).not.toContain("return 1");
     });
+
+    it("does NOT propagate the outer reads of a closure-captured local", () => {
+      // The closure read disqualifies x entirely — reads outside the closure
+      // must also keep referencing x, not the literal.
+      const source = `
+        function f() {
+          const x = 1;
+          const fn = function() { return x; };
+          const y = x;
+          fn();
+          return y;
+        }
+        export function g() { return f(); }
+      `;
+      const lua = compile(source, { pluginOptions: { rules: { "merge-locals": false } } });
+      expect(lua).toContain("local y = x");
+      expect(lua).not.toContain("local y = 1");
+    });
   });
 
   describe("when initializer is not a literal", () => {
@@ -110,6 +128,54 @@ describe("constant-propagation", () => {
       `;
       const lua = compile(source, { skipLuaCheck: true });
       expect(lua).toContain("return a");
+    });
+
+    it("does NOT propagate a multi-binding declaration even with literal RHS", () => {
+      // Tuple-literal destructuring emits `local a, b = 1, 2` — literal RHS values,
+      // but the multi-binding shape must still be skipped.
+      const source = `
+        function f() { const [a, b] = [1, 2]; return a + b; }
+        export function g() { return f(); }
+      `;
+      const lua = compile(source);
+      expect(lua).toContain("local a, b = 1, 2");
+      expect(lua).toContain("return a + b");
+    });
+  });
+
+  describe("when candidate is written inside a nested scope", () => {
+    it.each([
+      {
+        scope: "if block",
+        body: "let x = 1; if (cond()) { x = 2; } return x;",
+      },
+      {
+        scope: "while body",
+        body: "let x = 1; while (cond()) { x = 2; } return x;",
+      },
+    ])("does NOT propagate when reassigned inside a nested $scope", ({ body }) => {
+      const source = `
+        function f(cond: () => boolean) { ${body} }
+        export function g() { return f(() => false); }
+      `;
+      const lua = compile(source);
+      expect(lua).toContain("return x");
+      expect(lua).not.toContain("return 1");
+    });
+
+    it("does NOT propagate when written inside a nested function body", () => {
+      const source = `
+        function f() {
+          let x = 1;
+          const fn = function() { x = 2; };
+          fn();
+          return x;
+        }
+        export function g() { return f(); }
+      `;
+      const lua = compile(source);
+      expect(lua).toContain("return x");
+      expect(lua).not.toContain("return 1");
     });
   });
 

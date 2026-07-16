@@ -132,6 +132,7 @@ function substituteTemps(
   base: tstl.Expression,
   key: tstl.Expression,
 ): tstl.Expression {
+  // Stryker disable next-line all: equivalent — the final fall-through also returns expr unchanged
   if (tstl.isIdentifier(expr)) {
     // Plain identifier references to v1 or v2 should not appear in the substituted
     // positions (they only appear as table/index inside the index expression).
@@ -143,7 +144,11 @@ function substituteTemps(
     if (
       tstl.isIdentifier(expr.table) &&
       tstl.isIdentifier(expr.index) &&
+      // The bare-access gates guarantee only exact v1[v2] patterns or temp-free
+      // expressions reach substitution.
+      // Stryker disable next-line all: masked by the bare-access gates
       expr.table.text === v1Name &&
+      // Stryker disable next-line all: masked by the bare-access gates
       expr.index.text === v2Name
     ) {
       // Substitute with base[key] — fresh clones to avoid shared node identity
@@ -398,6 +403,7 @@ function recurseIntoNestedScopes(
   // bodies are independent scopes: their statements are nested inside the
   // FunctionExpression node and never appear in the parent list directly.
   walkStatements([stmt], {
+    // Stryker disable next-line all: equivalent — the expr hook skips FunctionExpression anyway
     shallow: true,
     expr: (expr) => {
       if (tstl.isFunctionExpression(expr)) {

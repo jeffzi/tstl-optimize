@@ -70,6 +70,9 @@ function matchUnspillDecl(
   if (
     stmt === undefined ||
     !tstl.isVariableDeclarationStatement(stmt) ||
+    // Over-length destructuring emits unpack() — a single RHS value — so any decl
+    // failing this check also fails the RHS checks below.
+    // Stryker disable next-line all: masked by the RHS-length checks
     stmt.left.length !== 2 ||
     stmt.right === undefined ||
     stmt.right.length !== 2
@@ -128,8 +131,11 @@ export function matchUnspillValueTemp(
   // Second stmt: local v3 = <expr containing v1[v2]>
   if (
     !tstl.isVariableDeclarationStatement(valueDeclStmt) ||
+    // Multi-return inits are CallExpressions, which contain no v1[v2] read.
+    // Stryker disable next-line all: masked by the RHS-length and index-read checks
     valueDeclStmt.left.length !== 1 ||
     valueDeclStmt.right === undefined ||
+    // Stryker disable next-line all: unreachable — TSTL never emits single-LHS, multi-RHS decls
     valueDeclStmt.right.length !== 1
   ) {
     return undefined;
@@ -148,6 +154,7 @@ export function matchUnspillValueTemp(
 
   // Third stmt: v1[v2] = <rhs>
   const assignStmt = stmts[index + 2];
+  // Stryker disable next-line all: masked — validateIndexLhs re-checks undefined
   if (assignStmt === undefined) {
     return undefined;
   }
@@ -192,6 +199,7 @@ export function matchUnspillPair(
   const { declStmt, base, key, v1Name, v2Name } = decl;
 
   const assignStmt = stmts[index + 1];
+  // Stryker disable next-line all: masked — validateIndexLhs re-checks undefined
   if (assignStmt === undefined) {
     return undefined;
   }
@@ -204,10 +212,12 @@ export function matchUnspillPair(
 
   // RHS must contain a read of v1[v2] (the original value being modified).
   // right.length check: TSTL always emits a single RHS expression for compound assignments.
+  // Stryker disable all: unreachable — TSTL never emits a multi-value RHS here
   /* v8 ignore next -- TSTL always emits exactly one RHS expression for compound assignments */
   if (validatedAssign.right.length !== 1) {
     return undefined;
   }
+  // Stryker restore all
 
   const [rhsExpr] = validatedAssign.right;
   /* v8 ignore next -- length check above ensures rhsExpr exists */
@@ -237,10 +247,12 @@ function validateIndexLhs(
     return undefined;
   }
 
+  // Stryker disable all: masked — multi-LHS assigns fail the RHS-length/read checks
   /* v8 ignore next -- TSTL always emits exactly one LHS for indexed compound-assignment */
   if (stmt.left.length !== 1) {
     return undefined;
   }
+  // Stryker restore all
 
   const [lhs] = stmt.left;
   /* v8 ignore next -- length check above ensures lhs exists */
@@ -280,7 +292,10 @@ function rhsContainsIndexRead(expr: tstl.Expression, v1Name: string, v2Name: str
     return (
       tstl.isIdentifier(expr.table) &&
       tstl.isIdentifier(expr.index) &&
+      // Partial-name reads leave bare temp accesses that the transform-side gates decline.
+      // Stryker disable next-line all: masked by the bare-access gates
       expr.table.text === v1Name &&
+      // Stryker disable next-line all: masked by the bare-access gates
       expr.index.text === v2Name
     );
   }

@@ -149,6 +149,16 @@ export function canEraseInlineDeclaration(
         canErase = false;
         return;
       }
+
+      // For shorthand property assignments ({ double }), the property symbol
+      // doesn't match the value symbol. Check the value symbol directly.
+      if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node) {
+        const valueSymbol = checker.getShorthandAssignmentValueSymbol(node.parent);
+        if (valueSymbol && resolveSymbol(valueSymbol, checker) === resolvedSym) {
+          canErase = false;
+          return;
+        }
+      }
     }
 
     ts.forEachChild(node, visit);

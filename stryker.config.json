@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker/master/packages/core/schema/stryker-core.json",
+  "mutate": ["src/**/*.ts", "!src/**/*.d.ts"],
+  "testRunner": "vitest",
+  "checkers": ["typescript"],
+  "tsconfigFile": "tsconfig.plugin.json",
+  "reporters": ["clear-text", "html"],
+  "concurrency": 4,
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  }
+}

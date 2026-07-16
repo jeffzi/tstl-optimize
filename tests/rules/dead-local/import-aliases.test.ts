@@ -164,6 +164,23 @@ describe("dead-local — import alias elimination", () => {
       expect(normalized).toContain("____lib2.b");
     });
 
+    it("does not treat an identifier with mid-name underscores as a require binding", () => {
+      // The require-binding pattern is anchored (^____): a user local whose name merely
+      // CONTAINS ____ must not enter alias elimination, or its dead alias would be removed.
+      const { lua } = compileMultiFileWithDiagnostics({
+        "bit.ts": "export declare function band(a: number, b: number): number;",
+        "main.ts": `
+          declare function require(path: string): any;
+          const foo____bar = require("bit");
+          const alias = (foo____bar as any).band;
+          export const keep = 1;
+        `,
+      });
+      const normalized = normalizeLua(lua);
+      expect(normalized).toContain('local foo____bar = require("bit")');
+      expect(normalized).toContain("local alias = foo____bar.band");
+    });
+
     it("ignores non-require table access", () => {
       const { lua } = compileMultiFileWithDiagnostics({
         "helper.ts": `

@@ -53,6 +53,7 @@ function propagateScope(statements: tstl.Statement[]): void {
 
   for (const stmt of statements) {
     if (!tstl.isVariableDeclarationStatement(stmt)) continue;
+    // Stryker disable next-line all: masked — multi-LHS decls never carry a literal single RHS
     if (stmt.left.length !== 1 || stmt.right?.length !== 1) continue;
 
     const lhs = stmt.left[0];
@@ -72,6 +73,7 @@ function propagateScope(statements: tstl.Statement[]): void {
   // that share the same declared name. No TS input currently produces symbolId-less
   // writes, but plugin-emitted code can — dead-local's identifier-access check in
   // index.ts guards against the same bug class.
+  // Stryker disable all: unreachable — no TS-reachable path produces symbolId-less writes
   /* v8 ignore start -- defensive: no TS-reachable path produces symbolId-less writes */
   const candidatesByName = new Map<string, number[]>();
   for (const [symbolId, candidate] of candidates) {
@@ -86,12 +88,14 @@ function propagateScope(statements: tstl.Statement[]): void {
     }
   }
   /* v8 ignore stop */
+  // Stryker restore all
 
   // Step 2: filter — disqualify writes after declaration and reads in nested functions
   for (const stmt of statements) {
     forEachAccess(stmt, ({ identifier, kind, inFunctionBody }) => {
       const symbolId = identifier.symbolId;
       if (symbolId === undefined) {
+        // Stryker disable all: unreachable — no TS-reachable path produces symbolId-less writes
         /* v8 ignore next 5 -- defensive: see candidatesByName comment above */
         if (kind === "write") {
           const ids = candidatesByName.get(identifier.text);
@@ -99,6 +103,7 @@ function propagateScope(statements: tstl.Statement[]): void {
             for (const id of ids) candidates.delete(id);
           }
         }
+        // Stryker restore all
         return;
       }
 
@@ -106,6 +111,7 @@ function propagateScope(statements: tstl.Statement[]): void {
       if (candidate === undefined) return;
 
       // Skip the declaration write itself
+      // Stryker disable next-line all: equivalent — no read of a candidate occurs in its own decl
       if (kind === "write" && stmt === candidate.declStmt) {
         return;
       }
@@ -124,6 +130,7 @@ function propagateScope(statements: tstl.Statement[]): void {
 
   // Step 3: substitute — replace reads with literals
   walkStatements(statements, {
+    // Stryker disable next-line all: equivalent — closure-read candidates are already deleted
     shallow: true,
     expr: (expr) => {
       if (!tstl.isIdentifier(expr)) return Walk.keep;
@@ -141,6 +148,7 @@ function propagateScope(statements: tstl.Statement[]): void {
 
   // Step 4: recurse into nested function bodies
   walkStatements(statements, {
+    // Stryker disable next-line all: equivalent — the expr hook skips FunctionExpression anyway
     shallow: true,
     expr: (expr) => {
       if (tstl.isFunctionExpression(expr)) {
@@ -177,6 +185,7 @@ export const createVisitors: RuleFactory = (checker): tstl.Visitors => ({
     // The member symbol is obtained directly from the property access node; if it
     // is an alias (re-export) it is followed through to the original declaration.
     const symbol = checker.getSymbolAtLocation(node);
+    // Stryker disable next-line all: masked — createResolvedLiteral re-checks undefined
     if (symbol === undefined) {
       return context.superTransformExpression(node);
     }

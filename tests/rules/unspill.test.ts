@@ -342,5 +342,463 @@ function test() {
       expect(lua).toContain("local t, key = obj, k");
       expect(lua).toContain("g(t[key])");
     });
+
+    it.each([
+      { label: "foreign table with the key temp as index", read: "other[key]" },
+      { label: "the base temp with a foreign index", read: "t[idx]" },
+    ])("NEGATIVE: partial-name index read of $label ($read) declines fold", ({ read }) => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<number, any>;
+declare const k: number;
+declare const other: Record<number, number>;
+declare const idx: number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = t[key] + ${read} + key;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // A partial-name index read (only one of table/index matches a temp name)
+      // is not substitutable — treating it as a v1[v2] pattern would orphan the
+      // non-matching temp reference when the decl is dropped.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain(`t[key] = t[key] + ${read} + key`);
+    });
+  });
+
+  describe("safety: temps referenced beyond the spill site", () => {
+    // Dropping `local t, key = obj, k` while a later statement still reads t or key
+    // would orphan that read (nil at runtime), so the fold must be declined.
+    it.each([
+      "t",
+      "key",
+    ])("NEGATIVE: 2-temp fold declined when %s is read after the assignment", (escapee) => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function f(x: any): number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = t[key] + 1;
+  f(${escapee});
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain(`f(${escapee})`);
+    });
+
+    it("POSITIVE: control — same 2-temp shape with no trailing read folds", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = t[key] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("obj[k] = obj[k] + 1");
+      expect(lua).not.toContain("local t, key");
+    });
+
+    it.each([
+      "t",
+      "key",
+    ])("NEGATIVE: value-temp fold declined when %s is read beyond the 3-statement window", (escapee) => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function f(x: any): number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = t[key] + 1;
+  t[key] = v3;
+  f(${escapee});
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("local v3 = t[key] + 1");
+      expect(lua).toContain(`f(${escapee})`);
+    });
+
+    it("POSITIVE: control — same value-temp shape with no trailing read collapses", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = t[key] + 1;
+  t[key] = v3;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local v3 = obj[k] + 1");
+      expect(lua).toContain("obj[k] = v3");
+      expect(lua).not.toContain("local t, key");
+    });
+
+    it("NEGATIVE: bare temp read in the value-temp initializer declines the fold", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = t[key] + t;
+  t[key] = v3;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("local v3 = t[key] + t");
+    });
+
+    it("NEGATIVE: bare temp read in the value-temp assignment RHS declines the fold", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<number, any>;
+declare const k: number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = t[key] + 1;
+  t[key] = v3 + key;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("t[key] = v3 + key");
+    });
+  });
+
+  describe("shape rejections: declaration must bind exactly two locals", () => {
+    it("NEGATIVE: single-binding declaration before an index assignment is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  t[k] = t[k] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t = obj");
+      expect(lua).toContain("t[k] = t[k] + 1");
+    });
+
+    it("NEGATIVE: three-binding declaration before an index assignment is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  let x;
+  t[key] = t[key] + 1;
+  x = 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // merge-locals combines all three into: local t, key, x = obj, k, nil
+      expect(lua).toContain("local t, key, x = obj, k, nil");
+      expect(lua).toContain("t[key] = t[key] + 1");
+    });
+
+    it("NEGATIVE: declaration from a multi-return destructure (single RHS) is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare function f(): LuaMultiReturn<[any, string]>;
+function test() {
+  const [t, key] = f();
+  t[key] = t[key] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t, key = f()");
+      expect(lua).toContain("t[key] = t[key] + 1");
+    });
+
+    it("NEGATIVE: declaration with a third RHS value (over-length tuple) is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const [t, key] = [obj, k, 0];
+  t[key] = t[key] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // A fold here would drop the declaration along with its third RHS value.
+      expect(lua).toContain("local t, key = obj, k, 0");
+      expect(lua).toContain("t[key] = t[key] + 1");
+    });
+  });
+
+  describe("shape rejections: value-temp declaration must bind one local from v1[v2]", () => {
+    it("NEGATIVE: multi-binding value-temp declaration is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const [v3, v4] = [t[key] + 1, 2];
+  t[key] = v3;
+  return v4;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // A fold here would rebuild the declaration with a single RHS expression,
+      // dropping v4's initializer.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("local v3, v4 = t[key] + 1, 2");
+    });
+
+    it("NEGATIVE: value-temp pattern truncated at scope end (no assignment) is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = t[key] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false, "dead-local": false } } },
+      );
+
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("local v3 = t[key] + 1");
+    });
+
+    it("NEGATIVE: value temp followed by a store to a different table is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<number, any>;
+declare const k: number;
+declare const other: Record<number, number>;
+declare const idx: number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = t[key] + 1;
+  other[idx] = v3;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("local v3 = t[key] + 1");
+      expect(lua).toContain("other[idx] = v3");
+    });
+
+    it("NEGATIVE: value-temp initializer without a v1[v2] read is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function g(): number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  const v3 = g();
+  t[key] = v3;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // The value temp must be derived from v1[v2] — an unrelated initializer
+      // means this is not the TSTL 3-temp spill pattern.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("local v3 = g()");
+    });
+  });
+
+  describe("shape rejections: following assignment must write v1[v2]", () => {
+    it("NEGATIVE: plain store without a self-read (t[key] = 5) is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = 5;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // A fold here would drop the decl and emit obj[k] = 5 — the rule only
+      // targets compound assignments, whose RHS reads back v1[v2].
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("t[key] = 5");
+    });
+
+    it.each([
+      { label: "both mismatched", lhs: "key[t]" },
+      { label: "index mismatched", lhs: "t[t]" },
+      { label: "table mismatched", lhs: "key[key]" },
+    ])("NEGATIVE: LHS temp names $label ($lhs) is left intact", ({ lhs }) => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+function test() {
+  const t: any = obj;
+  const key: any = k;
+  ${lhs} = t[key] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // A fold here would rebuild the LHS as obj[k], silently redirecting the
+      // write away from the location the source names.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain(`${lhs} = t[key] + 1`);
+    });
+
+    it("NEGATIVE: RHS reading only a foreign table (no v1[v2] read) is left intact", () => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const obj: Record<number, any>;
+declare const k: number;
+declare const other: Record<number, number>;
+declare const idx: number;
+function test() {
+  const t: any = obj;
+  const key = k;
+  t[key] = other[idx] + 1;
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      // The rule only targets compound assignments, whose RHS reads back v1[v2];
+      // an unrelated index read must not satisfy that requirement.
+      expect(lua).toContain("local t, key = obj, k");
+      expect(lua).toContain("t[key] = other[idx] + 1");
+    });
+  });
+
+  describe("nested-scope recursion: control-flow blocks", () => {
+    it.each([
+      {
+        block: "if",
+        body: `if (flag) {
+    arr[i] += brr[i] * 0.016;
+  }`,
+      },
+      {
+        block: "else",
+        body: `if (flag) {
+    arr[i] = 0;
+  } else {
+    arr[i] += brr[i] * 0.016;
+  }`,
+      },
+      {
+        block: "do",
+        body: `{
+    arr[i] += brr[i] * 0.016;
+  }`,
+      },
+    ])("POSITIVE: compound assign inside $block block collapses", ({ body }) => {
+      const lua = compile(
+        `/** @noSelfInFile */
+declare const flag: boolean;
+const arr: number[] = [];
+const brr: number[] = [];
+for (const i of $range(0, 999)) {
+  ${body}
+}`,
+        { pluginOptions: { rules: { localizer: false } } },
+      );
+
+      expect(lua).toContain("arr[i] = arr[i] + brr[i] * 0.016");
+      expect(lua).not.toContain("____arr_0");
+      expect(lua).not.toContain("____temp_1");
+    });
+
+    it.each([
+      {
+        block: "while body",
+        source: `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function cond(): boolean;
+function test() {
+  while (cond()) {
+    const t: any = obj;
+    const key = k;
+    t[key] = t[key] + 1;
+  }
+}`,
+      },
+      {
+        block: "repeat body",
+        source: `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare function cond(): boolean;
+function test() {
+  do {
+    const t: any = obj;
+    const key = k;
+    t[key] = t[key] + 1;
+  } while (cond());
+}`,
+      },
+      {
+        block: "else-if branch",
+        source: `/** @noSelfInFile */
+declare const obj: Record<string, any>;
+declare const k: string;
+declare const a: boolean;
+declare const b: boolean;
+function test() {
+  if (a) {
+    return;
+  } else if (b) {
+    const t: any = obj;
+    const key = k;
+    t[key] = t[key] + 1;
+  }
+}`,
+      },
+    ])("POSITIVE: 2-temp fold applies inside a $block", ({ source }) => {
+      const lua = compile(source, { pluginOptions: { rules: { localizer: false } } });
+
+      expect(lua).toContain("obj[k] = obj[k] + 1");
+      expect(lua).not.toContain("local t, key");
+    });
   });
 });

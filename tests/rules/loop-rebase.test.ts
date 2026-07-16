@@ -36,6 +36,16 @@ describe("loop-rebase", () => {
       expect(lua).not.toContain("i + 1");
     });
 
+    it("keeps a foreign 1 + j index intact while rebasing arr[i]", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const brr: number[]; declare const j: number; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[i] + brr[1 + j]; }",
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "brr[1 + j + 1]"],
+        excludes: ["brr[i + 1]"],
+      });
+    });
+
     it("rebases nested expression: result += arr[i] * 2", () => {
       const lua = compile(
         "declare const arr: number[]; declare const n: number; let result = 0; for (const i of $range(0, n - 1)) { result += arr[i] * 2; }",
@@ -75,6 +85,26 @@ describe("loop-rebase", () => {
         "declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += i; }",
       );
       // No +1 pattern to detect, and i is used bare → blocked anyway
+      expect(lua).toContain("for i = 0, n - 1 do");
+    });
+
+    it.each([
+      { index: "2 + i", preserved: "arr[2 + i + 1]" },
+      { index: "i + 4", preserved: "arr[i + 4 + 1]" },
+    ])("blocks when index offset is not the +1 pattern: arr[$index]", ({ index, preserved }) => {
+      const lua = compile(
+        `declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[${index}]; }`,
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 0, n - 1 do", preserved],
+        excludes: ["for i = 1, n do"],
+      });
+    });
+
+    it("leaves a loop untouched when the body never uses i", () => {
+      const lua = compile(
+        "declare const n: number; let count = 0; for (const i of $range(0, n - 1)) { count += 1; }",
+      );
       expect(lua).toContain("for i = 0, n - 1 do");
     });
 
@@ -167,6 +197,125 @@ describe("loop-rebase", () => {
       expect(lua).toContain("for i = 0, n - 1 do");
     });
 
+    it("blocks when a closure with a non-shadowing param reads i", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare function consume(f: (j: number) => number): void;",
+          "for (const i of $range(0, n - 1)) {",
+          "  consume((j: number) => j + i);",
+          "  arr[i] = 0;",
+          "}",
+        ].join("\n"),
+      );
+      // Param `j` does not shadow `i` — the closure body's bare `i` blocks rebase
+      expect(lua).toContain("for i = 0, n - 1 do");
+    });
+
+    it("blocks a shadowing declaration even after a rebase target was found", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "let sum = 0;",
+          "for (const i of $range(0, n - 1)) {",
+          "  arr[i] = 0;",
+          "  if (n > 0) {",
+          "    let i = 99;",
+          "    sum += arr[i];",
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+      // arr[i] earlier in the body is a valid target, but the shadow decl still blocks
+      expect(lua).toContain("for i = 0, n - 1 do");
+    });
+
+    it("rebases when the only target sits inside a non-shadowing nested loop", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare const m: number;",
+          "for (const i of $range(0, n - 1)) {",
+          "  for (const j of $range(1, m)) {",
+          "    arr[i] = j;",
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+      // Inner loop's control variable is j — its body must still be analyzed for i targets
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "for j = 1, m do", "arr[i]"],
+        excludes: ["for i = 0, n - 1 do"],
+      });
+    });
+
+    it("skips a shadowing for-in body that reads its own i", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare const obj: Record<string, number>;",
+          "declare const out: Record<string, number>;",
+          "for (const i of $range(0, n - 1)) {",
+          "  arr[i] = 0;",
+          "  for (const i in obj) {",
+          "    out[i] = 1;",
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+      // The for-in's own `i` reads must not block the outer rebase
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "out[i] = 1"],
+        excludes: ["for i = 0, n - 1 do"],
+      });
+    });
+
+    it("analyzes a non-shadowing for-in body for targets", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare const obj: Record<string, number>;",
+          "for (const i of $range(0, n - 1)) {",
+          "  for (const k in obj) {",
+          "    arr[i] = 0;",
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+      // k does not shadow i — the for-in body must still be analyzed, finding the target
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "arr[i]"],
+        excludes: ["for i = 0, n - 1 do"],
+      });
+    });
+
+    it("skips a destructured pairs() for-in when any name shadows i", () => {
+      const lua = compile(
+        [
+          "declare const arr: number[];",
+          "declare const n: number;",
+          "declare const obj: LuaTable<string, number>;",
+          "declare const out: Record<string, number>;",
+          "for (const i of $range(0, n - 1)) {",
+          "  arr[i] = 0;",
+          "  for (const [i, v] of obj) {",
+          "    out[i] = v;",
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+      // names are [i, v] — one shadowing name is enough to skip the body
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "out[i] = v"],
+        excludes: ["for i = 0, n - 1 do"],
+      });
+    });
+
     it("handles limit that is an arbitrary expression", () => {
       const lua = compile(
         [
@@ -178,6 +327,26 @@ describe("loop-rebase", () => {
       );
       // limit was `len() - 1`, after increment becomes `len()`
       expect(lua).toContain("for i = 1, len() do");
+    });
+
+    it("increments an additive limit (n + 1) via the fallback path", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n + 1)) { sum += arr[i]; }",
+      );
+      // n + 1 is binary but not the n - 1 shape — fallback appends + 1
+      expect(lua).toContain("for i = 1, n + 1 + 1 do");
+    });
+
+    it("increments a literal limit without relying on constant folding", () => {
+      const lua = compile(
+        "declare const arr: number[]; let sum = 0; for (const i of $range(0, 9)) { sum += arr[i]; }",
+        { pluginOptions: { rules: { "constant-folding": false } } },
+      );
+      // The literal fast path emits 10 directly, not a 9 + 1 expression
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, 10 do"],
+        excludes: ["9 + 1"],
+      });
     });
 
     it("handles limit that is neither literal nor n-1 pattern", () => {
@@ -266,6 +435,46 @@ describe("loop-rebase", () => {
       expectLuaSnippets(lua, {
         contains: ["for i = 1, n do", "arr[i + 1]"],
         excludes: ["for i = 0, n - 1 do", "arr[i + 2]"],
+      });
+    });
+
+    it("rebases while decrementing a trailing offset (arr[i + 1] stays one ahead)", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[i + 1]; }",
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "arr[i + 1]"],
+        excludes: ["arr[i + 2]", "arr[i]]"],
+      });
+    });
+
+    it("does not rebase when the index uses a multiplicative expression (i * 1)", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[i * 1]; }",
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 0, n - 1 do", "arr[i * 1 + 1]"],
+        excludes: ["for i = 1, n do"],
+      });
+    });
+
+    it("rewrites only control-variable indices — a foreign index keeps its + 1", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const brr: number[]; declare const j: number; declare const n: number; let sum = 0; for (const i of $range(0, n - 1)) { sum += arr[i] + brr[j]; }",
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n do", "arr[i]", "brr[j + 1]"],
+        excludes: ["brr[j]]"],
+      });
+    });
+
+    it("does not collapse a limit - 2 bound (only limit - 1 simplifies to limit)", () => {
+      const lua = compile(
+        "declare const arr: number[]; declare const n: number; let sum = 0; for (const i of $range(0, n - 2)) { sum += arr[i]; }",
+      );
+      expectLuaSnippets(lua, {
+        contains: ["for i = 1, n - 2 + 1 do"],
+        excludes: ["for i = 1, n - 1 do", "for i = 1, n do"],
       });
     });
 

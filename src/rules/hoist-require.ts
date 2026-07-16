@@ -66,14 +66,42 @@ function hoistRequireInScope(
   const occurrences = collectScopedRequirePatterns(statements);
 
   // Collect the set of existing names in these statements to avoid collisions.
+  // Must include declared names from anywhere below this scope (including nested functions),
+  // because the replacement pass (mapLuaStatements) recurses into all nested bodies.
+  // Over-collection is harmless (worst case: unneeded numeric suffix).
   const existingNames = new Set<string>();
+
   walkStatements(statements, {
-    shallow: true,
+    shallow: false,
+    stmt: (stmt) => {
+      // Collect variable declaration names.
+      if (tstl.isVariableDeclarationStatement(stmt)) {
+        for (const ident of stmt.left) {
+          existingNames.add(ident.text);
+        }
+      }
+      // Collect for-loop control variable name.
+      else if (tstl.isForStatement(stmt)) {
+        existingNames.add(stmt.controlVariable.text);
+      }
+      // Collect for-in loop iteration variable names.
+      else if (tstl.isForInStatement(stmt)) {
+        for (const ident of stmt.names) {
+          existingNames.add(ident.text);
+        }
+      }
+    },
     expr: (expr: tstl.Expression) => {
       if (tstl.isIdentifier(expr)) {
         existingNames.add(expr.text);
       }
       return Walk.keep;
+    },
+    funcEnter: (func) => {
+      // Collect function parameter names.
+      for (const param of func.params ?? []) {
+        existingNames.add(param.text);
+      }
     },
   });
 

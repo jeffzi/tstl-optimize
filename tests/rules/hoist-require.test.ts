@@ -312,6 +312,129 @@ describe("hoist-require", () => {
       assertBitBandHoisted(normalized);
     });
 
+    it("does not hoist when the rule is disabled via config", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics(
+        {
+          "bit.ts": BIT_STUB,
+          "main.ts": `
+            ${REQUIRE_DECL}
+            export const a = (require("bit") as any).band;
+            export const b = (require("bit") as any).band;
+          `,
+        },
+        { pluginOptions: { rules: { "hoist-require": false } } },
+      );
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).not.toContain("____req_");
+      expect((normalized.match(/require\("bit"\)\.band/g) ?? []).length).toBe(2);
+    });
+
+    it("sanitizes special characters in the member name of the hoisted local", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "main.ts": `
+          ${REQUIRE_DECL}
+          export const a = (require("bit") as any)["band-x"];
+          export const b = (require("bit") as any)["band-x"];
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain('local ____req_bit_band_x = require("bit")["band-x"]');
+      expect(normalized).toContain("____exports.a = ____req_bit_band_x");
+    });
+
+    it("does not combine occurrence counts across scopes (one per scope stays inline)", () => {
+      // The pattern appears once at module scope and once inside a function body —
+      // each scope sees a single occurrence, so neither reaches the dedup threshold.
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "main.ts": `
+          ${REQUIRE_DECL}
+          export function f(): any { return (require("bit") as any).band; }
+          export const a = (require("bit") as any).band;
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).not.toContain("____req_");
+      expect((normalized.match(/require\("bit"\)\.band/g) ?? []).length).toBe(2);
+    });
+
+    it("hoists distinct members of the same module into distinct locals", () => {
+      // The dedup cache key must include the member name: band and bor come from
+      // the same module but must not share a hoisted local.
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "main.ts": `
+          ${REQUIRE_DECL}
+          export const a = (require("bit") as any).band;
+          export const b = (require("bit") as any).bor;
+          export const c = (require("bit") as any).band;
+          export const d = (require("bit") as any).bor;
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain('local ____req_bit_band = require("bit").band');
+      expect(normalized).toContain('local ____req_bit_bor = require("bit").bor');
+      expect(normalized).toContain("____exports.a = ____req_bit_band");
+      expect(normalized).toContain("____exports.b = ____req_bit_bor");
+      // Each raw chain survives only in its own hoisted declaration.
+      expect((normalized.match(/require\("bit"\)\.band/g) ?? []).length).toBe(1);
+      expect((normalized.match(/require\("bit"\)\.bor/g) ?? []).length).toBe(1);
+    });
+
+    it("hoists bare require and member require of the same module into distinct locals", () => {
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "bit.ts": BIT_STUB,
+        "main.ts": `
+          ${REQUIRE_DECL}
+          export const a = require("bit") as any;
+          export const b = require("bit") as any;
+          export const c = (require("bit") as any).band;
+          export const d = (require("bit") as any).band;
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toContain('local ____req_bit = require("bit")');
+      expect(normalized).toContain('local ____req_bit_band = require("bit").band');
+      expect(normalized).toContain("____exports.a = ____req_bit");
+      expect(normalized).toContain("____exports.c = ____req_bit_band");
+    });
+
+    it("sanitizes special characters in the require path into a valid Lua local name", () => {
+      // "@scope/pkg-name" contains @, /, and -, none of which are legal in a Lua
+      // identifier. The generated local must be sanitized (the emitted Lua passes
+      // the luac syntax check run by the compile helper).
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics({
+        "@scope/pkg-name.ts": "export declare const x: number;",
+        "main.ts": `
+          ${REQUIRE_DECL}
+          export const a = require("@scope/pkg-name") as any;
+          export const b = require("@scope/pkg-name") as any;
+        `,
+      });
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      expect(normalized).toMatch(/local ____req__scope_pkg_name = require\("@scope[./]pkg-name"\)/);
+      expect(normalized).toContain("____exports.a = ____req__scope_pkg_name");
+    });
+
     it("does not hoist when only one @inline call site produces the require chain", () => {
       // Only one call site in the function body — no deduplication needed.
       const { lua, diagnostics } = compileMultiFileWithDiagnostics(
@@ -329,6 +452,168 @@ describe("hoist-require", () => {
 
       expect(normalized).toContain('require("bit").band');
       expect(normalized).not.toMatch(HOIST_PATTERN);
+    });
+  });
+
+  describe("collision avoidance", () => {
+    it("adds suffix to hoisted local when module-scope user local shadows the generated name", () => {
+      // A user-declared local ____req_bit_band at module scope (whose only read is
+      // constant-propagated away) must not collide with the hoisted require local.
+      // The hoisted local gets a suffix: ____req_bit_band_1
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics(
+        makeBitAndFiles(`
+          import { maskBits } from "./helper";
+
+          // User local with the same name as the hoisted require local.
+          // Its only read gets constant-propagated away, so it becomes dead code.
+          const ____req_bit_band = 2;
+          export const z = ____req_bit_band + 1;
+
+          declare const x: number;
+          declare const y: number;
+          export const a = maskBits(x, y);
+          export const b = maskBits(a, y);
+        `),
+      );
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      // The hoisted local should use a suffixed name to avoid collision
+      expect(normalized).toMatch(/local ____req_bit_band_\d+ = require\("bit"\)\.band/);
+
+      // Both call sites should reference the suffixed hoisted local
+      const hoistMatch = normalized.match(/local (____req_bit_band_\d+) = require\("bit"\)\.band/);
+      expect(hoistMatch).not.toBeNull();
+      const hoistName = hoistMatch?.[1];
+      if (hoistName) {
+        const useCount = (normalized.match(new RegExp(`\\b${hoistName}\\b`, "g")) ?? []).length;
+        expect(useCount).toBeGreaterThanOrEqual(3); // declaration + 2 call sites
+      }
+    });
+
+    it("adds suffix to hoisted local when nested function declares a shadowing name", () => {
+      // A user-declared local ____req_bit_band inside a nested function (with a
+      // surviving use) must force the function-scope hoisted local onto a suffixed name.
+      // Use an external parameter so the local can't be constant-propagated away.
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics(
+        makeBitAndFiles(`
+          import { maskBits } from "./helper";
+
+          declare const x: number;
+          declare const y: number;
+
+          export function outer(externalValue: number): number {
+            // Nested function declares a local that shadows the hoisted require local name.
+            // Use it with an external value so constant-propagation can't optimize it away.
+            const inner = (param: number): number => {
+              const ____req_bit_band = param + externalValue;
+              return ____req_bit_band * 2;
+            };
+
+            const a = maskBits(x, y);
+            const b = maskBits(a, y);
+            return a + b + inner(10);
+          }
+
+          export const result = outer(5);
+        `),
+      );
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      // Function-scope hoisted local must use a suffixed name to avoid collision
+      // with the user's local declared in the nested function
+      expect(normalized).toMatch(/local ____req_bit_band_\d+ = require\("bit"\)\.band/);
+
+      // Both call sites should reference the suffixed hoisted local
+      const hoistMatch = normalized.match(/local (____req_bit_band_\d+) = require\("bit"\)\.band/);
+      expect(hoistMatch).not.toBeNull();
+      const hoistName = hoistMatch?.[1];
+      if (hoistName) {
+        const useCount = (normalized.match(new RegExp(`\\b${hoistName}\\b`, "g")) ?? []).length;
+        expect(useCount).toBeGreaterThanOrEqual(3); // declaration + 2 call sites
+      }
+    });
+
+    it("adds suffix to hoisted local when for-loop control variable shadows the generated name", () => {
+      // A for-of loop with control variable named ____req_bit_band must force
+      // the hoisted local onto a suffixed name.
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics(
+        makeBitAndFiles(`
+          import { maskBits } from "./helper";
+
+          declare const x: number;
+          declare const y: number;
+
+          export function process(): number {
+            let result = 0;
+            // for-of loop with control variable that shadows the hoisted require local name
+            for (const ____req_bit_band of [1, 2, 3]) {
+              result += ____req_bit_band;
+            }
+
+            const a = maskBits(x, y);
+            const b = maskBits(a, y);
+            return result + a + b;
+          }
+        `),
+      );
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      // Function-scope hoisted local should use a suffixed name
+      expect(normalized).toMatch(/local ____req_bit_band_\d+ = require\("bit"\)\.band/);
+
+      // Both call sites should reference the suffixed hoisted local
+      const hoistMatch = normalized.match(/local (____req_bit_band_\d+) = require\("bit"\)\.band/);
+      expect(hoistMatch).not.toBeNull();
+      const hoistName = hoistMatch?.[1];
+      if (hoistName) {
+        const useCount = (normalized.match(new RegExp(`\\b${hoistName}\\b`, "g")) ?? []).length;
+        expect(useCount).toBeGreaterThanOrEqual(3); // declaration + 2 call sites
+      }
+    });
+
+    it("regression: adds suffix when user local has surviving read at module scope", () => {
+      // When a user declares a local with the name matching the hoisted require local,
+      // and that local has a surviving read in an expression, the hoisted local must
+      // get a suffix to avoid collision.
+      const { lua, diagnostics } = compileMultiFileWithDiagnostics(
+        makeBitAndFiles(`
+          import { maskBits } from "./helper";
+
+          // User local with surviving read in an expression
+          const userLocal = 10;
+          const ____req_bit_band = userLocal + 1;
+
+          declare const x: number;
+          declare const y: number;
+          export const a = maskBits(x, y);
+          export const b = maskBits(a, y);
+          export const z = ____req_bit_band;
+        `),
+      );
+
+      expect(diagnostics).toHaveLength(0);
+      const normalized = normalizeLua(lua);
+
+      // The hoisted local should have a suffix to avoid collision with the user's local
+      expect(normalized).toMatch(/local ____req_bit_band_\d+ = require\("bit"\)\.band/);
+
+      // Both call sites should reference the suffixed hoisted local
+      const hoistMatch = normalized.match(/local (____req_bit_band_\d+) = require\("bit"\)\.band/);
+      expect(hoistMatch).not.toBeNull();
+      const hoistName = hoistMatch?.[1];
+      if (hoistName) {
+        const useCount = (normalized.match(new RegExp(`\\b${hoistName}\\b`, "g")) ?? []).length;
+        expect(useCount).toBeGreaterThanOrEqual(3); // declaration + 2 call sites
+      }
+
+      // The user's local should still be present (constant-propagation may fold the expression)
+      expect(normalized).toContain("local ____req_bit_band = ");
     });
   });
 });

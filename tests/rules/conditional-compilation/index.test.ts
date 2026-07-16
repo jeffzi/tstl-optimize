@@ -133,6 +133,7 @@ describe("evaluateCondition", () => {
   it.each([
     { name: "unknown identifier", source: "UNKNOWN" },
     { name: "logical not of unknown identifier", source: "!UNKNOWN" },
+    { name: "unary plus of numeric constant", source: "+COUNT" },
     { name: "boolean negation of number", source: "-FLAG" },
     { name: "numeric negation of unknown identifier", source: "-UNKNOWN" },
     { name: "logical and with unknown lhs", source: "UNKNOWN && FLAG" },
@@ -425,6 +426,39 @@ describe("conditional-compilation", () => {
       const lua = normalizeLua(compile(src, ccOpts({ P: { env: "X", default: value } })));
 
       expect(lua).toBe(expected);
+    });
+
+    it("removes the whole switch when no case matches and there is no default", () => {
+      const noDefaultSrc = `
+        ${PRINT_DECL}
+        declare const P: string;
+        switch (P) {
+          case "a": print(1); break;
+          case "b": print(2); break;
+        }
+      `;
+      const lua = normalizeLua(compile(noDefaultSrc, ccOpts({ P: { env: "X", default: "z" } })));
+
+      expect(lua).toBe("");
+    });
+
+    it("preserves the switch when an unresolved case precedes the matching case", () => {
+      // UNKNOWN_CASE cannot be proven not to match, so folding to the "a"
+      // case would skip a potentially matching earlier clause.
+      const unresolvedSrc = `
+        ${PRINT_DECL}
+        declare const P: string;
+        declare const UNKNOWN_CASE: string;
+        switch (P) {
+          case UNKNOWN_CASE: print(1); break;
+          case "a": print(2); break;
+        }
+      `;
+      const lua = normalizeLua(compile(unresolvedSrc, ccOpts({ P: { env: "X", default: "a" } })));
+
+      expect(lua).toContain("____switch");
+      expect(lua).toContain("print(1)");
+      expect(lua).toContain("print(2)");
     });
   });
 

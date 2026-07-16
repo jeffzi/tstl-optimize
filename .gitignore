@@ -73,3 +73,7 @@ research/
 CLAUDE.md
 .planning/
 .research/
+
+# Stryker mutation testing
+reports/
+.stryker-tmp/
