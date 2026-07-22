@@ -65,7 +65,7 @@
     "@vitest/coverage-v8": "^4.1.0",
     "cspell": "^10.0.0",
     "dprint": "^0.55.0",
-    "fallow": "^3.2.0",
+    "fallow": "^3.7.1",
     "fast-check": "^4.8.0",
     "lefthook": "^2.1.0",
     "lua-types": "^2.14.0",
