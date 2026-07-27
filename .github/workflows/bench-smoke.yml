@@ -3,7 +3,18 @@ name: Benchmark Smoke
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'benchmark/**'
+      - 'package.json'
+      - 'tsconfig*.json'
+      - '.github/workflows/bench-smoke.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   bench-smoke:

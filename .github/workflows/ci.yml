@@ -3,24 +3,48 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - .fallowrc.json
+      - .gitignore
+      - .vscode/**
+      - agents/**
+      - skills/**
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - .fallowrc.json
+      - .gitignore
+      - .vscode/**
+      - agents/**
+      - skills/**
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "lts/*"
           cache: "npm"
@@ -28,61 +52,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check (lint + format)
-        run: npm run check
-
-      - name: Check markdown
-        run: npm run check:md
-
-      - name: Typecheck
+      - name: Install workflow linters
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          if find src -name '*.ts' 2>/dev/null | grep -q .; then
-            npm run typecheck
-          fi
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          pipx install zizmor
 
-      - name: Type-aware lint
-        run: npm run check:typelint
-
-      - name: Fallow audit
-        run: npm run check:fallow
-
-      - name: Spell check
-        run: npm run check:spelling
-
-      - name: Audit dependencies
-        run: npm audit --audit-level=high
-
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v13
-        with:
-          luaVersion: "5.1"
-
-      - name: Build
-        run: npm run build
-
-      - name: Fallow
-        uses: fallow-rs/fallow@v2
-        with:
-          command: audit
-          gate: new-only
-          health-baseline: fallow-baselines/health.json
-          dupes-baseline: fallow-baselines/dupes.json
-          fail-on-issues: true
-
-      - name: Check package
-        run: npm run check:package
+      - name: Check
+        if: runner.os == 'Linux'
+        run: npm run check:static
 
       - name: Test
-        run: npm run test:unit
+        run: npm test
 
-      - name: Cache TSTL conformance clone
-        uses: actions/cache@v6
-        with:
-          path: .conformance
-          key: conformance-${{ hashFiles('scripts/conformance.ts', 'scripts/conformance.patch') }}
-
-      - name: Check examples in sync
-        run: npm run examples:check
-
-      - name: Conformance tests
-        run: npm run test:conformance
+      - name: Quality
+        if: runner.os == 'Linux'
+        run: npm run check:quality
