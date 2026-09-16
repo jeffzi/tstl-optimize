@@ -72,7 +72,7 @@
     "luamark-types": "github:jeffzi/luamark#ts-types",
     "markdownlint-cli2": "^0.23.0",
     "oxlint": "1.72.0",
-    "oxlint-tsgolint": "0.24.0",
+    "oxlint-tsgolint": "7.0.2001",
     "publint": "^0.3.0",
     "source-map": "^0.7.0",
     "tsx": "^4.22.0",
